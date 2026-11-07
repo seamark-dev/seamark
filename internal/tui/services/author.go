@@ -14,9 +14,9 @@ import (
 
 // PlanAuthor plans one authoring operation. It writes nothing and takes
 // no lock. Without a readable index the plan still holds the candidate,
-// the diff, and the identity, and a blocker names the missing ledger
-// (P4-8). A foreign root is a blocker of the plan too (P4-16). The
-// impact block of a mode or check edit gets the K10 active state
+// the diff, and the identity, and a blocker names the missing ledger. A
+// foreign root is a blocker of the plan too. The impact block of a mode
+// or check edit gets the active state of the capability join
 // (joinActive), so the form shows the words of lessons --set-mode.
 func (e *engine) PlanAuthor(req maintain.AuthorRequest) (*maintain.AuthorPlan, error) {
 	st, probe, err := e.openRead()

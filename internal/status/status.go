@@ -121,9 +121,9 @@ type Status struct {
 
 	// LessonChecks is the lesson-capability/1 report: the requested
 	// modes of lessons.yaml against the installed lesson-check hook
-	// paths (contract K10). It is nil when no lesson-check or
-	// exploration hook is installed and lessons.yaml uses no
-	// lesson-check key, so such a repository keeps its JSON bytes.
+	// paths. It is nil when no lesson-check or exploration hook is
+	// installed and lessons.yaml uses no lesson-check key, so such a
+	// repository keeps its JSON bytes.
 	LessonChecks *lessoncheck.CapabilityReport `json:"lesson_checks,omitempty"`
 	// lessonPins are the pin counts that the pins line of the lesson
 	// checks block prints. The JSON holds the report only.
@@ -136,8 +136,8 @@ func Gather(st *store.Store, root string) (*Status, error) {
 }
 
 // GatherAs is Gather for the running binary self. The lesson-check
-// report identifies each hook binary against it (contract K10). Gather
-// reads the identity from the build information of the running binary.
+// report identifies each hook binary against it. Gather reads the
+// identity from the build information of the running binary.
 func GatherAs(st *store.Store, root string, self integration.BinaryIdentity) (*Status, error) {
 	return gatherAs(integration.Builtin(), st, root, self)
 }

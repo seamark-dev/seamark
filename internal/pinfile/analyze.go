@@ -24,7 +24,7 @@ import (
 // an item is unknown to the readers. TestPinFieldsAreTheKeysOfPinRule
 // compares the list with the yaml tags of PinRule, so a new field fails
 // the test until it joins the list. mode and check are the lesson-check
-// keys of contract K1.
+// keys.
 var pinFields = []string{"rule", "region", "regions", "note", "mode", "check"}
 
 // provenanceRe finds the proposal ID at the end of a provenance comment,

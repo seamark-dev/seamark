@@ -18,15 +18,14 @@ import (
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
-// This file holds the lesson-check parts of Lessons › Pins (contracts
-// K1, K5, K10): the CHECK section of the pin detail and the
-// verification view of V. The section joins two reads. The pin
-// inspection gives what each pin requests and the predicate of its
-// check (maintain.PinCheck). The capability report of the shared state
-// gives what the installed hooks make of that request. The view
-// computes no badge and runs no checker: the report and the
-// verification come from services, as doctor, status, and lessons
-// --verify get them.
+// This file holds the lesson-check parts of Lessons › Pins: the CHECK
+// section of the pin detail and the verification view of V. The section
+// joins two reads. The pin inspection gives what each pin requests and
+// the predicate of its check (maintain.PinCheck). The capability report
+// of the shared state gives what the installed hooks make of that
+// request. The view computes no badge and runs no checker: the report
+// and the verification come from services, as doctor, status, and
+// lessons --verify get them.
 
 // checkLabelW is the label column of the CHECK section. "Predicate" and
 // a gap of two cells fit, so the label never touches its value.
@@ -35,9 +34,8 @@ const checkLabelW = 11
 // pinsCheckShown reports whether Pins shows its lesson-check parts: the
 // CHECK section and the keys M and V. Doctor and status print their
 // lesson-check lines only when lessons.yaml uses a lesson-check key or a
-// lesson-check or exploration hook is installed (contract K10). Pins
-// follows the same rule, so a repository without lesson checks keeps
-// every frame (P4.10 Preserve).
+// lesson-check or exploration hook is installed. Pins follows the same
+// rule, so a repository without lesson checks keeps every frame.
 func pinsCheckShown(st *state, in *maintain.Inspection) bool {
 	if in != nil && in.Checks.Uses {
 		return true
@@ -222,7 +220,7 @@ func (p *pinsView) checkRoute(msg tea.Msg) (tea.Cmd, bool) {
 		}
 	case loadedMsg:
 		// Every refresh loads the pins again. The shown result then asks
-		// the engine whether its binding still holds (contract K5).
+		// the engine whether its binding still holds.
 		if p.verify != nil && m.kind == secPins && m.err == nil {
 			return p.verify.revalidate(), false
 		}
@@ -258,11 +256,11 @@ func (p *pinsView) checkKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 }
 
 // pinVerify is the verification view of V. It runs the verification of
-// `seamark lessons --verify` on the default selection through services
-// (contract K5), and shows the text of the shared renderer. The view
-// holds one result. A refresh asks the engine whether the binding of
-// that result still holds (lessoncheck.Revalidate), and a changed input
-// marks the result stale. Only V runs the checkers again.
+// `seamark lessons --verify` on the default selection through services,
+// and shows the text of the shared renderer. The view holds one result.
+// A refresh asks the engine whether the binding of that result still
+// holds (lessoncheck.Revalidate), and a changed input marks the result
+// stale. Only V runs the checkers again.
 type pinVerify struct {
 	st *state
 	// seq issues the tickets of the runs, and rseq the tickets of the
@@ -317,8 +315,8 @@ func newPinVerify(st *state) (*pinVerify, tea.Cmd) {
 
 // start runs the verification as registered work, so an exit waits for
 // it. The run appends one record to the lesson-check audit stream, as
-// lessons --verify does (contract K9). It takes no mutation slot: the
-// engine takes no lock for it, so it can run beside another operation.
+// lessons --verify does. It takes no mutation slot: the engine takes no
+// lock for it, so it can run beside another operation.
 func (v *pinVerify) start() tea.Cmd {
 	seq := v.seq.start()
 	v.rseq.cancel()
@@ -473,9 +471,9 @@ func (v *pinVerify) content(w int) ui.ModalOpts {
 
 // verifyTextLines renders a result with the renderer of lessons --verify
 // (lessoncheck.RenderText). One renderer gives the CLI, MCP, and the
-// console one text (contract K5). The renderer sanitizes every text from
-// the repository; the console sanitizes each line again, because a box
-// must never draw a control byte.
+// console one text. The renderer sanitizes every text from the
+// repository; the console sanitizes each line again, because a box must
+// never draw a control byte.
 func verifyTextLines(t *ui.Theme, res *lessoncheck.Verification, w int) []string {
 	var b bytes.Buffer
 

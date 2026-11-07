@@ -2,10 +2,11 @@ package model
 
 // This file holds the proposal sources. The store reads and checks the
 // source of every proposal row, also of a proposal from review findings.
-// So the sources are not in the live proposal vocabulary.
 
-// Proposal sources. A proposal row without a source predates live
-// distillation, so it reads as findings.
+// Proposal sources. A proposal row without a source predates the source
+// column, so it reads as findings. This build creates only findings
+// rows. The store and the state import still accept live as a known
+// source, so a row that another build wrote keeps its source.
 const (
 	ProposalSourceFindings = "findings"
 	ProposalSourceLive     = "live"

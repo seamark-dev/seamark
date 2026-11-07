@@ -24,7 +24,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race report-bench tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-oracle-record agents-native-smoke capture-native-check capture-native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race report-bench tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-oracle-record agents-native-smoke native-replay native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -51,7 +51,8 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # Lesson-check tests: the check configuration, the working-tree
 # snapshot, both /1 checkers, and the verification surfaces. The new
 # packages run whole: lessoncheck, and privatedir, which holds the
-# private-directory helpers that lessoncheck shares with the archive.
+# private-directory and log helpers that lessoncheck shares with the
+# policy gate and the MCP usage log.
 # The CLI and the MCP server run only the tests whose names match
 # LESSON_CHECK_RUN, because -run applies to every package of one line.
 # Preparation (lessons --prepare, MCP change_set) and the exploration
@@ -62,14 +63,13 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # The pre-edit hooks (lessons --guard --hook and lessons --baseline
 # --hook) run here too, through LessonsGuard and LessonsBaseline.
 # lessonreport, the read-only engine of the delivery report (delivery/1),
-# runs whole here too. It reads the audit logs and one archive snapshot,
-# and it reads the lesson-check stream, so a change to either reader
-# must fail this target.
+# runs whole here too. It reads the reminder log and the lesson-check
+# stream, so a change to either reader must fail this target.
 # mcpusage runs whole, and MCPUsage and LessonsStats select the MCP tool
 # counter and the stats section that reads it, because both write or read
 # a local log beside the audit logs.
 # Nothing here calls a model or the network.
-# Later milestones append test-name prefixes and packages here.
+# A new lesson-check surface adds its test-name prefix and package here.
 LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/... ./internal/mcpusage/...
 LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline|LessonsDelivery|MCPUsage|LessonsStats)'
 
@@ -82,8 +82,7 @@ lesson-check-race: ## Run the lesson-check tests with the race detector
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
 
 # The fixture is synthetic and deterministic, so this target reads no real
-# log, no archive, and no file under .seamark. The numbers depend on the
-# machine.
+# log and no file under .seamark. The numbers depend on the machine.
 report-bench: ## Measure the delivery report build over synthetic audit logs (offline, no model)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -run '^$$' -bench '^BenchmarkBuild' -benchmem ./internal/lessonreport
 
@@ -116,27 +115,30 @@ agents-oracle-record: ## Record the apply_patch content oracle from the installe
 agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)
 
-# Native timing and guard recordings for CLIENT=claude or codex. `check`
-# is offline: no model, no credentials, no client CLI. It runs the Go
-# tests that replay the reviewed recordings in
+# Native timing and guard recordings for CLIENT=claude or codex.
+# native-replay is offline: no model, no credentials, no client CLI. It
+# runs the Go tests that replay the reviewed recordings in
 # internal/integration/testdata/$(CLIENT)/timing and .../guard. Without
 # a reviewed recording they skip as pending, and a skip gives no
-# evidence. `record` runs the prompts of one scenario with the installed
-# client and your own login, so it costs tokens. It prints one cost line
-# per run. It refuses a binary or a tree with uncommitted changes unless
-# SEAMARK_ALLOW_DIRTY=1. It writes a sanitized copy for review and never
-# writes into testdata. A blocked check exits 3, never 0.
-# CAPTURE_NATIVE_SCENARIO=timing (with record) runs the gate-3 timing
-# prompts; it is the default.
-# CAPTURE_NATIVE_SCENARIO=guard (with record) runs the gate-5 guard
-# sentinel prompts in a scratch repository with enforce pins.
-CAPTURE_NATIVE_RUN = '^TestCaptureNative$(if $(filter claude,$(CLIENT)),Claude,$(if $(filter codex,$(CLIENT)),Codex,$(error CLIENT must be claude or codex)))'
+# evidence. native-record runs the prompts of one scenario with the
+# installed client and your own login, so it costs tokens. It prints one
+# cost line per run. It refuses a binary or a tree with uncommitted
+# changes unless SEAMARK_ALLOW_DIRTY=1. It writes a sanitized copy for
+# review and never writes into testdata. A blocked check exits 3, never 0.
+# NATIVE_RECORD_SCENARIO=timing (with native-record) runs the prompts of
+# the timing scenario; it is the default.
+# NATIVE_RECORD_SCENARIO=guard (with native-record) runs the sentinel
+# prompts of the guard scenario in a scratch repository with enforce pins.
+# NATIVE_RECORD_RUN selects the tests whose names start with
+# TestNativeRecord and the client name, such as the replays. A replay
+# test without that prefix does not run here.
+NATIVE_RECORD_RUN = '^TestNativeRecord$(if $(filter claude,$(CLIENT)),Claude,$(if $(filter codex,$(CLIENT)),Codex,$(error CLIENT must be claude or codex)))'
 
-capture-native-check: build ## Offline: replay the reviewed $(CLIENT) timing and guard recordings (no model)
-	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run $(CAPTURE_NATIVE_RUN) ./internal/integration
+native-replay: build ## Offline: replay the reviewed $(CLIENT) timing and guard recordings (no model)
+	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run $(NATIVE_RECORD_RUN) ./internal/integration
 
-capture-native-record: build ## Record native timing or guard traces through the installed $(CLIENT) CLI (costs tokens; needs your own login)
-	scripts/capture-native.sh record $(CLIENT) $(BINARY)
+native-record: build ## Record native timing or guard traces through the installed $(CLIENT) CLI (costs tokens; needs your own login)
+	scripts/native-record.sh record $(CLIENT) $(BINARY)
 
 # The console tests run offline against fixtures, a scripted service
 # fake, a fake gh, and a fake agent. They cover the shell, the five

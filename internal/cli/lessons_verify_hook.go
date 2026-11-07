@@ -17,36 +17,35 @@ import (
 )
 
 // This file holds lessons --verify --hook, the post-edit hook of the
-// lesson checks (contract K9). It decodes one native completion event,
-// reads the pending baseline of the same call, observes the actual
-// result on disk, evaluates every check and enforce pin in scope, and
-// reports the findings to the agent. It appends one post-edit record to
-// the lesson-check audit stream and deletes the pending baseline.
+// lesson checks. It decodes one native completion event, reads the
+// pending baseline of the same call, observes the actual result on
+// disk, evaluates every check and enforce pin in scope, and reports the
+// findings to the agent. It appends one post-edit record to the
+// lesson-check audit stream and deletes the pending baseline.
 //
 // The hook never denies, rewinds, or reverts an edit, because the tool
-// already ran (spec L122). Every run exits 0. The hook needs no capture
-// opt-in and never opens the capture archive (spec L263).
+// already ran. Every run exits 0.
 
 // errVerifyHookFlags is the refusal of a post-edit hook call with a
-// selection or an output form (contracts §4.1). The hook reads its
-// paths from the event and writes a native reply, so --file and --json
-// have no meaning there. Skills grant `seamark lessons --verify --json*`
-// and `seamark lessons --verify --file *` without a prompt (plan step
-// P3.12), so such a call must never reach the hook.
+// selection or an output form. The hook reads its paths from the event
+// and writes a native reply, so --file and --json have no meaning
+// there. Skills grant `seamark lessons --verify --json*` and
+// `seamark lessons --verify --file *` without a prompt, so such a call
+// must never reach the hook.
 var errVerifyHookFlags = errors.New("--verify --hook takes no --file or --json")
 
 // hookConflicts lists the flags that the plain --hook and --hook-reset
-// calls refuse, in the order of the help text (P3 review ruling R3).
-// Skills grant `seamark lessons --file *` and `seamark lessons --region
-// *` without a prompt. Without this list, such a call with --hook or
-// --hook-reset reaches an advisory hook and writes its delivery state
-// and a firing record that no native event produced.
+// calls refuse, in the order of the help text. Skills grant
+// `seamark lessons --file *` and `seamark lessons --region *` without a
+// prompt. Without this list, such a call with --hook or --hook-reset
+// reaches an advisory hook and writes its delivery state and a firing
+// record that no native event produced.
 var hookConflicts = []string{"file", "list", "region", "stats"}
 
 // hookFlagError refuses a plain --hook or --hook-reset call that also
-// sets a listed flag, with the mode-conflict template of contracts §4.2.
-// The guards of --verify, --explore, --guard, and --baseline run first,
-// so a call with one of those modes keeps its own text.
+// sets a listed flag, with the mode-conflict template of the other
+// modes. The guards of --verify, --explore, --guard, and --baseline run
+// first, so a call with one of those modes keeps its own text.
 func hookFlagError(cmd *cobra.Command, hookMode, hookReset bool) error {
 	modes := []struct {
 		name string
@@ -84,9 +83,9 @@ type postEdit struct {
 	// is set when no git work tree holds the -C directory.
 	root    string
 	rootErr error
-	// idRoot is the K2 identity root. The session and match digests hash
+	// idRoot is the identity root. The session and match digests hash
 	// over it, as in the pre-edit hooks, so both hooks of one call compute
-	// one pending key and their records join (contract K7).
+	// one pending key and their records join.
 	idRoot string
 	// lim is DefaultLimits. A partly filled Limits value would set
 	// pending-max-age to 0, and the sweep would expire every record.
@@ -115,11 +114,11 @@ type postEdit struct {
 // budget ends, so it proves the budget bound without a wall-clock limit.
 var beforePostEditEvaluate func()
 
-// runLessonsVerifyHook implements lessons --verify --hook (contract K9).
-// It fails open: every failure gives exit 0, and the record names it
-// when a work tree holds the run. A failed reply write also gives exit
-// 0, because the edit is done and the findings also reach the audit
-// stream and the next lessons --verify (contracts §4.1).
+// runLessonsVerifyHook implements lessons --verify --hook. It fails
+// open: every failure gives exit 0, and the record names it when a work
+// tree holds the run. A failed reply write also gives exit 0, because
+// the edit is done and the findings also reach the audit stream and the
+// next lessons --verify.
 func runLessonsVerifyHook(cmd *cobra.Command, opts *options, clientID string) error {
 	root, rootErr := verifyRoot(opts.workspace)
 	run := &postEdit{cmd: cmd, root: root, rootErr: rootErr, idRoot: hookIdentityRoot(opts), lim: hookLimits()}
@@ -139,7 +138,7 @@ func runLessonsVerifyHook(cmd *cobra.Command, opts *options, clientID string) er
 	return nil
 }
 
-// verify runs the steps of the hook up to the reply (contract K9, flow).
+// verify runs the steps of the hook up to the reply.
 func (r *postEdit) verify(clientID string) {
 	client, err := postEditClient(clientID)
 	if err != nil {
@@ -160,7 +159,7 @@ func (r *postEdit) verify(clientID string) {
 	}
 
 	// The sweep runs before the read, so an expired record of this call
-	// is discarded and never serves as a baseline (contract K7).
+	// is discarded and never serves as a baseline.
 	_, _ = lessoncheck.Sweep(r.root, lessoncheck.CallerHook, r.lim)
 
 	if errors.Is(decodeErr, integration.ErrNotApplicable) {
@@ -253,7 +252,7 @@ func (r *postEdit) readCompletion() (lessoncheck.Completion, error) {
 
 // readPending reads the pending baseline of the call. A call without a
 // tool-use ID has no record. An unsafe directory, an absent record, and
-// a record that cannot serve all give no baseline (contract K7).
+// a record that cannot serve all give no baseline.
 func (r *postEdit) readPending() (*lessoncheck.Pending, error) {
 	_, match := r.digests()
 	if match == "" {
@@ -342,7 +341,7 @@ func (r *postEdit) reply(findings string) (written bool, err error) {
 	return true, nil
 }
 
-// digests returns the K2 session and match digests of the run over the
+// digests returns the session and match digests of the run over the
 // identity root. Each digest needs its raw IDs, as in the firing log.
 func (r *postEdit) digests() (session, match string) {
 	if r.idRoot == "" {
@@ -360,10 +359,10 @@ func (r *postEdit) digests() (session, match string) {
 	return session, match
 }
 
-// appendRecord appends the post-edit record of the run (contract K9). It
-// holds digests, codes, repository-relative paths, and line numbers
-// only. The context digest comes from the pending record, because a
-// completion event names no receiver. A failed append stays silent.
+// appendRecord appends the post-edit record of the run. It holds
+// digests, codes, repository-relative paths, and line numbers only. The
+// context digest comes from the pending record, because a completion
+// event names no receiver. A failed append stays silent.
 func (r *postEdit) appendRecord() {
 	r.recorded = true
 
@@ -410,9 +409,9 @@ func (r *postEdit) appendRecord() {
 }
 
 // consume deletes the pending record of the call after the run, also
-// after a failed evaluation (contract K7). A record serves one call, so
-// a later event of the same call finds no baseline. A failure and a
-// panic stay silent, because the sweep removes the record later.
+// after a failed evaluation. A record serves one call, so a later event
+// of the same call finds no baseline. A failure and a panic stay
+// silent, because the sweep removes the record later.
 func (r *postEdit) consume() {
 	defer func() { _ = recover() }()
 

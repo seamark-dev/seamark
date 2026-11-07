@@ -1,7 +1,6 @@
 package maintain
 
-// Tests of the check-definition authoring (contract K1, writer row
-// "Check-definition authoring", AC-27). The splice changes only the
+// Tests of the check-definition authoring. The splice changes only the
 // checks.<id> entry and lesson_checks_version. The pin list keeps its
 // bytes, every comment stays, and a candidate that fails the strict
 // check tier is refused before any write.
@@ -86,8 +85,8 @@ mute:
   - rule: noisy
 `
 
-// TestCheckDefinitionEditKeepsPins proves the K1 writer row
-// "Check-definition authoring". Each splice changes only checks.<id> and
+// TestCheckDefinitionEditKeepsPins proves that a definition edit keeps
+// the pins. Each splice changes only checks.<id> and
 // lesson_checks_version, keeps the pin list byte for byte with its
 // comments, shows the impact block of each bound executable pin before
 // the save, and writes through the guarded pin file write.
@@ -281,11 +280,11 @@ func TestCheckDefinitionEditKeepsPins(t *testing.T) {
 	})
 }
 
-// TestCheckDefinitionRefusesInvalidPattern proves the K1 writer rule of
-// the definition editor: the candidate runs the strict check tier, and
-// a definition that fails it is refused with the K1 text before any
-// write. The review still shows the candidate and the impact on the
-// bound pins. An invalid ID stops before the splice.
+// TestCheckDefinitionRefusesInvalidPattern proves the strict check rule
+// of the definition editor: the candidate runs the strict check tier,
+// and a definition that fails it is refused with the strict-tier text
+// before any write. The review still shows the candidate and the impact
+// on the bound pins. An invalid ID stops before the splice.
 func TestCheckDefinitionRefusesInvalidPattern(t *testing.T) {
 	refused := func(t *testing.T, lessons string, req CheckDefRequest) *CheckDefPlan {
 		t.Helper()
@@ -356,7 +355,7 @@ func TestCheckDefinitionRefusesInvalidPattern(t *testing.T) {
 // commit repeats the hard-link refusal of the plan. The write replaces
 // the file by rename, so a link that appears after the preview would
 // split the shared file: the path gets the new bytes and the other name
-// keeps the old ones. The refusal is stale and writes nothing (P4-17).
+// keeps the old ones. The refusal is stale and writes nothing.
 func TestCheckDefCommitRefusesAHardLinkMadeAfterPreview(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the link count is read on unix only")

@@ -16,10 +16,10 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// specYAML is the reference lessons.yaml: one forbid definition and one
-// enforce pin. It is the positive case of Validate, so the tests keep its
-// bytes fixed.
-const specYAML = `lesson_checks_version: 1
+// referenceYAML is the reference lessons.yaml: one forbid definition
+// and one enforce pin. It is the positive case of Validate, so the
+// tests keep its bytes fixed.
+const referenceYAML = `lesson_checks_version: 1
 checks:
   frozen-assets:
     kind: forbid-path-change/1
@@ -31,8 +31,9 @@ pin:
     check: frozen-assets
 `
 
-// contractYAML is specYAML with a second definition that has a pattern.
-const contractYAML = `lesson_checks_version: 1
+// referencePatternYAML is referenceYAML with a second definition that
+// has a pattern.
+const referencePatternYAML = `lesson_checks_version: 1
 checks:
   frozen-assets:
     kind: forbid-path-change/1
@@ -65,17 +66,17 @@ pin:
     check: no-todos
 `
 
-// The fixed identity, pin-ref, and version digests of the specYAML pin
-// and of the two definitions. Fixed values catch any change of the
+// The fixed identity, pin-ref, and version digests of the referenceYAML
+// pin and of the two definitions. Fixed values catch any change of the
 // derivation.
 const (
-	specIdentity      = "3215e7b483d134443a8204970767f1a0057d4726f235e946b6c0c27abd8cd055"
-	specPinRef        = "3215e7b483d1"
-	specPinVersion    = "ae4f17f75413b37e4142d80b529154f6166dd2bf155e6eac3dc86dc040aa7a7e"
-	forbidVersion     = "9ceb9cddb5053035c0d9779ffab326503647b5295cb3f43791d5fe1e9be9cf7a"
-	noTodoVersion     = "c044c91d812033b1da35c51ad301b6a3a06b09503b8e1126b392c1d643d7aa3b"
-	emptyBytesSHA256  = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	lessonsConfigHead = "lessons config: "
+	referenceIdentity   = "3215e7b483d134443a8204970767f1a0057d4726f235e946b6c0c27abd8cd055"
+	referencePinRef     = "3215e7b483d1"
+	referencePinVersion = "ae4f17f75413b37e4142d80b529154f6166dd2bf155e6eac3dc86dc040aa7a7e"
+	forbidVersion       = "9ceb9cddb5053035c0d9779ffab326503647b5295cb3f43791d5fe1e9be9cf7a"
+	noTodoVersion       = "c044c91d812033b1da35c51ad301b6a3a06b09503b8e1126b392c1d643d7aa3b"
+	emptyBytesSHA256    = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	lessonsConfigHead   = "lessons config: "
 )
 
 // sha256Hex is the hex SHA-256 of data, the Config.SHA256 form.
@@ -104,11 +105,11 @@ func writeLessons(t *testing.T, root, text string) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(text), 0o644))
 }
 
-// TestLessonCheckValidateSpecExample proves that specYAML and
-// contractYAML validate with no error, and that the pin view carries the
-// fixed identity, pin-ref, and version.
-func TestLessonCheckValidateSpecExample(t *testing.T) {
-	for name, text := range map[string]string{"specYAML": specYAML, "contractYAML": contractYAML} {
+// TestLessonCheckValidateReferenceConfigs proves that referenceYAML and
+// referencePatternYAML validate with no error, and that the pin view
+// carries the fixed identity, pin-ref, and version.
+func TestLessonCheckValidateReferenceConfigs(t *testing.T) {
+	for name, text := range map[string]string{"referenceYAML": referenceYAML, "referencePatternYAML": referencePatternYAML} {
 		t.Run(name, func(t *testing.T) {
 			assert.Nil(t, validateYAML(t, text), "nil means valid")
 
@@ -125,9 +126,9 @@ func TestLessonCheckValidateSpecExample(t *testing.T) {
 			pin := cfg.Pins[0]
 			assert.Equal(t, 1, pin.Entry)
 			assert.Equal(t, reviews.PinKey{Rule: "frozen-assets", Region: "generated"}, pin.Key)
-			assert.Equal(t, specIdentity, pin.Identity)
-			assert.Equal(t, specPinRef, pin.Ref)
-			assert.Equal(t, specPinVersion, pin.Version)
+			assert.Equal(t, referenceIdentity, pin.Identity)
+			assert.Equal(t, referencePinRef, pin.Ref)
+			assert.Equal(t, referencePinVersion, pin.Version)
 			assert.Equal(t, ModeEnforce, pin.Mode)
 			assert.Equal(t, []string{"generated"}, pin.Scope)
 			assert.Equal(t, "frozen-assets", pin.CheckID)
@@ -138,8 +139,8 @@ func TestLessonCheckValidateSpecExample(t *testing.T) {
 		})
 	}
 
-	t.Run("contractYAML compiles its pattern", func(t *testing.T) {
-		cfg, _, err := Parse([]byte(contractYAML))
+	t.Run("referencePatternYAML compiles its pattern", func(t *testing.T) {
+		cfg, _, err := Parse([]byte(referencePatternYAML))
 		require.NoError(t, err)
 		require.Len(t, cfg.Checks, 2)
 
@@ -559,16 +560,16 @@ func TestLessonCheckLoadFileStates(t *testing.T) {
 
 	t.Run("a valid file equals Parse of its bytes", func(t *testing.T) {
 		root := t.TempDir()
-		writeLessons(t, root, contractYAML)
+		writeLessons(t, root, referencePatternYAML)
 
 		cfg, errs, err := Load(root)
 		require.NoError(t, err)
 		assert.Nil(t, errs)
 
-		parsed, _, err := Parse([]byte(contractYAML))
+		parsed, _, err := Parse([]byte(referencePatternYAML))
 		require.NoError(t, err)
 		assert.Equal(t, parsed, cfg)
-		assert.Equal(t, sha256Hex(contractYAML), cfg.SHA256)
+		assert.Equal(t, sha256Hex(referencePatternYAML), cfg.SHA256)
 	})
 
 	t.Run("a tier-2 file returns the config and its errors", func(t *testing.T) {

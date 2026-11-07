@@ -227,8 +227,7 @@ owner-only directories/files and a Git exclusion. These files can contain
 before-content; keep them private. Baseline content is bounded at 16 MiB;
 oversized content stays qualified. Post-edit handling consumes the
 baseline; the next handler sweeps expired entries after one hour and
-stale temporary files after ten minutes. The checks directory is separate
-from the capture archive and its run lock.
+stale temporary files after ten minutes.
 
 Verification and hook decisions append metadata to
 `.seamark/lesson-check-audit.jsonl` (`lesson-check-audit/1`). The writer
@@ -239,22 +238,17 @@ excerpts. They are not the reminder firing log.
 
 The **delivery report** reads the reminder log
 `.seamark/lessons-audit.jsonl`, both retained check-audit generations,
-current `lessons.yaml`, integration inspections and one read-only
-capture archive snapshot. Optional proposal links come from a read-only
-index. Each audit source has a 256 MiB prefix bound; the two check-audit
-generations share one bound. Sizes are fixed at open, incomplete final
-lines are ignored, and malformed/newer-schema counts remain visible.
-CLI/TUI archive reads use a short 250 ms busy wait and show busy as data.
-An older archive is reported as `older-schema`, never migrated by this
-report. Current and historical pin versions stay separate.
+current `lessons.yaml` and integration inspections. Optional proposal
+links come from a read-only index. Each audit source has a 256 MiB prefix
+bound; the two check-audit generations share one bound. Sizes are fixed
+at open, incomplete final lines are ignored, and malformed/newer-schema
+counts remain visible. Pin versions stay separate.
 
-The delivery report writes no durable state: no assembly, audit append,
-writer lock, archive migration, configuration or review change. SQLite
-can still create empty WAL/SHM sidecars when opening an existing database
-read-only; this is not an archive migration. The older `--proposals`,
-`--stats` and HTML report paths retain their existing writable index/Git
-metadata behavior. Their added capture reading does not make those
-whole commands read-only.
+The delivery report writes no durable state: no audit append, writer
+lock, configuration or review change. SQLite can still create empty
+WAL/SHM sidecars when opening an existing database read-only. The older
+`--proposals`, `--stats` and HTML report paths retain their existing
+writable index/Git metadata behavior.
 
 ## Effect catalogue
 

@@ -12,10 +12,10 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// This file maps a selection to the pins of a firing record version 2
-// (contract L3). The edit hook, the check advisory, and preparation
-// name every matched pin through it, so the surfaces give one pin one
-// entry and one version.
+// This file maps a selection to the pins of a firing record version 2.
+// The edit hook, the check advisory, and preparation name every matched
+// pin through it, so the surfaces give one pin one entry and one
+// version.
 
 // The guidance statuses of a firing record. The list is closed.
 const (
@@ -164,7 +164,7 @@ func entryIndex(cfg *reviews.Config) map[pinVersionKey]int {
 	return index
 }
 
-// pinIdentityOf is the K2 identity digest of a pin.
+// pinIdentityOf is the identity digest of a pin.
 func pinIdentityOf(p reviews.PinRule) string {
 	return reviews.PinIdentityDigest(reviews.NewPinKey(p.Rule, p.Region, p.Regions))
 }

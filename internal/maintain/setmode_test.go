@@ -1,10 +1,10 @@
 package maintain
 
-// Tests of the explicit mode edit (contract K6). The engine resolves a
-// pin-ref, splices only the mode and check keys of one entry, validates
-// the whole candidate, and refuses a target that changed after the read.
-// The tests do not read SetModePlan.Active, because milestone P4 may
-// retype it (K-4), and a later milestone never edits these tests (F8).
+// Tests of the explicit mode edit. The engine resolves a pin-ref,
+// splices only the mode and check keys of one entry, validates the
+// whole candidate, and refuses a target that changed after the read.
+// The tests do not read SetModePlan.Active, because the CLI replaces it
+// with the capability join.
 
 import (
 	"io/fs"
@@ -23,7 +23,7 @@ import (
 )
 
 // setModeHead is the top of every set-mode fixture: a tuning value and
-// the spec example of a check configuration.
+// the example check configuration.
 const setModeHead = `threshold: 3
 lesson_checks_version: 1
 checks:
@@ -35,8 +35,8 @@ checks:
 pin:
 `
 
-// setModeLessons holds the spec example pin without a mode or a check
-// (spec L137-140) and the second example pin of contract K2.
+// setModeLessons holds the example pin without a mode or a check and a
+// second example pin.
 const setModeLessons = setModeHead + `  - rule: frozen-assets
     region: generated/
     note: Changes to these files require a maintainer-managed update.
@@ -47,7 +47,7 @@ const setModeLessons = setModeHead + `  - rule: frozen-assets
 
 // setModeEnforced is setModeLessons after
 // --set-mode enforce --pin 3215e7b483d1 --check frozen-assets: both keys
-// follow the note at the indentation of the entry (K6 example).
+// follow the note at the indentation of the entry.
 const setModeEnforced = setModeHead + `  - rule: frozen-assets
     region: generated/
     note: Changes to these files require a maintainer-managed update.
@@ -60,7 +60,7 @@ const setModeEnforced = setModeHead + `  - rule: frozen-assets
 
 // setModeAdvisoryWithCheck is setModeEnforced after
 // --set-mode advisory --pin 3215e7b483d1: the mode key goes, and the
-// check key stays (K6 example).
+// check key stays.
 const setModeAdvisoryWithCheck = setModeHead + `  - rule: frozen-assets
     region: generated/
     note: Changes to these files require a maintainer-managed update.
@@ -70,7 +70,7 @@ const setModeAdvisoryWithCheck = setModeHead + `  - rule: frozen-assets
     note: Reject unknown fields in the parser.
 `
 
-// The K2 references and versions of the spec example pin.
+// The pin-refs and versions of the example pin.
 const (
 	setModeRef          = "3215e7b483d1"
 	setModeSecondRef    = "ed5d4af5de3a"
@@ -128,8 +128,8 @@ func setModeTree(t *testing.T, root string) []string {
 	return paths
 }
 
-// TestPlanSetMode proves the K6 plan: the pin-ref resolution, the
-// candidate splice, the strict check of the whole candidate, the
+// TestPlanSetMode proves the mode edit plan: the pin-ref resolution,
+// the candidate splice, the strict check of the whole candidate, the
 // unchanged request, and every refusal of the engine. A plan writes
 // nothing. A commit changes only the mode and check keys of the pin.
 func TestPlanSetMode(t *testing.T) {
@@ -147,10 +147,10 @@ func TestPlanSetMode(t *testing.T) {
 		assert.Equal(t, setModeRef, plan.Before.Ref)
 		assert.Equal(t, lessoncheck.ModeAdvisory, plan.Before.Mode)
 		assert.Empty(t, plan.Before.CheckID)
-		assert.Equal(t, setModeVersionPlain, plan.Before.Version, "the K2 vector of the pin without a mode")
+		assert.Equal(t, setModeVersionPlain, plan.Before.Version, "the version vector of the pin without a mode")
 		assert.Equal(t, lessoncheck.ModeEnforce, plan.After.Mode)
 		assert.Equal(t, "frozen-assets", plan.After.CheckID)
-		assert.Equal(t, setModeVersionEnf, plan.After.Version, "the K2 vector of the enforced pin")
+		assert.Equal(t, setModeVersionEnf, plan.After.Version, "the version vector of the enforced pin")
 		assert.Equal(t, setModeRef, plan.After.Ref, "a mode edit keeps the pin-ref")
 
 		predicate, err := lessoncheck.Describe(reviews.CheckDef{Kind: string(lessoncheck.KindForbidPathChange)})
@@ -163,7 +163,7 @@ func TestPlanSetMode(t *testing.T) {
 		assert.True(t, plan.Write)
 		require.NoError(t, plan.GateErr)
 
-		require.Len(t, plan.Impact, 1, "the pin becomes executable, so it has a K1 block")
+		require.Len(t, plan.Impact, 1, "the pin becomes executable, so it has an impact block")
 		assert.Equal(t, lessoncheck.ModeEnforce, plan.Impact[0].Mode)
 		assert.Equal(t, setModeVersionPlain, plan.Impact[0].VersionBefore)
 		assert.Equal(t, setModeVersionEnf, plan.Impact[0].VersionAfter)
@@ -253,7 +253,7 @@ func TestPlanSetMode(t *testing.T) {
 		assert.Equal(t, setModeLessons, setModeFile(t, root))
 	})
 
-	t.Run("the refusals name the K6 and K2 texts and write nothing", func(t *testing.T) {
+	t.Run("the refusals name their exact texts and write nothing", func(t *testing.T) {
 		invalidOther := strings.Replace(setModeLessons, "    note: Reject unknown fields in the parser.\n",
 			"    note: Reject unknown fields in the parser.\n    mode: check\n", 1)
 
@@ -297,10 +297,9 @@ func TestPlanSetMode(t *testing.T) {
 		}
 	})
 
-	// Milestone P5 appends the --delivery clause to the K2 missing text,
-	// so the test asserts only the head that every form keeps (§4.2
-	// subset rule, F8).
-	t.Run("a missing pin-ref keeps its K2 kind and text head", func(t *testing.T) {
+	// The test asserts only the head of the missing pin-ref text, so a
+	// clause at its end keeps the test valid.
+	t.Run("a missing pin-ref keeps its error kind and text head", func(t *testing.T) {
 		root, deps := setModeRoot(t, setModeLessons, true)
 
 		plan, err := PlanSetMode(deps, SetModeRequest{PinRef: "00000000", Mode: lessoncheck.ModeCheck})
@@ -369,7 +368,7 @@ func TestPlanSetMode(t *testing.T) {
 	})
 }
 
-// staleSetModeText is the exact K6 refusal of a stale target.
+// staleSetModeText is the exact refusal of a stale target.
 const staleSetModeText = "lessons --set-mode: .seamark/lessons.yaml changed after it was read; " +
 	"nothing was written — rerun the command"
 
@@ -397,10 +396,10 @@ func (w raceWriter) Restore(*integration.Registry, string, [32]byte, []byte) err
 	return nil
 }
 
-// TestSetModeRefusesStaleTarget proves the K6 stale refusal (AC-27). A
-// change of the pin file after the read, before Prepare or between
-// Prepare and Apply, refuses the write with the exact K6 text. The file
-// keeps the bytes of the other writer.
+// TestSetModeRefusesStaleTarget proves the stale refusal. A change of
+// the pin file after the read, before Prepare or between Prepare and
+// Apply, refuses the write with the exact refusal text. The file keeps
+// the bytes of the other writer.
 func TestSetModeRefusesStaleTarget(t *testing.T) {
 	other := setModeLessons + "# a hand edit\n"
 

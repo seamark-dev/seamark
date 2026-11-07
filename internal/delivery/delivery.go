@@ -29,9 +29,9 @@ type Request struct {
 	// suppression state use it.
 	Root string
 	// IdentityRoot is the root of the firing log: every identity digest
-	// hashes over it, and the records go under it (contract K2, identity
-	// root). Empty means Root. The CLI passes cli.hookIdentityRoot, so the
-	// edit and reset records of one receiver carry one digest.
+	// hashes over it, and the records go under it. Empty means Root. The
+	// CLI passes cli.hookIdentityRoot, so the edit and reset records of
+	// one receiver carry one digest.
 	IdentityRoot string
 	// ClientID is the resolved registry ID of the client. It comes from
 	// the CLI selection and never from the hook payload, so a payload
@@ -51,8 +51,8 @@ type Request struct {
 	ConfigErr error
 	// RecordEvaluations is true when the hook runs with the recording
 	// switch on. Only then does the firing log get the evaluation records
-	// of an event that emitted nothing (contract L3). The CLI reads the
-	// switch, because this package reads no environment.
+	// of an event that emitted nothing. The CLI reads the switch, because
+	// this package reads no environment.
 	RecordEvaluations bool
 	// EventID is the event_id of the records. Empty means a new random
 	// ID. Tests set it to get fixed records.
@@ -157,10 +157,10 @@ func (e *EmitError) Unwrap() error { return e.Err }
 // plain error when the lesson lookup fails or ctx ends. In both cases
 // Deliver marks no lesson delivered and records no injection.
 //
-// The firing log gets one event of record version 2 (contract L3). An
-// event that emitted nothing gets an evaluation record only when
-// req.RecordEvaluations is true, so without capture opt-in the log gets
-// the record kinds of the version 1 writer only.
+// The firing log gets one event of record version 2. An event that
+// emitted nothing gets an evaluation record only when
+// req.RecordEvaluations is true. So with the recording switch off, the
+// log gets only the record kinds of the version 1 writer.
 func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outcome, error) {
 	out := Outcome{Status: StatusSilent, Suppression: SuppressionOff}
 
@@ -397,9 +397,8 @@ type ResetRequest struct {
 // no-op until once-per-context delivery has been used.
 //
 // The reset starts a new generation in the edit hook state and in the
-// exploration state (contract L2, Behavior 7). The two resets are
-// independent: a failure of one never stops the other, and neither
-// creates its file.
+// exploration state. The two resets are independent: a failure of one
+// never stops the other, and neither creates its file.
 //
 // With req.RecordEvaluations, the firing log gets one reset record for
 // every reset of a named context, also when no state exists yet. A
@@ -428,9 +427,9 @@ func Reset(req ResetRequest) error {
 	return exploreErr
 }
 
-// recordReset appends the reset record of a context (contract L3). A
-// generation is zero when its state was not reset, and the record then
-// has no key for it.
+// recordReset appends the reset record of a context. A generation is
+// zero when its state was not reset, and the record then has no key for
+// it.
 func recordReset(req ResetRequest, generation, exploreGeneration uint64) {
 	receiving := req.Event.Context
 	resettable := receiving.Resettable
@@ -441,7 +440,7 @@ func recordReset(req ResetRequest, generation, exploreGeneration uint64) {
 		SessionID: req.Event.SessionID, Turn: req.Event.Turn, ReceiverID: receiving.ID,
 		Lane: laneOf(&receiving), Resettable: &resettable,
 		Records:           []reviews.EventRecord{{Status: reviews.DeliveryReset}},
-		CaptureOptIn:      true,
+		RecordEvaluations: true,
 		Generation:        generation,
 		ExploreGeneration: exploreGeneration,
 		EventID:           req.EventID,
@@ -521,8 +520,8 @@ func pinLessons(pins []reviews.SurfacedPin) []model.Lesson {
 	return lessons
 }
 
-// The emission values of a firing record (contract L3). The list is
-// closed; preparation adds "returned".
+// The emission values of a firing record. The list is closed;
+// preparation adds "returned".
 const (
 	emissionEmitted   = "emitted"
 	emissionNotNeeded = "not-needed"
@@ -549,7 +548,8 @@ func evaluationRecord() []reviews.EventRecord {
 
 // record appends the records of one edit event to the firing log. It
 // is best effort: the result only sets AuditFailed. An evaluation needs
-// capture opt-in, so without it record writes nothing for one.
+// the recording switch, so with the switch off record writes nothing
+// for one.
 func (o *Outcome) record(req Request, cfg *reviews.Config, records []reviews.EventRecord,
 	pins []reviews.FiringPin, emission, evaluation string,
 ) {
@@ -567,18 +567,18 @@ func (o *Outcome) record(req Request, cfg *reviews.Config, records []reviews.Eve
 		Mechanism: req.Mechanism,
 		Files:     o.Files,
 		SessionID: req.Event.SessionID, MatchID: req.Event.MatchID, Turn: req.Event.Turn,
-		Lane:           laneOf(req.Event.Context),
-		Records:        records,
-		Pins:           pins,
-		Emission:       emission,
-		Evaluation:     evaluation,
-		GuidanceSHA:    digest,
-		GuidanceStatus: status,
-		PathsComplete:  o.RejectedCount == 0,
-		RejectedPaths:  o.RejectedCount,
-		CaptureOptIn:   req.RecordEvaluations,
-		Generation:     o.Generation,
-		EventID:        req.EventID,
+		Lane:              laneOf(req.Event.Context),
+		Records:           records,
+		Pins:              pins,
+		Emission:          emission,
+		Evaluation:        evaluation,
+		GuidanceSHA:       digest,
+		GuidanceStatus:    status,
+		PathsComplete:     o.RejectedCount == 0,
+		RejectedPaths:     o.RejectedCount,
+		RecordEvaluations: req.RecordEvaluations,
+		Generation:        o.Generation,
+		EventID:           req.EventID,
 	}
 
 	// The log gets the receiving context whenever the client names one,

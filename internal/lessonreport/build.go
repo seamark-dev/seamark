@@ -15,7 +15,7 @@ const (
 	checkAuditPath = ".seamark/lesson-check-audit.jsonl"
 )
 
-// The states of a source, the archive, and the config.
+// The states of a source, of as_of.archive, and of the config.
 const (
 	StateRead       = "read"
 	StateAbsent     = "absent"
@@ -26,8 +26,8 @@ const (
 	ArchiveNewerSchema = "newer-schema"
 	ArchiveBusy        = "busy"
 
-	// ArchiveNotReadError is the fixed error text of as_of.archive. The
-	// text holds in every checkout, also in one that holds an archive.
+	// ArchiveNotReadError is the error text of as_of.archive, a fixed
+	// field. The text is the same in every checkout.
 	ArchiveNotReadError = "this build does not read a capture archive"
 
 	ConfigOK      = "ok"
@@ -35,7 +35,8 @@ const (
 
 	CaptureAvailable   = "available"
 	CaptureUnavailable = "unavailable"
-	// CaptureUnavailableMessage is the fixed phrase of an unavailable capture.
+	// CaptureUnavailableMessage is the message of the capture field, a
+	// fixed field.
 	CaptureUnavailableMessage = "capture evidence unavailable"
 
 	// ObservationUnit and ObservationEndpoint label the observation
@@ -70,15 +71,14 @@ const maxErrorRunes = 200
 // Build fills the per-version reading: as_of, capture, units, totals,
 // one PinReading per config pin with its delivery counts and its
 // observation windows, the coverage counts that the audit alone gives,
-// and the versions and session windows of an expansion. The report reads
-// no capture archive, so the classes, the occurrences, the timing, the
-// historical section, and the unlinked feedback stay empty, and
-// as_of.archive is a fixed state. Every delivered session reads
-// incomplete, because no session is captured. Check operations and guard
-// attempts use separate units. Every next step needs a corrected action
-// or captured feedback, so the next steps stay empty. An empty value
-// never reads like a result. The selection reading states the current
-// budgets and whether the audit read.
+// and the versions and session windows of an expansion. The classes, the
+// occurrences, the timing, the historical section, the unlinked
+// feedback, the next steps, and as_of.archive are fixed fields. Every
+// delivered session reads incomplete, because this build has no source
+// for another partition. Check operations and guard attempts use
+// separate units. An empty value never reads like a result. The
+// selection reading states the current budgets and whether the audit
+// read.
 func Build(in Inputs, pinRef string) (Report, error) {
 	return buildWith(in, pinRef, nil)
 }
@@ -195,8 +195,8 @@ func currentPins(cfg *reviews.Config) []pinVersion {
 // expansion returns the --pin detail of one identity: its versions in
 // config file order, and the session windows in the order of the
 // versions. ResolveRef reads the config only, so the identity is always
-// a current one. The occurrences stay empty, because they need a capture
-// archive.
+// a current one. The occurrences stay empty, because they are a fixed
+// field.
 func expansion(identity string, current []pinVersion, an *analysis) *Expansion {
 	exp := &Expansion{Versions: []string{}, Occurrences: []OccurrenceDetail{}}
 
@@ -340,9 +340,10 @@ func checkAuditSource(in Inputs) SourceRead {
 	return out
 }
 
-// archiveRead is the fixed archive state of the report. This build has
-// no capture archive reader, so the state is always absent. The field
-// stays, so the delivery/1 document keeps one field set on every build.
+// archiveRead is the as_of.archive state of the report, a fixed field.
+// This build has no source for it, so the state is always absent. The
+// field stays, so the delivery/1 document keeps one field set on every
+// build.
 func archiveRead() ArchiveRead {
 	return ArchiveRead{State: StateAbsent, Error: ArchiveNotReadError}
 }
@@ -374,7 +375,9 @@ func configRead(in Inputs) ConfigRead {
 	return out
 }
 
-// captureState maps the archive state to the capture state.
+// captureState maps the as_of.archive state to the capture field. The
+// archive state is always absent in this build, so the capture field
+// always reads unavailable with the reason no-archive.
 func captureState(a ArchiveRead) CaptureState {
 	if a.State == StateRead {
 		return CaptureState{State: CaptureAvailable}

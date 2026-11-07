@@ -18,7 +18,7 @@ import (
 )
 
 // The tests in this file hold the write rules of firing record version
-// 2 for the edit hook and the reset hook (contract L3, surface "").
+// 2 for the edit hook and the reset hook.
 
 // Fixed event IDs keep the records of one test apart without a clock.
 const (
@@ -138,7 +138,7 @@ func TestDeliverWritesTheV2WriteRules(t *testing.T) {
 	assert.Equal(t, integration.LaneRoot, first.Lane)
 	require.NotNil(t, first.ContextResettable)
 	assert.True(t, *first.ContextResettable)
-	assert.False(t, first.CaptureOptIn, "the request has no capture opt-in")
+	assert.False(t, first.RecordEvaluations, "the recording switch is off")
 	assert.Equal(t, []reviews.FiringPin{pinOf(cfg, cfg.Pin[0], reviews.PinInjected, "")}, first.Pins,
 		"the mined lesson is in fired only")
 
@@ -215,9 +215,9 @@ func TestDeliverWritesTheV2WriteRules(t *testing.T) {
 }
 
 func TestDeliverRecordsTheOwnInjectionOfAnAction(t *testing.T) {
-	// AC-9, emission side: each action gets its own injection record,
-	// joined by the digest of its tool use and its turn. The digests hash
-	// over the identity root, also when it differs from the root.
+	// Each action gets its own injection record, joined by the digest of
+	// its tool use and its turn. The digests hash over the identity root,
+	// also when it differs from the root.
 	root := workspace(t)
 	st := lessonStore(t, root)
 	cfg := pinnedConfig(reviews.HookDeliveryAlways)
@@ -277,7 +277,7 @@ func TestDeliverRecordsTheOwnInjectionOfAnAction(t *testing.T) {
 	assert.NotEqual(t, records[1].TurnSHA, records[2].TurnSHA)
 }
 
-func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
+func TestDeliverWritesNewRecordKindsOnlyUnderTheRecordingSwitch(t *testing.T) {
 	failed := errors.New("stdout closed")
 
 	cases := []struct {
@@ -326,14 +326,14 @@ func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, optIn := range []bool{false, true} {
+			for _, recording := range []bool{false, true} {
 				root := workspace(t)
 				cfg := writeConfig(t, root, "pin:\n"+
 					"  - {rule: boundary-validation, region: api, note: Validate request payloads at the edge.}\n")
 				st, event, emit := tc.setup(t, root, lessonStore(t, root))
 
 				req := claudeRequest(root, cfg, event)
-				req.RecordEvaluations = optIn
+				req.RecordEvaluations = recording
 
 				_, err := Deliver(context.Background(), st, req, emit)
 				if tc.wantErr {
@@ -342,9 +342,9 @@ func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
 					require.NoError(t, err)
 				}
 
-				if !optIn {
+				if !recording {
 					assert.NoFileExists(t, reviews.AuditLogPath(root),
-						"without capture opt-in the log gets no evaluation record")
+						"with the recording switch off the log gets no evaluation record")
 
 					continue
 				}
@@ -361,7 +361,7 @@ func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
 				require.NotNil(t, rec.PathsComplete)
 				assert.Equal(t, tc.complete, *rec.PathsComplete)
 				assert.Equal(t, tc.rejected, rec.RejectedPaths)
-				assert.True(t, rec.CaptureOptIn)
+				assert.True(t, rec.RecordEvaluations)
 				assert.Equal(t, reviews.SessionDigest(root, "s"), rec.SessionSHA)
 				assert.Equal(t, reviews.MatchDigest(root, "s", "m"), rec.MatchSHA)
 				assert.Equal(t, reviews.TurnDigest(root, integration.ClaudeID, "s", "p"), rec.TurnSHA)
@@ -381,7 +381,7 @@ func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
 		})
 	}
 
-	t.Run("an injection names the opt-in, and no path means no record", func(t *testing.T) {
+	t.Run("an injection names the recording switch, and no path means no record", func(t *testing.T) {
 		root := workspace(t)
 		st := lessonStore(t, root)
 
@@ -402,7 +402,7 @@ func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
 
 		records := firings(t, root)
 		require.Len(t, records, 1)
-		assert.True(t, records[0].CaptureOptIn)
+		assert.True(t, records[0].RecordEvaluations)
 		assert.Equal(t, reviews.DeliveryInjected, records[0].Delivery)
 	})
 
@@ -764,15 +764,15 @@ func TestDeliverNamesHeldBackPinsWithTheirCause(t *testing.T) {
 		symptoms(records[0].Fired), "held-back pins stay out of the fired list")
 }
 
-func TestResetWritesAResetRecordUnderCaptureOptIn(t *testing.T) {
+func TestResetWritesAResetRecordUnderTheRecordingSwitch(t *testing.T) {
 	root := workspace(t)
 	st := lessonStore(t, root)
 	cfg := writeConfig(t, root, "hook_delivery: once-per-context\n")
 	identity := t.TempDir()
 
-	reset := func(receiving integration.ReceivingContext, client string, optIn bool) ResetRequest {
+	reset := func(receiving integration.ReceivingContext, client string, recording bool) ResetRequest {
 		return ResetRequest{
-			Root: root, IdentityRoot: identity, ClientID: client, RecordEvaluations: optIn,
+			Root: root, IdentityRoot: identity, ClientID: client, RecordEvaluations: recording,
 			Event: integration.ResetEvent{Context: receiving, SessionID: "session-1", Turn: "prompt-9"},
 		}
 	}
@@ -797,7 +797,7 @@ func TestResetWritesAResetRecordUnderCaptureOptIn(t *testing.T) {
 	_, err := Deliver(context.Background(), st, req, got.emit)
 	require.NoError(t, err)
 
-	// Without opt-in, a reset still resets and writes no record.
+	// With the recording switch off, a reset still resets and writes no record.
 	require.NoError(t, Reset(reset(rootContext, integration.ClaudeID, false)))
 	require.Len(t, firings(t, identity), 2)
 
@@ -821,7 +821,7 @@ func TestResetWritesAResetRecordUnderCaptureOptIn(t *testing.T) {
 	assert.Equal(t, integration.LaneRoot, rec.Lane)
 	require.NotNil(t, rec.ContextResettable)
 	assert.True(t, *rec.ContextResettable)
-	assert.True(t, rec.CaptureOptIn)
+	assert.True(t, rec.RecordEvaluations)
 	assert.Equal(t, reviews.AuditSchemaVersion, rec.SchemaVersion)
 	assert.Equal(t, eventThree, rec.EventID)
 	assert.Equal(t, 1, rec.EventRecords)
@@ -845,7 +845,7 @@ func TestResetWritesAResetRecordUnderCaptureOptIn(t *testing.T) {
 	assert.Equal(t, reviews.DeliveryInjected, records[3].Delivery, "the reset restored the advice")
 
 	// A context that no reset reaches, or a request without a client,
-	// writes nothing even with opt-in.
+	// writes nothing even with the recording switch on.
 	child := *integration.ReceivingContextOf(integration.ClaudeID, "session-1", "agent-7")
 	require.NoError(t, Reset(reset(child, integration.ClaudeID, true)))
 	require.NoError(t, Reset(reset(rootContext, "", true)))

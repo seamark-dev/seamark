@@ -45,8 +45,8 @@ func TestLessonsDeliveryCallsNoModel(t *testing.T) {
 }
 
 // TestLessonsDeliveryJSONIsDelivery1 reads the delivery/1 document of an
-// expansion. This build reads the audit logs only, so the sections that
-// need a capture archive keep their fixed empty values.
+// expansion. This build reads only the audit logs. So the fixed fields,
+// which have no source in this build, keep their fixed values.
 func TestLessonsDeliveryJSONIsDelivery1(t *testing.T) {
 	f := newDeliveryFixture(t, "")
 	r, out := deliveryReport(t, f.root, "--pin", f.pinRef())
@@ -78,7 +78,10 @@ func TestLessonsDeliveryJSONIsDelivery1(t *testing.T) {
 	require.ErrorIs(t, decoder.Decode(&value), io.EOF)
 }
 
-func TestLessonsDeliveryWithoutCapture(t *testing.T) {
+// TestLessonsDeliveryKeepsTheFixedFields reads the report of one hook
+// delivery. The JSON keeps the fixed fields at their values, the text
+// leaves them out, and the report writes nothing.
+func TestLessonsDeliveryKeepsTheFixedFields(t *testing.T) {
 	f := newDeliveryFixture(t, "")
 	before := deliveryTree(t, f.root)
 
@@ -89,8 +92,8 @@ func TestLessonsDeliveryWithoutCapture(t *testing.T) {
 	assert.Equal(t, 1, r.Pins[0].Delivery.Injected)
 	assert.Equal(t, 1, r.Pins[0].Observation.IncompleteByReason[lessonreport.CodeSessionNotCaptured])
 
-	// The text leaves out the capture and observation lines, and the JSON
-	// above keeps their fixed values.
+	// The text leaves out the lines of the fixed fields, and the JSON
+	// above keeps their values.
 	out, err := deliveryRun(t, f.root)
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(out, "Lesson delivery (delivery/1; seamark "), out)

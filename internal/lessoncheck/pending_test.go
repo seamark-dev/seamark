@@ -706,7 +706,8 @@ func TestLessonCheckPendingDropsOversizedContent(t *testing.T) {
 	})
 }
 
-// TestLessonCheckDiscardSession proves the capture deletion.
+// TestLessonCheckDiscardSession proves the removal of the pending
+// records of one native session.
 // DiscardSession finds the directory through the git top level that the
 // caller passes. It removes the records of the session hashed over the
 // identity root and appends one session-deleted record per removed

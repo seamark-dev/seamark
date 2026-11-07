@@ -141,12 +141,12 @@ func checkLegacyFixture(t *testing.T) string {
 }
 
 // TestCheckLessonsMCPOptionAbsentKeepsText freezes the text of the MCP
-// check tool as 96e14ef returns it, before the lesson_checks option
-// exists (BRIEF rule 14, contracts K5). Three argument shapes are
-// covered: an empty object and no arguments, which both fall back to
-// `git diff HEAD`, and a diff argument. Only content[0].text is frozen.
-// The tool schema in tools/list is not frozen, because milestone P1
-// adds the option to it.
+// check tool as it was before the lesson_checks option existed, because
+// a call without the option must keep its text. Three argument shapes
+// are covered: an empty object and no arguments, which both fall back
+// to `git diff HEAD`, and a diff argument. Only content[0].text is
+// frozen. The tool schema in tools/list is not frozen, because it lists
+// the option.
 func TestCheckLessonsMCPOptionAbsentKeepsText(t *testing.T) {
 	const (
 		diffText = `verdict  require_approval (mode: warn)
@@ -199,10 +199,10 @@ advisory — recurring lessons for touched files (not part of the verdict)
 	}
 }
 
-// The tests of the check option lesson_checks (plan step P1.11;
-// contracts K5, §4.1). Every test builds a temporary repository with
-// the lessons of lessonChecksYAML and runs the server under the AC-1
-// sentinel. Nothing reads the repository of this checkout.
+// The tests of the check option lesson_checks. Every test builds a
+// temporary repository with the lessons of lessonChecksYAML and runs
+// the server under the invoker sentinel. Nothing reads the repository
+// of this checkout.
 
 // lessonChecksYAML arms two pins. frozen-assets forbids every change
 // under generated/ (enforce), and no-todo forbids an added TODO( line
@@ -389,12 +389,12 @@ func mcpCombinedLine(state, policy, lessons string, exit int) string {
 		"; CLI exit " + strconv.Itoa(exit) + ")\n"
 }
 
-// TestCheckLessonsMCPOption proves the MCP part of contract K5. False
-// and absent give the text of today. True gives that text, a blank
-// line, the lesson report, and the combined line with the CLI exit
-// code. Every verdict stays in band. The lesson checks read the working
-// tree whatever diff the policy reads (§5 row 25). Malformed arguments
-// and a root outside git are refused with the §4.1 and K5 texts.
+// TestCheckLessonsMCPOption proves the lesson_checks option of the MCP
+// check tool. False and absent give the text of today. True gives that
+// text, a blank line, the lesson report, and the combined line with the
+// CLI exit code. Every verdict stays in band. The lesson checks read
+// the working tree whatever diff the policy reads. Malformed arguments
+// and a root outside git are refused with their usage and root texts.
 func TestCheckLessonsMCPOption(t *testing.T) {
 	t.Run("the schema declares the option", func(t *testing.T) {
 		root := writeFixture(t)
@@ -559,9 +559,9 @@ func TestCheckLessonsMCPOption(t *testing.T) {
 	})
 }
 
-// TestCheckLessonsMCPNeverInvokes proves AC-1 for the check option:
-// the git fallback, a diff argument, and the option off start no agent,
-// no model CLI, and no network client.
+// TestCheckLessonsMCPNeverInvokes proves that the check option calls no
+// model: the git fallback, a diff argument, and the option off start no
+// agent, no model CLI, and no network client.
 func TestCheckLessonsMCPNeverInvokes(t *testing.T) {
 	root, sentinel := lessonChecksFixture(t, "warn")
 	editAsset(t, root)
@@ -583,10 +583,9 @@ func TestCheckLessonsMCPNeverInvokes(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// This part holds the AC-1 sentinel of the MCP server (plan
-// conventions). The CLI tests hold the same sentinel, because test
-// helpers cannot cross package boundaries. The sentinel has three
-// parts:
+// This part holds the invoker sentinel of the MCP server. The CLI tests
+// hold the same sentinel, because test helpers cannot cross package
+// boundaries. The sentinel has three parts:
 //   - agent.argv in .seamark/config.yaml names a stub script;
 //   - stubs named claude, codex, and gh come first on PATH;
 //   - the proxy variables name a closed local port.

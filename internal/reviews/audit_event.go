@@ -14,10 +14,10 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 )
 
-// This file holds the writer of firing record version 2 (contract L3).
-// One surface invocation is one event. RecordEvent writes the records of
-// an event with one event ID, so a reader can count the event once. The
-// v1 entry points in audit.go stay for the tests of the legacy shape.
+// This file holds the writer of firing record version 2. One surface
+// invocation is one event. RecordEvent writes the records of an event
+// with one event ID, so a reader can count the event once. The v1 entry
+// points in audit.go stay for the tests of the legacy shape.
 
 // AuditSchemaVersion is the schema_version of every record that
 // RecordEvent writes. A record without the key is a legacy record.
@@ -26,10 +26,10 @@ const AuditSchemaVersion = 2
 const (
 	// DeliveryEvaluation records an evaluation that emitted nothing: no
 	// match, no usable path, a selection error, or a failed emission.
-	// Only a writer that sees capture opt-in writes it (spec L257).
+	// Only a hook that runs with the recording switch writes it.
 	DeliveryEvaluation DeliveryStatus = "evaluation"
 	// DeliveryReset records a context reset with the new generations.
-	// Only a writer that sees capture opt-in writes it (spec L185).
+	// Only a hook that runs with the recording switch writes it.
 	DeliveryReset DeliveryStatus = "reset"
 )
 
@@ -91,7 +91,7 @@ func KnownHeldBackCause(cause string) bool {
 }
 
 // turnDigestLabel is the first compose part of TurnDigest. The label
-// keeps the digest apart from every other compose digest (registry §2.2).
+// keeps the digest apart from every other compose digest.
 const turnDigestLabel = "turn"
 
 // eventIDBytes is the size of a random event ID: 16 bytes give the
@@ -103,8 +103,8 @@ const eventIDBytes = 16
 var errNoEventID = errors.New("firing log: a schema 2 record needs an event id")
 
 // FiringPin is the delivery of one matched pin in an event. Identity
-// and Version are the K2 digests, never the pin text: the legacy fired
-// list already holds the text.
+// and Version are the pin identity and version digests, never the pin
+// text: the legacy fired list already holds the text.
 type FiringPin struct {
 	Identity string      `json:"pin_identity"`
 	Version  string      `json:"pin_version"`
@@ -121,10 +121,10 @@ type EventRecord struct {
 }
 
 // AuditEvent is one surface invocation. It holds plain values and no
-// integration type, because reviews must not import integration (K2
-// import rule). The caller copies the values from its event.
+// integration type, because reviews must not import integration. The
+// caller copies the values from its event.
 type AuditEvent struct {
-	// Root is the K2 identity root. RecordEvent hashes every raw identity
+	// Root is the identity root. RecordEvent hashes every raw identity
 	// over it and appends to the firing log under it.
 	Root, Surface, Tool, ClientID, Mechanism string
 	Files                                    []string
@@ -147,7 +147,7 @@ type AuditEvent struct {
 	Emission, Evaluation, GuidanceSHA, GuidanceStatus, ScopeSHA string
 	PathsComplete                                               bool
 	RejectedPaths                                               int
-	CaptureOptIn                                                bool
+	RecordEvaluations                                           bool
 	Generation, ExploreGeneration                               uint64
 	Read                                                        *bool
 	// EventID is empty for a new random ID. A given ID must be 32
@@ -294,7 +294,7 @@ func eventFiring(ev AuditEvent, er EventRecord) Firing {
 		Lane:              ev.Lane,
 		ContextResettable: ev.Resettable,
 		ExploreGeneration: ev.ExploreGeneration,
-		CaptureOptIn:      ev.CaptureOptIn,
+		RecordEvaluations: ev.RecordEvaluations,
 		Read:              ev.Read,
 		ScopeSHA:          ev.ScopeSHA,
 	}

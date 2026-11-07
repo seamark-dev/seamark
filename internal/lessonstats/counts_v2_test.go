@@ -14,7 +14,7 @@ import (
 // countsV2Events are the v2 events of one day and the day before: an
 // edit-hook injection, an exploration injection, and a check record.
 // When withNewKinds is true, the zero-match evaluation and the reset of
-// a capture opt-in writer follow the injection.
+// a writer with the recording switch on follow the injection.
 func countsV2Events(root string, now time.Time, withNewKinds bool) []reviews.AuditEvent {
 	lesson := []model.Lesson{{Region: "api", Symptom: "first-pin — a"}}
 	resettable := true
@@ -48,22 +48,22 @@ func countsV2Events(root string, now time.Time, withNewKinds bool) []reviews.Aud
 	evaluation.MatchID = "tool-use-3"
 	evaluation.Records = []reviews.EventRecord{{Status: reviews.DeliveryEvaluation}}
 	evaluation.Emission = "not-needed"
-	evaluation.CaptureOptIn = true
+	evaluation.RecordEvaluations = true
 
 	reset := reviews.AuditEvent{
 		Root: root, ClientID: "claude", SessionID: "session-1", ReceiverID: "session-1",
 		Lane: "root", Resettable: &resettable,
 		Records:    []reviews.EventRecord{{Status: reviews.DeliveryReset}},
-		Generation: 2, ExploreGeneration: 2, CaptureOptIn: true, Now: now,
+		Generation: 2, ExploreGeneration: 2, RecordEvaluations: true, Now: now,
 	}
 
 	return []reviews.AuditEvent{edit, evaluation, reset, explore, check}
 }
 
 // TestDailyCountsSkipEvaluationAndResetRecords feeds a v2 log to
-// DailyCounts (contract L3, Legacy readers of v2 records). Evaluation
-// and reset records are not deliveries, so they change no day count.
-// An exploration injection is a delivery but not a hook delivery.
+// DailyCounts. Evaluation and reset records are not deliveries, so they
+// change no day count. An exploration injection is a delivery but not a
+// hook delivery.
 func TestDailyCountsSkipEvaluationAndResetRecords(t *testing.T) {
 	now := time.Date(2026, 10, 21, 15, 0, 0, 0, time.UTC)
 

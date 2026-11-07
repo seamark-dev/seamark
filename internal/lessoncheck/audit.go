@@ -40,8 +40,8 @@ const (
 const (
 	// DiscardExpired is a pending record older than pending-max-age.
 	DiscardExpired = "expired"
-	// DiscardSessionDeleted is a pending record of a deleted capture
-	// session.
+	// DiscardSessionDeleted is a pending record that DiscardSession
+	// removes with the other records of its native session.
 	DiscardSessionDeleted = "session-deleted"
 	// DiscardUnsafe is a pending entry that is not a regular file, for
 	// example a symbolic link. No handler can trust it as a baseline.

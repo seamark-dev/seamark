@@ -10,9 +10,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
-// TestLessonCheckStatusResourceCallsNoInvoker proves the K10 surfaces of
-// the MCP server (AC-1): the status resource prints the lesson checks
-// block of status, and change_set copies the badges of the same
+// TestLessonCheckStatusResourceCallsNoInvoker proves the capability
+// surfaces of the MCP server: the status resource prints the lesson
+// checks block of status, and change_set copies the badges of the same
 // capability report into each check summary. Neither calls a model or
 // the network: the invoker sentinel records no call.
 func TestLessonCheckStatusResourceCallsNoInvoker(t *testing.T) {

@@ -84,7 +84,7 @@ func assertUnwritten(t *testing.T, f *fixture, p *Plan, lessons, ledger string) 
 }
 
 func TestScopeEditRows(t *testing.T) {
-	t.Run("row 6 a draft that keeps the regions saves through the pin review", func(t *testing.T) {
+	t.Run("a draft that keeps the regions saves through the pin review", func(t *testing.T) {
 		for _, typed := range []string{"api", "api/", "./api"} {
 			f := authorFixture(t)
 			ledger := f.ledger()
@@ -113,7 +113,7 @@ func TestScopeEditRows(t *testing.T) {
 		}
 	})
 
-	t.Run("row 6 a stored trailing slash is no region change", func(t *testing.T) {
+	t.Run("a stored trailing slash is no region change", func(t *testing.T) {
 		f := authorFixture(t)
 		f.write(strings.Replace(authorLessons, "region: api\n", "region: api/\n", 1), 0o644)
 
@@ -124,7 +124,7 @@ func TestScopeEditRows(t *testing.T) {
 		assert.Empty(t, blockerLines(f.authorPlan(f.deps(), edit)))
 	})
 
-	t.Run("row 7 a blocking issue shows in Blocked and keeps the old regions", func(t *testing.T) {
+	t.Run("a blocking issue shows in Blocked and keeps the old regions", func(t *testing.T) {
 		f := authorFixture(t)
 		ledger := f.ledger()
 
@@ -140,7 +140,7 @@ func TestScopeEditRows(t *testing.T) {
 		assertUnwritten(t, f, p, authorLessons, ledger)
 	})
 
-	t.Run("row 8 a hard link names the file route", func(t *testing.T) {
+	t.Run("a hard link names the file route", func(t *testing.T) {
 		f := authorFixture(t)
 		ledger := f.ledger()
 
@@ -156,7 +156,7 @@ func TestScopeEditRows(t *testing.T) {
 		assertUnwritten(t, f, p, authorLessons, ledger)
 	})
 
-	t.Run("row 8 a file block names the file route", func(t *testing.T) {
+	t.Run("a file block names the file route", func(t *testing.T) {
 		f := authorFixture(t)
 		ledger := f.ledger()
 		crlf := strings.ReplaceAll(authorLessons, "\n", "\r\n")
@@ -173,7 +173,7 @@ func TestScopeEditRows(t *testing.T) {
 		assertUnwritten(t, f, p, crlf, ledger)
 	})
 
-	t.Run("row 9 an owner of the new key is a collision", func(t *testing.T) {
+	t.Run("an owner of the new key is a collision", func(t *testing.T) {
 		for name, setup := range map[string]func(f *fixture){
 			"a pin": func(*fixture) {},
 			"an applied row": func(f *fixture) {
@@ -207,7 +207,7 @@ func TestScopeEditRows(t *testing.T) {
 		}
 	})
 
-	t.Run("row 10 another applied row owns the old key", func(t *testing.T) {
+	t.Run("another applied row owns the old key", func(t *testing.T) {
 		f := authorFixture(t)
 		f.propose(model.Proposal{Signature: "s2", Rule: "linked-rule", Region: "api", Status: model.ProposalApplied})
 
@@ -218,7 +218,7 @@ func TestScopeEditRows(t *testing.T) {
 		assertUnwritten(t, f, p, authorLessons, ledger)
 	})
 
-	t.Run("row 10 the link is gone", func(t *testing.T) {
+	t.Run("the link is gone", func(t *testing.T) {
 		f := authorFixture(t)
 		ledger := f.ledger()
 
@@ -229,7 +229,7 @@ func TestScopeEditRows(t *testing.T) {
 		assertUnwritten(t, f, p, authorLessons, ledger)
 	})
 
-	t.Run("row 11 the draft fails the strict tier", func(t *testing.T) {
+	t.Run("the draft fails the strict tier", func(t *testing.T) {
 		f := newFixture(t, nil)
 		f.write(checksNotesLessons, 0o644)
 		f.propose(model.Proposal{Signature: "s1", Rule: "checked", Region: "api", Status: model.ProposalApplied})
@@ -247,7 +247,7 @@ func TestScopeEditRows(t *testing.T) {
 		assertUnwritten(t, f, p, checksNotesLessons, ledger)
 	})
 
-	t.Run("row 11 the file already fails the strict tier", func(t *testing.T) {
+	t.Run("the file already fails the strict tier", func(t *testing.T) {
 		f := newFixture(t, nil)
 		invalid := strings.Replace(checksNotesLessons, "    check: frozen\n", "    check: frozen-gone\n", 1)
 
@@ -263,7 +263,7 @@ func TestScopeEditRows(t *testing.T) {
 		assertUnwritten(t, f, p, invalid, ledger)
 	})
 
-	t.Run("row 12 gate off keeps Blocked empty and refuses", func(t *testing.T) {
+	t.Run("gate off keeps Blocked empty and refuses", func(t *testing.T) {
 		f := authorFixture(t)
 		f.gate(false)
 
@@ -281,7 +281,7 @@ func TestScopeEditRows(t *testing.T) {
 		assert.Equal(t, ledger, f.ledger())
 	})
 
-	t.Run("row 12 an unreadable gate keeps its error", func(t *testing.T) {
+	t.Run("an unreadable gate keeps its error", func(t *testing.T) {
 		f := authorFixture(t)
 		f.config("distill: [\n")
 
@@ -294,7 +294,7 @@ func TestScopeEditRows(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotConfirmable)
 	})
 
-	t.Run("row 12 gate off never hides a collision", func(t *testing.T) {
+	t.Run("gate off never hides a collision", func(t *testing.T) {
 		f := authorFixture(t)
 		f.gate(false)
 		f.propose(model.Proposal{Signature: "s3", Rule: "linked-rule", Region: "web", Status: model.ProposalProposed})
@@ -305,7 +305,7 @@ func TestScopeEditRows(t *testing.T) {
 		assert.Contains(t, p.Blocked[0], routeOwnerScope)
 	})
 
-	t.Run("row 13 a clean draft can be confirmed", func(t *testing.T) {
+	t.Run("a clean draft can be confirmed", func(t *testing.T) {
 		f := authorFixture(t)
 		p := f.scopePlan(f.deps(), f.linkedDraft("web", "docs"))
 
@@ -333,7 +333,7 @@ func TestScopeEditRows(t *testing.T) {
 		assert.Equal(t, scopeAt, p.Retarget[0].Chosen)
 	})
 
-	t.Run("row 15 a change after the preview writes nothing", func(t *testing.T) {
+	t.Run("a change after the preview writes nothing", func(t *testing.T) {
 		for name, change := range map[string]func(f *fixture){
 			"the file": func(f *fixture) { f.write(authorLessons+"# a comment\n", 0o644) },
 			"the mode": func(f *fixture) { require.NoError(t, os.Chmod(f.pinPath(), 0o600)) },
@@ -357,7 +357,7 @@ func TestScopeEditRows(t *testing.T) {
 		}
 	})
 
-	t.Run("row 16 a failed file write changes nothing", func(t *testing.T) {
+	t.Run("a failed file write changes nothing", func(t *testing.T) {
 		f := authorFixture(t)
 		ledger := f.ledger()
 		deps := f.deps()
@@ -373,7 +373,7 @@ func TestScopeEditRows(t *testing.T) {
 		assert.Equal(t, ledger, f.ledger())
 	})
 
-	t.Run("row 17 a failed ledger write restores the file", func(t *testing.T) {
+	t.Run("a failed ledger write restores the file", func(t *testing.T) {
 		f := authorFixture(t)
 		ledger := f.ledger()
 		deps := f.deps()
@@ -389,7 +389,7 @@ func TestScopeEditRows(t *testing.T) {
 		assert.Equal(t, ledger, f.ledger())
 	})
 
-	t.Run("row 17 a file failure after the bytes landed restores the file", func(t *testing.T) {
+	t.Run("a file failure after the bytes landed restores the file", func(t *testing.T) {
 		f := authorFixture(t)
 		deps := f.deps()
 		deps.Files = &fileSeam{failAfter: errors.New("fsync failed")}
@@ -402,7 +402,7 @@ func TestScopeEditRows(t *testing.T) {
 		assert.Equal(t, authorLessons, f.lessons())
 	})
 
-	t.Run("row 18 a failed restore offers the completion", func(t *testing.T) {
+	t.Run("a failed restore offers the completion", func(t *testing.T) {
 		f := authorFixture(t)
 		deps := f.deps()
 		deps.Ledger = &ledgerSeam{Store: f.st, err: errors.New("database is locked")}
@@ -428,7 +428,7 @@ func TestScopeEditRows(t *testing.T) {
 		f.holdsLink("linked-rule", 1)
 	})
 
-	t.Run("row 18 changed rows leave the file and the proof names the edit", func(t *testing.T) {
+	t.Run("changed rows leave the file and the proof names the edit", func(t *testing.T) {
 		f := authorFixture(t)
 		deps := f.deps()
 		deps.Ledger = &ledgerSeam{
@@ -453,7 +453,7 @@ func TestScopeEditRows(t *testing.T) {
 		assert.NotContains(t, strings.ToLower(plan.Items[0].Reason), "retarget")
 	})
 
-	t.Run("row 19 both writes land", func(t *testing.T) {
+	t.Run("both writes land", func(t *testing.T) {
 		f := authorFixture(t)
 		history := f.history()
 		p := f.scopePlan(f.deps(), f.linkedDraft("web", "docs"))
@@ -476,7 +476,7 @@ func TestScopeEditRows(t *testing.T) {
 		f.holdsLink("linked-rule", 1)
 	})
 
-	t.Run("row 19 another writer completed the ledger", func(t *testing.T) {
+	t.Run("another writer completed the ledger", func(t *testing.T) {
 		for name, stamp := range map[string]int64{"at the same time": scopeAt, "with its own time": scopeAt + 60} {
 			t.Run(name, func(t *testing.T) {
 				f := authorFixture(t)
@@ -502,7 +502,7 @@ func TestScopeEditRows(t *testing.T) {
 		}
 	})
 
-	t.Run("row 19 regions without a choice are no completion", func(t *testing.T) {
+	t.Run("regions without a choice are no completion", func(t *testing.T) {
 		f := authorFixture(t)
 		p := f.scopePlan(f.deps(), f.linkedDraft("web"))
 		deps := f.deps()

@@ -40,10 +40,10 @@ const (
 	// It reads without an index, so it is a source of its own and never
 	// rides on the ledger.
 	secPins
-	// secChecks is the lesson-capability/1 report (contract K10) of the
-	// Pins CHECK section and of the Integrations detail. It joins the
-	// last inspection of the clients with lessons.yaml. So it loads after
-	// a load of either source (followChecks), and allSections omits it.
+	// secChecks is the lesson-capability/1 report of the Pins CHECK
+	// section and of the Integrations detail. It joins the last
+	// inspection of the clients with lessons.yaml. So it loads after a
+	// load of either source (followChecks), and allSections omits it.
 	secChecks
 	secCount
 )
@@ -605,9 +605,8 @@ func (s *state) load(kinds ...sectionKind) tea.Cmd {
 			})
 		case secChecks:
 			// The report joins the inspections that the console holds, so
-			// one refresh inspects each client once (P0 lead row P4-g). The
-			// load reads the snapshot here, because a worker must not read
-			// the model.
+			// one refresh inspects each client once. The load reads the
+			// snapshot here, because a worker must not read the model.
 			s.capability.loading = true
 			insps := s.integrations.value
 			cmds = append(cmds, func() tea.Msg {

@@ -290,11 +290,11 @@ func TestCheckAdvisoryWritesAV2RecordAndKeepsItsText(t *testing.T) {
 			firingPin(cfg, cfg.Pin[3], reviews.PinHeldBack, reviews.CauseOverTotal),
 		}, rec.Pins)
 
-		// The advisory has no receiver (contract L3, L1 receiver unknown).
+		// The advisory has no receiver.
 		assert.Empty(t, rec.TurnSHA)
 		assert.Empty(t, rec.Lane)
 		assert.Nil(t, rec.ContextResettable)
-		assert.False(t, rec.CaptureOptIn)
+		assert.False(t, rec.RecordEvaluations)
 		assert.Empty(t, rec.ScopeSHA, "scope_sha256 belongs to change_set and prepare")
 		assert.Zero(t, rec.RejectedPaths)
 	})

@@ -12,11 +12,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// This file holds exploration delivery (contract L2): after a structured
-// read, the lessons of the read file go to the agent that read it. It
-// keeps its own dedupe state in reviews/explore_state.go. It never reads
-// or writes the edit hook state, so an edit right after a read still gets
-// its reminder (AC-26). It runs no check and blocks nothing.
+// This file holds exploration delivery: after a structured read, the
+// lessons of the read file go to the agent that read it. It keeps its
+// own dedupe state in reviews/explore_state.go. It never reads or
+// writes the edit hook state, so an edit right after a read still gets
+// its reminder. It runs no check and blocks nothing.
 
 // ExploreRequest is one structured read event to advise on.
 type ExploreRequest struct {
@@ -41,7 +41,7 @@ type ExploreRequest struct {
 	ConfigErr error
 	// RecordEvaluations is true when the hook runs with the recording
 	// switch on. Only then does the firing log get the evaluation record
-	// of a read that emitted nothing (contract L3).
+	// of a read that emitted nothing.
 	RecordEvaluations bool
 	// EventID returns the event_id of the record. Nil means a new random
 	// ID. Tests set it to get fixed records.
@@ -98,9 +98,9 @@ type ExploreOutcome struct {
 // be an open index: Explore does not index, mine, or create a database.
 //
 // The selection is the one of the edit hook for the same file, under
-// the same budget (spec L128). Dedupe applies only to a resettable
-// receiver, whatever hook_delivery says, because exploration state is
-// separate from the edit hook state (§5 row 88).
+// the same budget. Dedupe applies only to a resettable receiver,
+// whatever hook_delivery says, because exploration state is separate
+// from the edit hook state.
 //
 // The error is an *EmitError when the emit callback fails, and a plain
 // error when the lesson lookup fails or ctx ends. Then no item is
@@ -112,8 +112,8 @@ func Explore(ctx context.Context, st *store.Store, req ExploreRequest, emit Emit
 		return out, err
 	}
 
-	// A structured read names one file (contract L2). The advice header
-	// names that file, so an event with another count is not advised on.
+	// A structured read names one file. The advice header names that
+	// file, so an event with another count is not advised on.
 	if len(req.Event.Paths) != 1 {
 		return out, nil
 	}
@@ -221,7 +221,7 @@ func Explore(ctx context.Context, st *store.Store, req ExploreRequest, emit Emit
 		_ = lease.Close()
 	}
 
-	// One record only: the L3 explore rows write no suppressed-repeat
+	// One record only: an explore event writes no suppressed-repeat
 	// record. The pins of the record name the suppressed pins.
 	ev.record([]reviews.EventRecord{{Status: reviews.DeliveryInjected, Lessons: lessons, ContextBytes: out.ContextBytes}},
 		sel.FiringPins(cfg, explorePinDeliveries(cfg, sel, selected, reviews.PinInjected)),
@@ -249,7 +249,7 @@ func explorePinDeliveries(cfg *reviews.Config, sel report.Selection, sentItems [
 }
 
 // exploreItems maps a selection to the items of the exploration state,
-// in the order of sel.Lessons. A pin is keyed by its K2 version, so a
+// in the order of sel.Lessons. A pin is keyed by its pin version, so a
 // changed pin reaches the receiver again. A mined lesson is keyed by its
 // cluster, because it has no version.
 func exploreItems(cfg *reviews.Config, sel report.Selection) []reviews.ExploreItem {
@@ -317,8 +317,8 @@ type exploreEvent struct {
 
 // record appends the one record of an exploration event to the firing
 // log. It is best effort: the result only sets AuditFailed. An
-// evaluation needs capture opt-in, so without it record writes nothing
-// for one (contract L3, explore rows).
+// evaluation needs the recording switch, so with the switch off record
+// writes nothing for one.
 func (e exploreEvent) record(records []reviews.EventRecord, pins []reviews.FiringPin, emission, evaluation string) {
 	req := e.req
 	if records[0].Status == reviews.DeliveryEvaluation && !req.RecordEvaluations {
@@ -346,7 +346,7 @@ func (e exploreEvent) record(records []reviews.EventRecord, pins []reviews.Firin
 		GuidanceStatus:    status,
 		PathsComplete:     e.rejected == 0,
 		RejectedPaths:     e.rejected,
-		CaptureOptIn:      req.RecordEvaluations,
+		RecordEvaluations: req.RecordEvaluations,
 		ExploreGeneration: e.out.Generation,
 		Read:              &read,
 	}

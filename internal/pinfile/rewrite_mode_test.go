@@ -1,9 +1,8 @@
 package pinfile
 
 // Tests of the lesson-check keys in the pin writers: the mode and check
-// splices of Rewrite (contract K6), the strict check tier of prepare
-// (contract K1, writer rule), and the round trip of the keys through
-// the writers that do not set them (contract K1, writer table).
+// splices of Rewrite, the strict check tier of prepare, and the round
+// trip of the keys through the writers that do not set them.
 
 import (
 	"crypto/sha256"
@@ -20,10 +19,10 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// checksLayout holds the check definitions of the spec example and one
-// entry per layout that a mode or check splice meets: a note, region
-// keys without a note, a rule only, a commented mode, a mode on the dash
-// line, and the bound and unbound states.
+// checksLayout holds the example check definitions and one entry per
+// layout that a mode or check splice meets: a note, region keys without
+// a note, a rule only, a commented mode, a mode on the dash line, and
+// the bound and unbound states.
 const checksLayout = `lesson_checks_version: 1
 checks:
   frozen-assets:
@@ -64,12 +63,13 @@ pin:
 pin_budget: 2
 `
 
-// TestRewriteSetsModeAndCheck proves the K6 splices of Rewrite. A new
-// key goes after the note, else after the last region key, else after
-// the rule key, in the order mode, check. A present key changes in
-// place with its trailing comment, and an empty value removes it. Every
-// candidate reads back with the requested mode and check, and every
-// other line stays byte for byte (the golden compares the whole file).
+// TestRewriteSetsModeAndCheck proves the mode and check splices of
+// Rewrite. A new key goes after the note, else after the last region
+// key, else after the rule key, in the order mode, check. A present key
+// changes in place with its trailing comment, and an empty value
+// removes it. Every candidate reads back with the requested mode and
+// check, and every other line stays byte for byte (the golden compares
+// the whole file).
 func TestRewriteSetsModeAndCheck(t *testing.T) {
 	cases := []struct {
 		name, rule string
@@ -77,7 +77,7 @@ func TestRewriteSetsModeAndCheck(t *testing.T) {
 		old, next  string
 	}{
 		{
-			"K6 example: both keys after the note", "frozen-assets",
+			"the example: both keys after the note", "frozen-assets",
 			Rewrite{Mode: text("enforce"), Check: text("frozen-assets")},
 			"    note: Changes to these files require a maintainer-managed update.\n",
 			"    note: Changes to these files require a maintainer-managed update.\n    mode: enforce\n    check: frozen-assets\n",
@@ -95,7 +95,7 @@ func TestRewriteSetsModeAndCheck(t *testing.T) {
 			"  - rule: rule-only\n    mode: check\n    check: no-todo\n",
 		},
 		{
-			"K6 example: advisory removes the mode and keeps the check", "enforced",
+			"the example: advisory removes the mode and keeps the check", "enforced",
 			Rewrite{Mode: text("")},
 			"    note: n\n    mode: enforce\n    check: frozen-assets\n",
 			"    note: n\n    check: frozen-assets\n",
@@ -172,7 +172,7 @@ func TestRewriteSetsModeAndCheck(t *testing.T) {
 
 			// The entry reads back with the request. A nil field keeps
 			// the value, and the pin key never changes with the mode or
-			// the check (contract K2).
+			// the check.
 			wantMode, wantCheck := before.Mode, before.Check
 			if c.rw.Mode != nil {
 				wantMode = *c.rw.Mode
@@ -225,7 +225,7 @@ func TestRewriteSetsModeAndCheck(t *testing.T) {
 	})
 }
 
-// invalidChecks is the invalid config of contract K1 with one more,
+// invalidChecks is an invalid check configuration with one more,
 // unrelated pin. A hand edit wrote it, and two errors are in it.
 const invalidChecks = `lesson_checks_version: 1
 checks:
@@ -243,12 +243,12 @@ pin:
     check: no-todos
 `
 
-// TestPrepareRefusesInvalidChecks proves the K1 writer rule in prepare.
-// A candidate that fails lessoncheck.Validate is refused with the K1
-// text, which wraps ErrUnverified, and the file stays as it was. An
-// error that an earlier hand edit made also refuses an unrelated edit
-// (§5 row 5). A valid candidate with checks passes, and a restore is
-// not a prepare, so it puts back the original bytes as they were.
+// TestPrepareRefusesInvalidChecks proves the strict check rule in
+// prepare. A candidate that fails lessoncheck.Validate is refused with
+// the strict-tier text, which wraps ErrUnverified, and the file stays
+// as it was. An error that an earlier hand edit made also refuses an
+// unrelated edit. A valid candidate with checks passes, and a restore
+// is not a prepare, so it puts back the original bytes as they were.
 func TestPrepareRefusesInvalidChecks(t *testing.T) {
 	t.Run("an earlier hand edit refuses an unrelated retarget", func(t *testing.T) {
 		root := writeFile(t, invalidChecks, 0o644)
@@ -366,11 +366,11 @@ func requireValidChecks(t *testing.T, text string) {
 	require.Empty(t, lessoncheck.Validate(cfg))
 }
 
-// TestRewriteKeepsModeAndCheck proves the K1 writer row "Rewrite". An
-// edit that sets no mode and no check keeps both keys of every entry.
-// The cases are a rule, note, or region rewrite, a retarget, and the
-// removal of an entry. Prepare accepts each candidate, the file gets
-// the golden bytes, and the checks map stays.
+// TestRewriteKeepsModeAndCheck covers the Rewrite writer. An edit that
+// sets no mode and no check keeps both keys of every entry. The cases
+// are a rule, note, or region rewrite, a retarget, and the removal of
+// an entry. Prepare accepts each candidate, the file gets the golden
+// bytes, and the checks map stays.
 func TestRewriteKeepsModeAndCheck(t *testing.T) {
 	requireValidChecks(t, checksLayout)
 
@@ -444,7 +444,7 @@ func TestRewriteKeepsModeAndCheck(t *testing.T) {
 	}
 }
 
-// TestRestoreKeepsChecksMap proves the K1 writer row "Compensation". A
+// TestRestoreKeepsChecksMap covers the compensation write. A
 // maintenance commit whose ledger write fails restores the original
 // bytes through pinfile.Restore (maintain pinWriter.Restore). Here the
 // original holds the checks map and pins with a mode and a check.

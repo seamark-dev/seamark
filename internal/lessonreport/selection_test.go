@@ -12,7 +12,7 @@ import (
 )
 
 // TestSelectionReadingStaysDeliveryOne proves that the reading is an
-// optional addition. The schema name stays, the JSON holds the contract
+// optional addition. The schema name stays, the JSON holds the fixed
 // keys, no key names a receiver, and an older document still decodes.
 func TestSelectionReadingStaysDeliveryOne(t *testing.T) {
 	cfg := testConfig("Reject unknown fields.")

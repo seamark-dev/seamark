@@ -1491,11 +1491,11 @@ func TestPinDraftUneditedFieldTakesTheCurrentValue(t *testing.T) {
 	assert.False(t, req.ScopeSet)
 }
 
-// TestPinDraftDropsTheRuleEditWhenTheLinkAppears covers B2-BEH-1: a reload
-// that shows a linked pin locks its rule. The rule edit that the user made
-// while the relationship was unknown goes away with a note, and a locked
-// row keeps no focus. The scope edit stays, because the scope preview
-// takes it.
+// TestPinDraftDropsTheRuleEditWhenTheLinkAppears covers a late link: a
+// reload that shows a linked pin locks its rule. The rule edit that the
+// user made while the relationship was unknown goes away with a note,
+// and a locked row keeps no focus. The scope edit stays, because the
+// scope preview takes it.
 func TestPinDraftDropsTheRuleEditWhenTheLinkAppears(t *testing.T) {
 	f := authorFake(nil)
 	f.pins = pinsNoLedger()
@@ -1815,11 +1815,11 @@ func TestPinAuthoringTreatsAForeignRootAsUnknown(t *testing.T) {
 	assert.Contains(t, lesBoxFlat(h.view()), "Relationship unknown: a linked pin allows note and region edits;")
 }
 
-// TestPinLinkedWordingNamesOnlyTheOfferedRows covers R-7 of the P4
-// review. The Pins detail, the unknown-relationship note, and the note
-// of a dropped edit name the mode and check edits only while the form
-// offers the Mode and Check rows. The detail names the regions only while
-// the form can hold them.
+// TestPinLinkedWordingNamesOnlyTheOfferedRows covers the wording of a
+// linked pin. The Pins detail, the unknown-relationship note, and the
+// note of a dropped edit name the mode and check edits only while the
+// form offers the Mode and Check rows. The detail names the regions
+// only while the form can hold them.
 func TestPinLinkedWordingNamesOnlyTheOfferedRows(t *testing.T) {
 	const (
 		noteOnly  = "i edits the note and regions of this pin only."

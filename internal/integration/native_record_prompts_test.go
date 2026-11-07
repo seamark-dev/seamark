@@ -1,6 +1,6 @@
 package integration
 
-// Tests of the Codex agent prompts of scripts/capture-native.sh. They read
+// Tests of the Codex agent prompts of scripts/native-record.sh. They read
 // the script text only, so they need no model and no client CLI. Codex in
 // code mode lists the agent tools with the multi_agent_v1__ prefix. A
 // prompt with the short name makes the model call a tool that does not
@@ -52,12 +52,12 @@ func scriptPrompt(t *testing.T, body, opener string) string {
 	return body[start : start+end]
 }
 
-// TestCaptureNativeAgentPromptsUseFullToolNames proves that no prompt step
+// TestNativeRecordAgentPromptsUseFullToolNames proves that no prompt step
 // uses the short agent tool names. The check reads every numbered step line,
 // so a new prompt with a short name also fails. Comment lines stay out,
 // because a comment can name the short form to explain the reason.
-func TestCaptureNativeAgentPromptsUseFullToolNames(t *testing.T) {
-	script := captureNativeScript(t)
+func TestNativeRecordAgentPromptsUseFullToolNames(t *testing.T) {
+	script := nativeRecordScript(t)
 
 	step := regexp.MustCompile(`^\d+\. `)
 
@@ -76,12 +76,12 @@ func TestCaptureNativeAgentPromptsUseFullToolNames(t *testing.T) {
 	assert.Empty(t, short, "prompt steps must use the multi_agent_v1__ tool names")
 }
 
-// TestCaptureNativeAgentPromptsNameWorkerTools proves that each Codex case
+// TestNativeRecordAgentPromptsNameWorkerTools proves that each Codex case
 // that starts a worker names the spawn tool with the worker agent_type, and
 // the wait and close tools. Without agent_type, the spawn tool starts a fork
 // of the whole history, not a worker.
-func TestCaptureNativeAgentPromptsNameWorkerTools(t *testing.T) {
-	script := captureNativeScript(t)
+func TestNativeRecordAgentPromptsNameWorkerTools(t *testing.T) {
+	script := nativeRecordScript(t)
 
 	for name, c := range codexAgentPrompts {
 		t.Run(name, func(t *testing.T) {

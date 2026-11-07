@@ -19,9 +19,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// The tests of lessons --prepare (plan step P3.7; contracts L1, §4).
-// Every test builds a temporary repository. Nothing reads the
-// repository or the archive of this checkout.
+// The tests of lessons --prepare. Every test builds a temporary
+// repository. Nothing reads the repository of this checkout.
 
 // prepareLessonsYAML holds three pins. keep-main-small covers a.go,
 // frozen-assets is an enforce pin with a check on generated/, and
@@ -176,7 +175,7 @@ func prepareFiles(t *testing.T, root string) map[string]string {
 
 // requireNoDeliveryState fails when the edit hook state, the
 // exploration state, or one of their lock files exists under root. A
-// preparation never touches them (contract L1 Behavior 6, AC-26).
+// preparation never touches them.
 func requireNoDeliveryState(t *testing.T, root string) {
 	t.Helper()
 
@@ -188,11 +187,11 @@ func requireNoDeliveryState(t *testing.T, root string) {
 	}
 }
 
-// TestLessonsPrepareJSONAndText proves the two output forms of contract
-// L1: --json prints only the lesson-preparation/1 document, and the text
-// is RenderPreparation of the same preparation in the full form. Each
-// call records one firing record of the prepare surface. It also proves
-// the mined status of each index state (L1 Behavior 5).
+// TestLessonsPrepareJSONAndText proves the two output forms of lessons
+// --prepare: --json prints only the lesson-preparation/1 document, and
+// the text is RenderPreparation of the same preparation in the full
+// form. Each call records one firing record of the prepare surface. It
+// also proves the mined status of each index state.
 func TestLessonsPrepareJSONAndText(t *testing.T) {
 	root := prepareRepo(t, true)
 	main := filepath.Join(root, "a.go")
@@ -314,13 +313,12 @@ func TestLessonsPrepareJSONAndText(t *testing.T) {
 	})
 }
 
-// TestLessonsPrepareRefusesEveryOtherMode proves the guards of contracts
-// §4.1 and §4.2 for --prepare. Every refusal happens before the dispatch,
-// prints nothing on stdout, writes no file, and calls no model. So the
-// prefix grant `seamark lessons --prepare *` reaches no command that
-// writes. The texts that a later milestone extends are asserted by the
-// plan rule of table (e): the head, one Contains per mode of milestone
-// P3, and the tail.
+// TestLessonsPrepareRefusesEveryOtherMode proves the flag guards of
+// --prepare. Every refusal happens before the dispatch, prints nothing
+// on stdout, writes no file, and calls no model. So the prefix grant
+// `seamark lessons --prepare *` reaches no command that writes. A new
+// mode extends each text that lists the modes. So the test asserts such
+// a text only by its head, a Contains for --prepare, and its tail.
 func TestLessonsPrepareRefusesEveryOtherMode(t *testing.T) {
 	root := prepareRepo(t, true)
 	sentinel := newInvokerSentinel(t, root)
@@ -410,8 +408,8 @@ func TestLessonsPrepareRefusesEveryOtherMode(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsPrepareNeedsAPathInsideTheWorkspace proves the L1 errors
-// for the path set and their exit code 1 through the real Execute. A
+// TestLessonsPrepareNeedsAPathInsideTheWorkspace proves the errors for
+// the path set and their exit code 1 through the real Execute. A
 // partial rejection, a path without pins, and a new path still prepare
 // with exit 0.
 func TestLessonsPrepareNeedsAPathInsideTheWorkspace(t *testing.T) {
@@ -483,11 +481,12 @@ func TestLessonsPrepareNeedsAPathInsideTheWorkspace(t *testing.T) {
 	})
 }
 
-// TestLessonsPrepareNeverInvokes proves AC-1 for lessons --prepare: both
-// output forms, a partial rejection, a repository without an index, and
-// a lessons.yaml that does not decode run without an agent, a model
-// CLI, or the network. The command writes no file except the firing
-// records of the prepare surface: no index, no delivery state.
+// TestLessonsPrepareNeverInvokes proves that lessons --prepare calls no
+// model: both output forms, a partial rejection, a repository without
+// an index, and a lessons.yaml that does not decode run without an
+// agent, a model CLI, or the network. The command writes no file except
+// the firing records of the prepare surface: no index, no delivery
+// state.
 func TestLessonsPrepareNeverInvokes(t *testing.T) {
 	root := prepareRepo(t, true)
 	sentinel := newInvokerSentinel(t, root)
@@ -555,7 +554,7 @@ func TestLessonsPrepareNeverInvokes(t *testing.T) {
 
 // TestLessonsPrepareResolvesPathsFromTheProcessDirectory proves that a
 // relative path starts at the process directory, not at the -C
-// directory or the repository root (contract L1, §1.3).
+// directory or the repository root.
 func TestLessonsPrepareResolvesPathsFromTheProcessDirectory(t *testing.T) {
 	root := prepareRepo(t, true)
 
@@ -657,8 +656,8 @@ func mcpPreparations(t *testing.T, root string, calls ...[]string) []delivery.Pr
 	return out
 }
 
-// TestLessonsPrepareMatchesChangeSet proves the AC-25 parity of contract
-// L1 (plan step P3.8): lessons --prepare and MCP change_set return one
+// TestLessonsPrepareMatchesChangeSet proves the parity of the two
+// preparation surfaces: lessons --prepare and MCP change_set return one
 // preparation for one file, for many files, and for new paths. Only the
 // surface, the time, and the event ID differ. A rewrite of lessons.yaml
 // moves the guidance digest and the pin version on both surfaces alike.

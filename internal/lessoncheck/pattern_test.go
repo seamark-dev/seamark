@@ -56,7 +56,7 @@ func TestLessonCheckNoAddedPattern(t *testing.T) {
 	cfg := onePin(t, KindNoAddedPattern, `TODO\(`, "src")
 
 	t.Run("the full JSON result of a match beside a binary path", func(t *testing.T) {
-		example := parseValid(t, contractYAML+`  - rule: no-todo
+		example := parseValid(t, referencePatternYAML+`  - rule: no-todo
     region: src
     note: Do not add TODO markers.
     mode: check

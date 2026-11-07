@@ -577,8 +577,8 @@ func (m *maintModal) retargetItem(it maintain.PlanItem, w int) []string {
 		out = append(out, m.noteCompare(it, w)...)
 	}
 
-	// A retarget of a check or enforce pin moves the scope of its checker
-	// (contract K1). The block shows before y, never only after it.
+	// A retarget of a check or enforce pin moves the scope of its
+	// checker. The block shows before y, never only after it.
 	if impacts := maintItemImpact(m.preview.Impact, it.Ref.Key); len(impacts) > 0 {
 		out = append(out, "", maintImpactHead(t))
 		out = append(out, impactLines(t, impacts, "", w)...)
@@ -639,7 +639,7 @@ func maintItemImpact(impacts []lessoncheck.Impact, key reviews.PinKey) []lessonc
 // blocked. Each block belongs to an edited pin, so the list is empty in
 // practice.
 // The selection shows such a block anyway, because a block must never
-// go unseen before the apply (contract K1).
+// go unseen before the apply.
 func maintOtherImpact(p *maintain.Plan) []lessoncheck.Impact {
 	var out []lessoncheck.Impact
 

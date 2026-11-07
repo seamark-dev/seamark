@@ -73,8 +73,7 @@ func newVersionCmd() *cobra.Command {
 // Execute runs the CLI and returns a process exit code. Policy blocks get
 // a distinct code (2) so PreToolUse hooks and CI can tell "denied" from
 // "broken". A lesson-check violation gets code 2 too, because CI must
-// tell an observed violation from an incomplete check (code 1,
-// contracts §4.2).
+// tell an observed violation from an incomplete check (code 1).
 func Execute() int {
 	if err := New().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "seamark:", err)

@@ -104,8 +104,8 @@ func members(rows []model.Proposal) []int64 {
 
 // pinRule returns the decoded pin of a live entry, as the delivery code
 // reads it. It keeps the lesson-check keys, so an authoring review shows
-// the mode and the check that the entry holds (contract K1). The pin
-// identity ignores both keys (contract K2), so no identity changes.
+// the mode and the check that the entry holds. The pin identity ignores
+// both keys, so no identity changes.
 func pinRule(e pinfile.Entry) reviews.PinRule {
 	return reviews.PinRule{Rule: e.Rule, Region: e.Region, Regions: e.Regions, Note: e.Note, Mode: e.Mode, Check: e.Check}
 }

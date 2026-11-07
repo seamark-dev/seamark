@@ -1,7 +1,7 @@
 package integration
 
 // Tests of the Codex trust keys of the guard scenario in
-// scripts/capture-native.sh. Codex keys the trust of a project hook by
+// scripts/native-record.sh. Codex keys the trust of a project hook by
 // its position (event, group, handler) and compares a hash of the entry
 // content at that key. A moved entry reads as modified, and Codex does
 // not run it without a new review. The tests run the setup and phase
@@ -146,7 +146,7 @@ func newCodexGuardScratch(t *testing.T) codexGuardScratch {
 func (s codexGuardScratch) run(t *testing.T, program string) (output string, status int) {
 	t.Helper()
 
-	script := captureNativeScript(t)
+	script := nativeRecordScript(t)
 
 	var functions strings.Builder
 
@@ -186,7 +186,7 @@ func codexGuardCaseRuns(t *testing.T) [][2]string {
 
 	var runs [][2]string
 
-	for _, m := range guardRunLine.FindAllStringSubmatch(scriptFunction(t, captureNativeScript(t), "record_codex_guard"), -1) {
+	for _, m := range guardRunLine.FindAllStringSubmatch(scriptFunction(t, nativeRecordScript(t), "record_codex_guard"), -1) {
 		runs = append(runs, [2]string{m[1], m[2]})
 	}
 

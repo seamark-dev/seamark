@@ -72,7 +72,7 @@ below remains distinct from required-before-release work.
 | Baseline, guard and post-edit hooks | **Unreleased**; Claude Edit/Write/MultiEdit and Codex apply_patch handlers, separate root/child paths; native denial, timeout and reply evidence pending; installed does not mean active or verified |
 | Codex Update projection | **Unreleased, incomplete**; content predicate gives unknown and an armed guard requests denial; verified before/after oracle and implementation required before release |
 | Setup and capability report | **Unreleased**; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust; Claude and Codex setup refuse a certain second lesson-check handler and warn about an uncertain one; doctor, status and TUI summaries name an unreadable hook document |
-| Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only version-isolated classes, timing, windows, reasons and metadata inspection; own-hook timing stays same-call-only, pending lane identity keeps otherwise negative windows incomplete, current `prevented: 0` |
+| Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only delivery records of each pin version from the audit logs, separate check and guard counts, selection budgets; every observation window reads incomplete; fields without a source keep fixed values in the `delivery/1` format; current `prevented: 0` |
 | TUI Pins checks | **Unreleased**; linked-pin mode/check editing, manual scope edit of a linked pin (console only, one save in both stores; a computed scope then reads as a suggestion), `M` definitions, `V` verification; native evidence unchanged |
 
 Timeout candidates and the benchmark script-timeout flake remain
@@ -137,8 +137,7 @@ future work; editor integrations remain experimental.
   compatibility or prevention evidence.
 - Delivery report cost: `make report-bench` measures the report build over
   synthetic audit logs of 1k, 10k and 100k records, offline. It reads no
-  real log and no archive, and its numbers say nothing about real archives
-  or efficacy.
+  real audit log, and its numbers say nothing about real logs or efficacy.
 - CI: full test suite + lint on every change, plus the end-to-end
   smoke of the built binary (generated agent configuration and the hook
   commands it wrote, in a fresh repository, without an agent CLI or a

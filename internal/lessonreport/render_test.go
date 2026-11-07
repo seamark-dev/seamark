@@ -25,9 +25,8 @@ func rendered(t *testing.T, report Report) string {
 
 // TestRenderTextOverview prints the overview of two delivered sessions.
 // The text shows the delivery records and the separate check block, and
-// it leaves out each section that needs a capture archive. The renderer
-// never changes the JSON of the report, and the same inputs give the
-// same text.
+// it leaves out the fixed fields. The renderer never changes the JSON of
+// the report, and the same inputs give the same text.
 func TestRenderTextOverview(t *testing.T) {
 	cfg := testConfig("n")
 	id, ver := pinOf(cfg, 0)
@@ -61,6 +60,19 @@ func TestRenderTextOverview(t *testing.T) {
 	}
 
 	assert.Equal(t, 2, r.Pins[0].Observation.Incomplete, "the JSON keeps the observation that the text leaves out")
+
+	// The unit block lists only the units that the text counts in. The
+	// JSON keeps every row of the unit table.
+	for key := range textUnits {
+		assert.Contains(t, out, "\n  "+key+": "+r.Units[key]+"\n")
+	}
+
+	for _, key := range []string{"sessions", "occurrences", "incidents", "actions", "feedback items"} {
+		assert.NotContains(t, out, "\n  "+key+": ", "the text leaves out the unit of a fixed field")
+		assert.Contains(t, r.Units, key, "the JSON keeps the unit")
+	}
+
+	assert.Len(t, r.Units, len(textUnits)+5)
 
 	assert.Equal(t, wire, encode(t, r), "rendering must never change the JSON")
 	assert.Equal(t, out, rendered(t, mustBuild(t, in, "")), "the same inputs give the same text")
@@ -242,8 +254,8 @@ func TestRenderTextExpansion(t *testing.T) {
 	assert.Contains(t, out, "  version "+ver)
 	assert.Equal(t, 1, strings.Count(out, "; mode "), "the expansion prints the selected pin only")
 
-	// The versions keep their order. Occurrences and session windows need
-	// a capture archive, so the text leaves them out.
+	// The versions keep their order. The text leaves out the occurrences
+	// and the session windows.
 	r.Expanded.Versions = []string{"new-version", "old-version"}
 	r.Expanded.Occurrences = []OccurrenceDetail{
 		{AssociationRef: "as-old", PinVersion: "old-version", EpisodeRef: "old@1"},

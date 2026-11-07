@@ -4,10 +4,10 @@ package pinfile
 // one entry, in place. A prune deletes the own lines of one entry and
 // its bound provenance lines. A rewrite sets the rule, the note, or the
 // region set of one entry that a person edits in the console, in place.
-// It also sets the mode and the check of the lesson checks (contract K6).
-// The planner splices the reviewed text. Every field that the edit does
-// not change stays as the user wrote it. So do the comments, the unknown
-// keys, and the entry position.
+// It also sets the mode and the check of the lesson checks. The planner
+// splices the reviewed text. Every field that the edit does not change
+// stays as the user wrote it. So do the comments, the unknown keys, and
+// the entry position.
 
 import (
 	"errors"
@@ -90,14 +90,14 @@ type Rewrite struct {
 	// set means repository-wide. The region keys change by the rules of
 	// a retarget.
 	Regions *[]string
-	// Mode is the new mode text of the lesson checks (contract K6). An
-	// empty mode removes the mode key, because an absent mode means
-	// advisory. Other text goes in as written; the strict check tier of
-	// Prepare refuses an unknown mode.
+	// Mode is the new mode text of the lesson checks. An empty mode
+	// removes the mode key, because an absent mode means advisory. Other
+	// text goes in as written; the strict check tier of Prepare refuses
+	// an unknown mode.
 	Mode *string
 	// Check is the new check ID. An empty check removes the check key,
 	// as for Mode, so one splice rule serves both keys. lessons --set-mode
-	// never sends an empty check (contract K6).
+	// never sends an empty check.
 	Check *string
 }
 
@@ -571,11 +571,10 @@ func (a *analysis) insertNote(it item, note string) ([]splice, error) {
 }
 
 // checkKeySplices returns the splices of the mode and check changes of
-// p (contract K6). A present key changes in place, or goes away for an
-// empty value. An absent key goes in at the key indentation, in the
-// order mode, check. A new mode goes after the anchor of
-// checkKeyAnchor. A new check goes after a mode key that stays, else
-// after the anchor too.
+// p. A present key changes in place, or goes away for an empty value.
+// An absent key goes in at the key indentation, in the order mode,
+// check. A new mode goes after the anchor of checkKeyAnchor. A new
+// check goes after a mode key that stays, else after the anchor too.
 func (a *analysis) checkKeySplices(p *planned) ([]splice, error) {
 	ch, it := p.change, p.item
 	stop := it.last + 1
@@ -667,8 +666,8 @@ func (a *analysis) checkKey(s yamledit.Span, present bool, indent, name, value s
 
 // checkKeyAnchor returns the line after which a new mode or check key
 // goes: the last line of the note key, else of the last region key, else
-// of the rule key. Contract K6 fixes this place, and the spec example
-// writes the two keys there.
+// of the rule key. One fixed place keeps the bytes of lessons
+// --set-mode and of the authoring form equal.
 func (a *analysis) checkKeyAnchor(it item) (int, error) {
 	stop := it.last + 1
 

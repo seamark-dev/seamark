@@ -793,9 +793,8 @@ func (claudeSetup) Inspect(root string) Inspection {
 }
 
 // InspectLessonHooks reads the two settings files with the reader of
-// Inspect and skips the other documents. The capture inspection can
-// start Git for a finding, and the lesson capability report reads no
-// finding.
+// Inspect and skips the other documents, because the lesson capability
+// report reads only the hook documents.
 func (claudeSetup) InspectLessonHooks(root string) Inspection {
 	entries, gate, _, lessons := inspectClaudeHooks(root, claudeHookEvidence)
 

@@ -52,8 +52,8 @@ type Inspection struct {
 	Database workspace.DatabaseFacts
 	// At is the time that the readings used.
 	At time.Time
-	// Checks is the lesson-check reading of the pin file (contract K1).
-	// It is zero when the file gives no listing.
+	// Checks is the lesson-check reading of the pin file. It is zero when
+	// the file gives no listing.
 	Checks ChecksReading
 }
 
@@ -62,20 +62,20 @@ type Pin struct {
 	Entry    pinfile.Entry
 	Link     pinfile.EntryLink
 	Readings Readings
-	// Check is the lesson-check reading of the entry (contract K1).
+	// Check is the lesson-check reading of the entry.
 	Check PinCheck
 }
 
-// ChecksReading is the lesson-check reading of the pin file (contract
-// K1). Inspect decodes the bytes that it listed, so the console shows
-// the mode and the predicate of each pin without a second read of the
-// file. The definitions and the error texts hold file data, so a caller
-// sanitizes them before display.
+// ChecksReading is the lesson-check reading of the pin file. Inspect
+// decodes the bytes that it listed, so the console shows the mode and
+// the predicate of each pin without a second read of the file. The
+// definitions and the error texts hold file data, so a caller sanitizes
+// them before display.
 type ChecksReading struct {
 	// Uses is true when the file uses a lesson-check key: a checks map,
 	// a check or enforce mode, or a check reference. Doctor and status
-	// print their lesson-check lines only then (contract K10), and the
-	// console follows the same rule.
+	// print their lesson-check lines only then, and the console follows
+	// the same rule.
 	Uses bool
 	// SHA256 is the hex digest of the decoded bytes. The capability
 	// report carries the digest of its own read, so a caller can tell a
@@ -83,7 +83,7 @@ type ChecksReading struct {
 	SHA256 string
 	// Defs holds the check definitions by ID, as the file holds them.
 	Defs map[string]reviews.CheckDef
-	// Errors are the semantic errors of the file (contract K1, tier 2).
+	// Errors are the semantic errors of the file (tier 2).
 	Errors []lessoncheck.ConfigError
 }
 
@@ -101,13 +101,13 @@ func (c ChecksReading) IDs() []string {
 
 // PinCheck is the lesson-check reading of one entry. It holds what the
 // pin requests and the predicate of its check. What the installed hooks
-// make of that request is the capability report (contract K10), which
-// the console joins by Ref.
+// make of that request is the capability report, which the console
+// joins by Ref.
 type PinCheck struct {
 	// Known is false when the entry does not pair with the decoded pin
 	// list. A caller then shows no lesson-check fact of the entry.
 	Known bool
-	// Ref and Version are the pin-ref and the pin version (contract K2).
+	// Ref and Version are the pin-ref and the pin version.
 	Ref, Version string
 	// Mode is the normalized mode. An unknown mode reads advisory, and
 	// Errors then holds its error.

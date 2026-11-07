@@ -2,12 +2,8 @@ package cli
 
 import (
 	"encoding/json"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,8 +20,7 @@ import (
 // The tests of the post-edit hook, lessons --verify --hook. Every test
 // builds a temporary repository with guardFixture and runs the hooks
 // under the invoker sentinel, which records each start of a model
-// client. Nothing reads or writes the repository of this checkout, and
-// no test opens a real archive.
+// client. Nothing reads or writes the repository of this checkout.
 
 // The payloads that give the shape of the completion events: a native
 // Claude Code recording and a synthetic Codex fixture. Both name another
@@ -129,7 +124,7 @@ func claudeFindings(t *testing.T, stdout string) (event, text string) {
 }
 
 // requireReportOnly checks that a findings text never claims that the
-// edit was stopped: the tool already ran (spec L122, L168).
+// edit was stopped: the tool already ran.
 func requireReportOnly(t *testing.T, text string) {
 	t.Helper()
 
@@ -147,12 +142,13 @@ func pinRefOf(t *testing.T, root, rule string) string {
 	return guardPins(t, root)[rule].Ref
 }
 
-// TestLessonsVerifyHookReportsActualDelta proves AC-31 for a completed
-// edit: the post-edit hook checks the actual delta against the state
-// before the edit, not the working tree against HEAD. A TODO marker that
-// the working tree held before the edit gives no finding. A marker that
-// the edit adds gives one finding with its line, the file stays as
-// written, and the record holds the outcome without an excerpt.
+// TestLessonsVerifyHookReportsActualDelta proves that the post-edit hook
+// checks the actual delta of a completed edit. It compares the state
+// before the edit with the state after it, not the working tree with
+// HEAD. A TODO marker that the working tree held before the edit gives
+// no finding. A marker that the edit adds gives one finding with its
+// line, the file stays as written, and the record holds the outcome
+// without an excerpt.
 func TestLessonsVerifyHookReportsActualDelta(t *testing.T) {
 	root, sentinel := guardFixture(t)
 
@@ -230,18 +226,19 @@ func TestLessonsVerifyHookReportsActualDelta(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(stream), "fill in", "the record holds no content")
 		requireNoRawIDs(t, root)
+		assert.NoFileExists(t, reviews.AuditLogPath(root), "the post-edit hook writes no firing record")
 	})
 
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyHookFailedAndInterrupted proves AC-31 for a failed or
-// interrupted tool: the hook checks the state on disk anyway, names the
-// tool outcome, and answers with the event of the failure. A failed tool
-// that wrote nothing gives no finding. Codex reports a failed patch by a
-// non-zero exit code in PostToolUse. The findings go to stdout as the
-// PostToolUse additionalContext reply with exit 0, and a pass writes
-// nothing.
+// TestLessonsVerifyHookFailedAndInterrupted proves the post-edit check
+// of a failed or interrupted tool. The hook checks the state on disk
+// anyway, names the tool outcome, and answers with the event of the
+// failure. A failed tool that wrote nothing gives no finding. Codex
+// reports a failed patch by a non-zero exit code in PostToolUse. The
+// findings go to stdout as the PostToolUse additionalContext reply with
+// exit 0, and a pass writes nothing.
 func TestLessonsVerifyHookFailedAndInterrupted(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	content := "readme\nTODO(partial): x\n"
@@ -342,13 +339,13 @@ func TestLessonsVerifyHookFailedAndInterrupted(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyHookMissingBaseline proves the K9 rule for a call
+// TestLessonsVerifyHookMissingBaseline proves the rule for a call
 // without a usable pending record: each executable pin in scope of the
 // event paths is unknown/missing-baseline, the attribution is
 // no-baseline, and the findings name the rerun with absolute paths. An
 // expired record is discarded by the sweep and never serves as a pass. A
 // guard deny leaves no record, so the post-edit record of the same call
-// joins the guard record by its match digest (contract K9).
+// joins the guard record by its match digest.
 func TestLessonsVerifyHookMissingBaseline(t *testing.T) {
 	requireMissing := func(t *testing.T, root, stdout string, rules ...string) lessoncheck.AuditRecord {
 		t.Helper()
@@ -506,10 +503,11 @@ func TestLessonsVerifyHookMissingBaseline(t *testing.T) {
 	})
 }
 
-// TestLessonsVerifyHookRepairRerun proves the repair loop of AC-31: a
-// violation stays written, and the next edit, which repairs it, gets its
-// own post-edit check against its own baseline. The repair passes, the
-// hook says nothing, and lessons --verify then passes too.
+// TestLessonsVerifyHookRepairRerun proves the repair loop of the
+// post-edit check. A violation stays written, and the next edit, which
+// repairs it, gets its own post-edit check against its own baseline.
+// The repair passes, the hook says nothing, and lessons --verify then
+// passes too.
 func TestLessonsVerifyHookRepairRerun(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	path := filepath.Join(root, "docs", "readme.md")
@@ -560,54 +558,7 @@ func TestLessonsVerifyHookRepairRerun(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyHookWithoutCapture proves spec L263 for the post-edit
-// hook: it checks with capture disabled and creates no archive. The
-// handler file imports neither the archive nor the capture package.
-func TestLessonsVerifyHookWithoutCapture(t *testing.T) {
-	runs := func(t *testing.T, root string) {
-		t.Helper()
-
-		content := "readme\nTODO(x): y\n"
-
-		_, _, err := baselineHook(t, root, claudeWriteEvent(t, root, "docs/readme.md", content))
-		require.NoError(t, err)
-
-		verifyWrite(t, root, "docs/readme.md", content)
-
-		stdout, _ := verifyHook(t, root, claudeWriteDone(t, root, "docs/readme.md", content))
-		_, text := claudeFindings(t, stdout)
-		assert.Contains(t, text, "violation")
-	}
-
-	t.Run("without an archive", func(t *testing.T) {
-		root, sentinel := guardFixture(t)
-
-		runs(t, root)
-
-		_, err := os.Lstat(filepath.Join(root, ".seamark", "private"))
-		assert.ErrorIs(t, err, fs.ErrNotExist, "the hook creates no archive")
-		assert.Equal(t, lessoncheck.AuditPostEdit, lastRecord(t, root, lessoncheck.AuditPostEdit).Kind,
-			"the record needs no capture opt-in")
-		assert.NoFileExists(t, reviews.AuditLogPath(root), "the firing log gets nothing")
-
-		sentinel.requireNoCall(t)
-	})
-
-	t.Run("the handler file imports no archive or capture package", func(t *testing.T) {
-		file, err := parser.ParseFile(token.NewFileSet(), "lessons_verify_hook.go", nil, parser.ImportsOnly)
-		require.NoError(t, err)
-
-		for _, spec := range file.Imports {
-			path, err := strconv.Unquote(spec.Path.Value)
-			require.NoError(t, err)
-
-			assert.NotEqual(t, "github.com/seamark-dev/seamark/internal/archive", path)
-			assert.NotEqual(t, "github.com/seamark-dev/seamark/internal/capture", path)
-		}
-	})
-}
-
-// TestLessonsVerifyHookProjectionDiffers proves the K9 attribution of an
+// TestLessonsVerifyHookProjectionDiffers proves the attribution of an
 // observed result that differs from the projection: another writer
 // changed the file between the two hooks. The check runs on the observed
 // delta, and the findings say that the delta can hold that change.
@@ -647,10 +598,10 @@ func TestLessonsVerifyHookProjectionDiffers(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyHookCallsNoInvoker proves AC-1 for the post-edit
-// hook: a pass, a violation, a missing baseline, an event that does not
-// decode, a Codex event, an unknown client, and an invalid lessons.yaml
-// run without a model or network call.
+// TestLessonsVerifyHookCallsNoInvoker proves that the post-edit hook
+// starts no model client and makes no network call. The runs cover a
+// pass, a violation, a missing baseline, an event that does not decode,
+// a Codex event, an unknown client, and an invalid lessons.yaml.
 func TestLessonsVerifyHookCallsNoInvoker(t *testing.T) {
 	root, sentinel := guardFixture(t)
 
@@ -688,14 +639,15 @@ func TestLessonsVerifyHookCallsNoInvoker(t *testing.T) {
 }
 
 // TestLessonsVerifyHookRefusesGrantForms proves that the skill grants
-// never reach a hook entry point (plan step P3.12, P3 review ruling R3).
-// The grants `Bash(seamark lessons --verify --json*)` and
+// never reach a hook entry point. The grants
+// `Bash(seamark lessons --verify --json*)` and
 // `Bash(seamark lessons --verify --file *)` match a call with --hook
 // appended, and the grants `--file *` and `--region *` match a plain
-// --hook or --hook-reset call. Each such call exits 1 with the §4 text
-// before any handler runs: it reads and deletes no pending record and
-// writes no record or state. The grant `Bash(seamark lessons --verify)`
-// has no wildcard, so it never matches `--verify --hook`.
+// --hook or --hook-reset call. Each such call exits 1 with its refusal
+// text before any handler runs: it reads and deletes no pending record
+// and writes no record or state. The grant
+// `Bash(seamark lessons --verify)` has no wildcard, so it never matches
+// `--verify --hook`.
 func TestLessonsVerifyHookRefusesGrantForms(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	file := filepath.Join(root, "docs", "readme.md")
@@ -768,12 +720,12 @@ func TestLessonsVerifyHookRefusesGrantForms(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonCheckHookDigestsJoinFiringLog proves the K2 identity root
-// join of one tool call across three hooks: the guard record, the
-// post-edit record, and the version 2 firing record of lessons --hook
-// share match_sha256, session_sha256, and context_sha256. The index
-// meta records the root through a symbolic link, so every digest hashes
-// over the link and differs from a digest over the git top level.
+// TestLessonCheckHookDigestsJoinFiringLog proves the identity root join
+// of one tool call across three hooks: the guard record, the post-edit
+// record, and the version 2 firing record of lessons --hook share
+// match_sha256, session_sha256, and context_sha256. The index meta
+// records the root through a symbolic link, so every digest hashes over
+// the link and differs from a digest over the git top level.
 func TestLessonCheckHookDigestsJoinFiringLog(t *testing.T) {
 	root := hookRepo(t)
 	verifyWrite(t, root, ".seamark/lessons.yaml", `lesson_checks_version: 1
@@ -849,11 +801,11 @@ pin:
 }
 
 // TestLessonsVerifyHookBudgetBoundsEvaluation proves that the post-edit
-// budget bounds the evaluation, and not only the observation (review
-// finding R-1). The diff of 20000 equal lines took 19 s before the fix.
-// The hook now waits past the budget, and the result must be an unknown
-// pin with resource-limit: a cut evaluation never reads as a pass or as
-// a finding that no check made.
+// budget bounds the evaluation, and not only the observation. The diff
+// of 20000 equal lines took 19 s before the fix. The hook now waits
+// past the budget, and the result must be an unknown pin with
+// resource-limit: a cut evaluation never reads as a pass or as a
+// finding that no check made.
 func TestLessonsVerifyHookBudgetBoundsEvaluation(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	lines := lessoncheck.DefaultLimits().MaxDiffLines

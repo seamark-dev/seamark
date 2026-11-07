@@ -14,14 +14,13 @@
 // drive a screen over the real engine use it. IndexView, PolicySummary,
 // SetupPreview, IndexEvent and SampleView are the view types that the
 // areas return. SampleRequest and SampleSurface are the input of
-// Sample. Checks holds the lesson-check services (contracts K5, K10):
-// the capability report of the installed hooks, the verification of
-// `seamark lessons --verify` with the caller tui, and the revalidation
-// of a shown result. Maintenance also plans and commits one check
-// definition (contract K1, PlanCheckDef and CommitCheckDef). ErrBusy,
-// ErrNoLedger and ErrForeignRoot are the three errors
-// that a screen tells apart. The engine and its helpers stay
-// unexported, so a screen cannot reach past the interfaces.
+// Sample. Checks holds the lesson-check services: the capability report
+// of the installed hooks, the verification of `seamark lessons --verify`
+// with the caller tui, and the revalidation of a shown result.
+// Maintenance also plans and commits one check definition (PlanCheckDef
+// and CommitCheckDef). ErrBusy, ErrNoLedger and ErrForeignRoot are the
+// three errors that a screen tells apart. The engine and its helpers
+// stay unexported, so a screen cannot reach past the interfaces.
 //
 // # Roots
 //

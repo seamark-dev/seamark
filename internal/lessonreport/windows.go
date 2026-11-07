@@ -2,12 +2,11 @@ package lessonreport
 
 import "strconv"
 
-// This file reads the observation window of each delivered session. A
-// window can read linked or no-linked-correction only from a captured
-// session, and this build reads no capture archive. So every delivered
-// session reads incomplete, with the reason session-not-captured and an
-// unknown timing. The count still shows how many delivered sessions have
-// no reading.
+// This file reads the observation window of each delivered session.
+// This build has no source for a linked or a no-linked-correction
+// window. So every delivered session reads incomplete, with the reason
+// session-not-captured and an unknown timing. The count still shows how
+// many delivered sessions have no reading.
 
 // NoLinkedCorrectionText is the fixed phrase for the qualified negative
 // observation. A surface that prints the partition uses it.
@@ -20,10 +19,10 @@ const (
 	PartitionIncomplete         = "incomplete"
 )
 
-// The reason codes of an incomplete window. A session that the report
-// cannot read is not captured. The code unassembled-evidence names a
-// captured session whose evidence is not assembled. No reading of this
-// build carries it, but the value stays in the closed list of delivery/1.
+// The reason codes of an incomplete window. Every window of this build
+// carries session-not-captured. No reading of this build carries
+// unassembled-evidence, but the value stays in the closed list of
+// delivery/1.
 const (
 	CodeSessionNotCaptured  Code = "session-not-captured"
 	CodeUnassembledEvidence Code = "unassembled-evidence"
@@ -125,9 +124,9 @@ func (w *windowBuilder) openings(version string) []opening {
 	return out
 }
 
-// session reads the window of one delivered session. No session is
-// captured in this build, so the window is incomplete and its timing is
-// unknown.
+// session reads the window of one delivered session. This build has no
+// source for another partition, so the window is incomplete and its
+// timing is unknown.
 func (w *windowBuilder) session(o opening, key versionKey) SessionWindow {
 	open := w.idx.lines[o.pos].Firing
 	lane := open.Lane

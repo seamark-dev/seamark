@@ -71,12 +71,12 @@ func TestNormalizeRegionAcceptsTheResolvedRoot(t *testing.T) {
 }
 
 // TestNormalizeRegionMatchesTheRootThroughAnAlias proves the CLI
-// orientation of contracts §1.3 and K4: the root is the git top level
-// with its links resolved, and the input reaches it through a link. Only
-// the root alias is matched. The rest of the input stays lexical, so a
-// missing path still compares, and a link below the root is never
-// followed. The test builds its own alias, so it also runs on Linux,
-// where no /var link exists.
+// orientation: the root is the git top level with its links resolved,
+// and the input reaches it through a link. Only the root alias is
+// matched. The rest of the input stays lexical, so a missing path still
+// compares, and a link below the root is never followed. The test
+// builds its own alias, so it also runs on Linux, where no /var link
+// exists.
 func TestNormalizeRegionMatchesTheRootThroughAnAlias(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
@@ -114,10 +114,11 @@ func TestNormalizeRegionMatchesTheRootThroughAnAlias(t *testing.T) {
 	}
 
 	// A link outside the root that leads into the root is not an alias
-	// of the root, so its paths stay outside (§1.3: never followed). This
-	// rule covers a value that names the link. The CLI resolves the links
-	// of the process directory before it calls NormalizeRegion (P1 fix
-	// round F-A), so a relative value from such a directory is inside.
+	// of the root, so its paths stay outside, because a link is never
+	// followed. This rule covers a value that names the link. The CLI
+	// resolves the links of the process directory before it calls
+	// NormalizeRegion, so a relative value from such a directory is
+	// inside.
 	into := filepath.Join(t.TempDir(), "into")
 	require.NoError(t, os.Symlink(filepath.Join(root, "src"), into))
 

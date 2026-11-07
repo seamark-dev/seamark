@@ -7,15 +7,16 @@ import (
 )
 
 // index holds the keyed lookups of the audit prefix (read-only).
-// newIndex builds them in one pass over the lines, so no pin and no
-// episode rescans the log. Every list holds positions into lines, in file
-// order, because the file order of the append-only log orders the
-// records. Times never do.
+// newIndex builds them in one pass over the lines, so no pin rescans the
+// log. Every list holds positions into lines, in file order, because
+// the file order of the append-only log orders the records. Times never
+// do.
 //
 // byVersion serves the delivery counts and the windows. byEvent serves
 // the coverage counts and the totals. byMatch, bySession, and byContext
-// serve the action classes and the decision timing. These need a capture
-// archive, so this build fills the three lookups but does not read them.
+// key the records for the action classes and the decision timing. Both
+// are fixed fields in this build, so newIndex fills the three lookups,
+// but no reading uses them.
 type index struct {
 	lines []reviews.AuditLine
 
@@ -42,8 +43,8 @@ type index struct {
 
 	// scans answers the classifier's questions that look back from one
 	// position. newIndex fills it with the position lists of this index.
-	// The classifier needs a capture archive, so this build fills the
-	// lists but does not read them.
+	// The action classes are fixed fields, so no reading of this build
+	// uses the lists.
 	scans positionScans
 }
 
@@ -241,10 +242,10 @@ func (idx *index) deliveryCounts(p pinVersion) DeliveryCounts {
 	// The v1 hook wrote the rendered symptom, "rule — note", into Fired.
 	// So the lookup renders the configured entry the way every surface
 	// does (reviews.PinIdentity), note included. A v1 record carries no
-	// version, so only a current reading shows the count. A historical
-	// version has no config entry and reads 0 by rule, not as a measured
-	// zero. Duplicate entries of one identity each show the count, as they
-	// show every other count.
+	// version, so only a current reading shows the count. Every reading in
+	// this build comes from a config entry, because the historical section
+	// is a fixed empty field. Duplicate entries of one identity each show
+	// the count, as they show every other count.
 	if p.configured != nil {
 		out.LegacyIdentityRecords = idx.legacy[reviews.PinIdentity(*p.configured)].Matches
 	}

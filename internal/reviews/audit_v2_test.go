@@ -18,14 +18,14 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 )
 
-// The tests of audit record v2 (plan steps P3.1 and P3.3; contract L3).
-// Milestone P3 adds keys after the legacy keys of every firing record.
-// Without the v2 keys, a record must equal the record of the P2 head
-// byte for byte, and the legacy readers must keep their counts.
+// The tests of audit record v2. Version 2 adds keys after the legacy
+// keys of every firing record. Without the v2 keys, a record must equal
+// the legacy record byte for byte, and the legacy readers must keep
+// their counts.
 
 // The raw identities of the legacy audit cases. Only their digests
-// reach the log. Milestone P3.3 gives the same values to its v2 writer,
-// so the two halves of TestAuditV2KeepsLegacyPrefix hash equal inputs.
+// reach the log. The v2 half gives the same values to the v2 writer, so
+// the two halves of TestAuditV2KeepsLegacyPrefix hash equal inputs.
 const (
 	legacySessionID      = "session-1"
 	legacyReceiverID     = "receiver-1"
@@ -95,8 +95,8 @@ func legacyAuditCases() []legacyAuditCase {
 				`"client":"claude","mechanism":"pre-tool-use-context","context_sha256":"{context}"}`,
 		},
 		{
-			// Codex names no receiver at the P2 head, so the record has
-			// no context digest and no context generation.
+			// The legacy Codex record names no receiver, so it has no context
+			// digest and no context generation.
 			name: "several files",
 			write: func(root string) error {
 				return RecordHookDeliveryFiles(root, []string{"api/a.go", "api/b.go"}, "apply_patch",
@@ -135,8 +135,9 @@ func legacyAuditCases() []legacyAuditCase {
 }
 
 // legacyAuditGolden fills the digest placeholders of golden with the
-// identity digests over root. The exported K2 functions compute them,
-// so the test uses the derivation of the firing log and no copy of it.
+// identity digests over root. The exported digest functions compute
+// them, so the test uses the derivation of the firing log and no copy
+// of it.
 func legacyAuditGolden(root, golden string) string {
 	return strings.NewReplacer(
 		"{session}", SessionDigest(root, legacySessionID),
@@ -209,11 +210,10 @@ func legacyAuditSummary() Summary {
 
 // TestAuditV2KeepsLegacyPrefix freezes the v1 lines of
 // RecordHookDeliveryFiles and RecordFiringSurface and their Summarize
-// result as the P2 head e263ece writes them (plan step P3.1; contract
-// L3, Compatibility). The v2 half (plan step P3.3) writes each case
-// through RecordEvent: a v2 line without its v2 keys equals the golden
-// of its case. No half edits the goldens, the raw identities, or the
-// expected summary.
+// result as the legacy writer wrote them before version 2. The v2 half
+// writes each case through RecordEvent: a v2 line without its v2 keys
+// equals the golden of its case. No half edits the goldens, the raw
+// identities, or the expected summary.
 func TestAuditV2KeepsLegacyPrefix(t *testing.T) {
 	t.Run("v1 writers keep the legacy lines and their summary", func(t *testing.T) {
 		root := t.TempDir()
@@ -275,7 +275,7 @@ const (
 // config. The writer copies the value and computes nothing from it.
 var legacyGuidanceSHA = strings.Repeat("9", 64)
 
-// v2Pin builds the FiringPin of a pin entry with its K2 digests.
+// v2Pin builds the FiringPin of a pin entry with its identity digests.
 func v2Pin(rule, region string, delivery PinDelivery, cause string) FiringPin {
 	cfg := &Config{}
 
@@ -307,7 +307,7 @@ func legacyAuditEvents(root string) []AuditEvent {
 			}},
 			Pins:     []FiringPin{strictPin},
 			Emission: "emitted", Evaluation: "complete", PathsComplete: true,
-			GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", CaptureOptIn: true, Generation: 1,
+			GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", RecordEvaluations: true, Generation: 1,
 		},
 		{
 			Root: root, Tool: "Edit", Files: []string{"internal/parse/strict.go"},
@@ -371,8 +371,8 @@ func splitV2Line(t *testing.T, line string) (legacy, tail string) {
 	return line[:i] + "}", line[i+1 : len(line)-1]
 }
 
-// TestTurnDigestVectors asserts the L3 test vector of TurnDigest and its
-// empty and separation rules (contract L3; registry §2.2 label "turn").
+// TestTurnDigestVectors asserts the test vector of TurnDigest and its
+// empty and separation rules.
 func TestTurnDigestVectors(t *testing.T) {
 	assert.Equal(t, "19a70cf81f75c33d61cb42144e45d494beb846df675e39ccc95035bac98aaaef",
 		TurnDigest("/workspace/repo", "claude", "s-1", "p-1"))
@@ -434,15 +434,15 @@ func twoRecordEvent(root string) AuditEvent {
 			v2Pin("frozen-assets", "generated", PinSuppressedRepeat, ""),
 		},
 		Emission: "emitted", Evaluation: "complete", PathsComplete: true,
-		GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", CaptureOptIn: true, Generation: 1,
+		GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", RecordEvaluations: true, Generation: 1,
 		EventID: v2EventID, Now: v2EventTime,
 	}
 }
 
 // TestRecordEventWritesOneEventInOneAppend asserts the event identity
-// and the write rules of RecordEvent (contract L3, Write rules): one
-// event ID and ts per event, the pins on the first record in delivery
-// order, the pin cap, and one append per event.
+// and the write rules of RecordEvent: one event ID and ts per event,
+// the pins on the first record in delivery order, the pin cap, and one
+// append per event.
 func TestRecordEventWritesOneEventInOneAppend(t *testing.T) {
 	t.Run("an edit event writes both records with one identity", func(t *testing.T) {
 		root := t.TempDir()
@@ -463,7 +463,7 @@ func TestRecordEventWritesOneEventInOneAppend(t *testing.T) {
 		v2Keys := `"schema_version":2,"event_id":"` + v2EventID + `",`
 		shared := `"emission":"emitted","evaluation":"complete","paths_complete":true,` +
 			`"guidance_sha256":"` + legacyGuidanceSHA + `","guidance_status":"ok",` +
-			`"turn_sha256":"{turn}","lane":"root","context_resettable":true,"capture_opt_in":true`
+			`"turn_sha256":"{turn}","lane":"root","context_resettable":true,"record_evaluations":true`
 
 		want := []string{
 			`{"ts":"2026-10-21T10:20:11Z","file":"internal/parse/strict.go","tool":"Edit","fired":[` +
@@ -631,7 +631,7 @@ func (s *shortWriter) Write(p []byte) (int, error) {
 }
 
 // TestRecordEventRefusesInvalidRecords asserts the four writer errors of
-// contract L3. A refused event writes nothing, not even the log file.
+// RecordEvent. A refused event writes nothing, not even the log file.
 func TestRecordEventRefusesInvalidRecords(t *testing.T) {
 	cases := []struct {
 		name string
@@ -704,9 +704,9 @@ const (
 )
 
 // TestRecordEventStoresNoRawIdentity asserts that no raw session,
-// tool-use, turn, or receiver ID reaches the log (contracts §1.6, R-12).
-// The digests are the K2 functions over the identity root, and a
-// partial identity writes no digest.
+// tool-use, turn, or receiver ID reaches the log. The digests are the
+// exported digest functions over the identity root, and a partial
+// identity writes no digest.
 func TestRecordEventStoresNoRawIdentity(t *testing.T) {
 	root := t.TempDir()
 	resettable := false
@@ -725,7 +725,7 @@ func TestRecordEventStoresNoRawIdentity(t *testing.T) {
 			Root: root, ClientID: "claude", SessionID: rawSessionID, Turn: rawTurnID,
 			ReceiverID: rawReceiverID, Lane: "child", Resettable: &resettable,
 			Records:    []EventRecord{{Status: DeliveryReset}},
-			Generation: 2, ExploreGeneration: 2, CaptureOptIn: true,
+			Generation: 2, ExploreGeneration: 2, RecordEvaluations: true,
 		},
 		{ // exploration
 			Root: root, Surface: "explore", Tool: "Read", Files: []string{"internal/parse/strict.go"},
@@ -811,13 +811,13 @@ func v2ReaderEvents(root string) []AuditEvent {
 			Records:  []EventRecord{{Status: DeliveryEvaluation, Lessons: []model.Lesson{legacyLessonStrict}}},
 			Pins:     []FiringPin{v2Pin("keep-parser-strict", "internal/parse", PinEmitFailed, "")},
 			Emission: "failed", Evaluation: "complete", PathsComplete: true,
-			GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", CaptureOptIn: true, Generation: 1,
+			GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", RecordEvaluations: true, Generation: 1,
 		},
 		AuditEvent{
 			Root: root, ClientID: "claude", SessionID: legacySessionID, Turn: legacyTurnID,
 			ReceiverID: legacyReceiverID, Lane: "root", Resettable: &resettable,
 			Records:    []EventRecord{{Status: DeliveryReset}},
-			Generation: 2, ExploreGeneration: 2, CaptureOptIn: true,
+			Generation: 2, ExploreGeneration: 2, RecordEvaluations: true,
 		},
 	)
 
@@ -843,15 +843,14 @@ func exploreEvent(root string) AuditEvent {
 		}},
 		Pins:     []FiringPin{v2Pin("keep-parser-strict", "internal/parse", PinInjected, "")},
 		Emission: "emitted", Evaluation: "complete", PathsComplete: true,
-		GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", CaptureOptIn: true, ExploreGeneration: 1,
+		GuidanceSHA: legacyGuidanceSHA, GuidanceStatus: "ok", RecordEvaluations: true, ExploreGeneration: 1,
 		Now: v2EventTime,
 	}
 }
 
 // TestLegacyReadersKeepTheirCountsOnV2Records feeds a v2 log to the
-// legacy readers (contract L3, Legacy readers of v2 records). Evaluation
-// and reset records change no count. An exploration injection counts as
-// a delivery on its own surface.
+// legacy readers. Evaluation and reset records change no count. An
+// exploration injection counts as a delivery on its own surface.
 func TestLegacyReadersKeepTheirCountsOnV2Records(t *testing.T) {
 	// v1 is the log of the v1 writers with the fixed time of the v2
 	// events, so FirstFirings of both logs compares in full.

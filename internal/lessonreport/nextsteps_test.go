@@ -10,11 +10,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// TestNextStepsStayEmptyWithoutCapture gives the report each input that
+// TestNextStepsStayEmpty gives the report each input that
 // it reads: delivered and held-back pins with paths, a linked proposal,
-// an authored check on an advisory pin, and a check stream. Every step
-// needs a corrected action or captured feedback, so no list holds a step.
-func TestNextStepsStayEmptyWithoutCapture(t *testing.T) {
+// an authored check on an advisory pin, and a check stream. The next
+// steps are a fixed field, so no list holds a step.
+func TestNextStepsStayEmpty(t *testing.T) {
 	const text = "lesson_checks_version: 1\nchecks:\n  authored:\n    kind: forbid-path-change/1\npin:\n  - rule: keep\n    region: src\n    check: authored\n"
 
 	cfg, err := reviews.ParseConfig([]byte(text))

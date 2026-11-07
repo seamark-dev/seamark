@@ -845,8 +845,8 @@ func TestLessonsHookClientSelectorRules(t *testing.T) {
 	assert.Contains(t, stderr, `unknown hook client "nope" (known: claude, codex)`)
 
 	// The selector belongs to hook mode. Inference has its own setting.
-	// The text grows with each hook mode (contracts §4.2 subset rule), so
-	// the test asserts only the parts that every form keeps.
+	// The text grows with each hook mode, so the test asserts only the
+	// parts that every form keeps.
 	_, err = run(t, "-C", root, "lessons", "--list", "--client", "codex")
 	require.Error(t, err)
 	assert.True(t, strings.HasPrefix(err.Error(), "--client applies to --hook, --hook-reset, "), err.Error())

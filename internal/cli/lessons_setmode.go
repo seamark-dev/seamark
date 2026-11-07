@@ -15,24 +15,23 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
-// This file holds lessons --set-mode (contracts K6 and §4). The command
-// checks its flags, plans the edit through maintain.PlanSetMode, and
-// writes it through maintain.CommitSetMode. The engine owns every rule
-// of the edit, so the console form of milestone P4 refuses the same
-// requests with the same texts.
+// This file holds lessons --set-mode. The command checks its flags,
+// plans the edit through maintain.PlanSetMode, and writes it through
+// maintain.CommitSetMode. The engine owns every rule of the edit, so
+// the console form refuses the same requests with the same texts.
 
 // setModeConflicts lists the lessons modes and decision flags that
 // --set-mode refuses, in the order of the help text. The first flag
-// that the call sets names the conflict (contracts §4.2). Each modifier
-// flag, for example --client, keeps its own guard and is not here.
+// that the call sets names the conflict. Each modifier flag, for
+// example --client, keeps its own guard and is not here.
 var setModeConflicts = []string{
 	"file", "list", "region", "stats", "distill", "proposals", "verify", "apply",
 	"dismiss", "prune", "retarget", "extract-triggers", "hook", "hook-reset",
 }
 
 // setModePaths is the line that names the explicit verification paths
-// of an executable pin (K6 step 6, plan row P1-g). They run a check
-// whatever hooks are installed. The active lines name the hook paths.
+// of an executable pin. They run a check whatever hooks are installed.
+// The active lines name the hook paths.
 const setModePaths = "supported paths: seamark lessons --verify, seamark check --lessons, " +
 	"and the MCP check tool with lesson_checks: true"
 
@@ -90,9 +89,8 @@ func setModeFlagError(cmd *cobra.Command, f setModeFlags, deliveryReport bool) e
 // row.
 //
 // The exit code is 0 for a write and for an unchanged request, and 1
-// for every refusal (§5 row 26). With distill.write off, the command
-// prints the checker impact and returns the lines to set by hand as its
-// refusal (§5 row 28).
+// for every refusal. With distill.write off, the command prints the
+// checker impact and returns the lines to set by hand as its refusal.
 func runLessonsSetMode(cmd *cobra.Command, opts *options, f setModeFlags) error {
 	ws, err := workspace.Locate(opts.workspace, "")
 	if err != nil {
@@ -141,18 +139,18 @@ func runLessonsSetMode(cmd *cobra.Command, opts *options, f setModeFlags) error 
 	return nil
 }
 
-// joinActiveState replaces the fixed active text of milestone P1 with
-// the K10 join (K6 step 6, §5 row 41). The report reads the candidate
-// bytes of the plan, so it shows the mode that the pin requests after
-// the edit, also when the write gate is off and nothing is written. The
-// pin-ref is a prefix of the pin identity, so it names the same pin
-// before and after the edit. The impact block gets the one-line form,
-// and the active lines get one line per client. A candidate that does
-// not decode keeps the fixed text, because the plan validated it and
-// such a state is not reachable.
+// joinActiveState replaces the fixed active text of the engine with the
+// capability join. The report reads the candidate bytes of the plan, so
+// it shows the mode that the pin requests after the edit, also when the
+// write gate is off and nothing is written. The pin-ref is a prefix of
+// the pin identity, so it names the same pin before and after the edit.
+// The impact block gets the one-line form, and the active lines get one
+// line per client. A candidate that does not decode keeps the fixed
+// text, because the plan validated it and such a state is not
+// reachable.
 //
-// SetModePlan.Active keeps its type of display lines (K-4). The CLI
-// fills it, because the engine has no binary identity.
+// SetModePlan.Active keeps its type of display lines. The CLI fills it,
+// because the engine has no binary identity.
 func joinActiveState(plan *maintain.SetModePlan, reg *integration.Registry, root string) {
 	cfg, errs, err := lessoncheck.Parse(plan.Change.After)
 	if err != nil {
@@ -169,9 +167,9 @@ func joinActiveState(plan *maintain.SetModePlan, reg *integration.Registry, root
 	}
 }
 
-// printSetMode prints the output of a written edit (K6 step 6): the
-// checker impact, the K6 success line, the requested mode, the active
-// state, and the supported paths of an executable pin.
+// printSetMode prints the output of a written edit: the checker impact,
+// the success line, the requested mode, the active state, and the
+// supported paths of an executable pin.
 func printSetMode(out io.Writer, plan *maintain.SetModePlan) {
 	printImpact(out, plan.Impact)
 
@@ -189,8 +187,8 @@ func printSetMode(out io.Writer, plan *maintain.SetModePlan) {
 	}
 }
 
-// setModeByHand returns the K6 refusal of the write gate: the lines to
-// set on the pin by hand. It names only the keys that the edit changes.
+// setModeByHand returns the refusal of the write gate: the lines to set
+// on the pin by hand. It names only the keys that the edit changes.
 // "mode: advisory" stands for the removal of the mode key, because an
 // explicit advisory mode reads the same and gives the same pin version.
 func setModeByHand(plan *maintain.SetModePlan) error {
@@ -228,8 +226,8 @@ func checkText(id string) string {
 	return render.Sanitize(id)
 }
 
-// shortVersionHex is the length of a version in the K6 success line,
-// the 12 hex characters of the K1 impact block.
+// shortVersionHex is the length of a version in the success line, the
+// 12 hex characters of the checker impact block.
 const shortVersionHex = 12
 
 // shortVersion returns the short form of a pin version.

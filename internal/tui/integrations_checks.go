@@ -12,13 +12,13 @@ import (
 )
 
 // This file holds the "Lesson checks" section of the Integrations
-// detail (contract K10, AC-34). It shows what the installed lesson-check
-// hooks of one client cover: each path by hook stage, tool, and
-// context, the hook binary, the writers that no hook covers, and the
-// exact init commands that install, switch, and remove the handlers.
-// The view is read-only: installing and removing these hooks stays a
-// CLI action (P0 lead row P4-k). Every state comes from the capability
-// report of the shared state, so the section computes no state itself.
+// detail. It shows what the installed lesson-check hooks of one client
+// cover: each path by hook stage, tool, and context, the hook binary,
+// the writers that no hook covers, and the exact init commands that
+// install, switch, and remove the handlers. The view is read-only:
+// installing and removing these hooks stays a CLI action. Every state
+// comes from the capability report of the shared state, so the section
+// computes no state itself.
 
 // integLessonLabelW is the label column of the section.
 const integLessonLabelW = 12
@@ -29,7 +29,7 @@ const integLessonLabelW = 12
 // check or enforce. An unreadable document gives no hook entries, but it
 // can hold a hook, so the section stays and says so. The capability
 // rows above never list the lesson-check capabilities, so a repository
-// without lesson checks keeps its detail (contract K10).
+// without lesson checks keeps its detail.
 func integChecksShown(st *state, insp integration.Inspection) bool {
 	if !st.capability.loaded {
 		return false
@@ -162,8 +162,7 @@ func integPathValues(t *ui.Theme, c lessoncheck.ClientCapability, w int) []strin
 
 // integBinaryValues names the hook binaries of the installed paths:
 // the version that inspection reads statically, and how it relates to
-// this binary (contract K10, hook binary identification). Paths that
-// share a binary state read once.
+// this binary. Paths that share a binary state read once.
 func integBinaryValues(t *ui.Theme, c lessoncheck.ClientCapability, w int) []string {
 	var texts []string
 
@@ -192,8 +191,11 @@ func integBinaryValues(t *ui.Theme, c lessoncheck.ClientCapability, w int) []str
 }
 
 // integBinaryWords names the binary state that the reasons of a path
-// carry. The reasons come from the identification table of contract
-// K10, so the most specific reason names the state.
+// carry. integration.identifyBinary reads the state of the hook binary,
+// and the capability report maps the state to reasons. Every state other
+// than the current one carries CapOtherBinary. The old, missing, and
+// unknown states add their own reason, so the most specific reason
+// names the state.
 func integBinaryWords(reasons []lessoncheck.CapReason) string {
 	switch {
 	case slices.Contains(reasons, lessoncheck.CapBinaryMissing):
@@ -210,7 +212,7 @@ func integBinaryWords(reasons []lessoncheck.CapReason) string {
 }
 
 // integUncovered names the writers of the client that no lesson-check
-// hook covers (AC-32), for example "NotebookEdit in root, Bash in root".
+// hook covers, for example "NotebookEdit in root, Bash in root".
 func integUncovered(report lessoncheck.CapabilityReport, client string) string {
 	var parts []string
 

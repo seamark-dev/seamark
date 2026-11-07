@@ -19,9 +19,9 @@ package maintain
 // readGate reads distill.write, and readLedger reads the rows.
 // integration.Landed reads the outcome of a failed write. The checks of
 // typed text are reviews.CheckAuthoredText and reviews.CheckPinRegion.
-// An edit can also set the mode and the check of a pin (contract K1).
-// checkImpact gives the impact block, and the strict check tier of
-// lessoncheck refuses an invalid candidate before the save.
+// An edit can also set the mode and the check of a pin. checkImpact
+// gives the impact block, and the strict check tier of lessoncheck
+// refuses an invalid candidate before the save.
 
 import (
 	"bytes"
@@ -97,11 +97,10 @@ type AuthorRequest struct {
 	// the person typed them; the check normalizes them.
 	Scope   ScopeChoice
 	Regions []string
-	// Mode and Check are the lesson-check keys of an edit (contract K1,
-	// writer row "Manual edit"). Mode advisory removes the mode key,
-	// because an absent mode reads as advisory. An empty Check removes
-	// the check key. A new pin is advisory (writer row "Manual create"),
-	// so a create with a mode or a check gets an issue.
+	// Mode and Check are the lesson-check keys of an edit. Mode advisory
+	// removes the mode key, because an absent mode reads as advisory. An
+	// empty Check removes the check key. A new pin is advisory, so a
+	// create with a mode or a check gets an issue.
 	Mode  lessoncheck.Mode
 	Check string
 	// RuleSet, NoteSet, ScopeSet, ModeSet, and CheckSet mark the fields
@@ -179,10 +178,10 @@ const (
 	BlockForeignRoot
 	// BlockGate means that distill.write is off or cannot be read.
 	BlockGate
-	// BlockCheck means that the candidate fails the strict check tier
-	// (contract K1, writer rule), for example a mode enforce without a
-	// check. The kind comes last, so the earlier kinds keep their values.
-	// A plan lists it before the ledger, root, and gate blockers.
+	// BlockCheck means that the candidate fails the strict check tier,
+	// for example a mode enforce without a check. The kind comes last, so
+	// the earlier kinds keep their values. A plan lists it before the
+	// ledger, root, and gate blockers.
 	BlockCheck
 )
 
@@ -261,10 +260,10 @@ type AuthorPlan struct {
 	Missing []string
 	// NewRef binds the new or edited entry in After; nil otherwise.
 	NewRef *pinfile.EntryRef
-	// Impact is the checker impact of an edit (contract K1), shown before
-	// the save. It holds the block of the edited pin when the pin is check
-	// or enforce before or after the edit. It is empty otherwise, also for
-	// a create, because a new pin is advisory.
+	// Impact is the checker impact of an edit, shown before the save. It
+	// holds the block of the edited pin when the pin is check or enforce
+	// before or after the edit. It is empty otherwise, also for a create,
+	// because a new pin is advisory.
 	Impact []lessoncheck.Impact
 	// Confirmable is true when nothing blocks the write.
 	Confirmable bool
@@ -405,7 +404,7 @@ const (
 	// The two texts below replace textIdentityKept and textLinkedKeeps for
 	// an edit of the mode or the check only. Such an edit changes no
 	// spelling and no note, so the texts of a wording edit would claim
-	// effects that it does not have (review finding R-7).
+	// effects that it does not have.
 	textChecksKept = "The delivery identity does not change. This edit changes only the %s of the pin; its " +
 		"rule, note, and scope stay as they are."
 	textLinkedChecks = "Proposal #%d keeps its recorded rule, note, and evidence. This edit leaves the note as " +
@@ -479,7 +478,7 @@ func gateBlocker(write bool, gateErr error) *AuthorBlocker {
 // stored text to compare with. A legacy region that CheckPinRegion
 // refuses thus blocks every scope edit of its entry.
 //
-// A set mode must be a mode word of contract K1. A create with a mode
+// A set mode must be one of the three mode words. A create with a mode
 // other than advisory or with a check gets an issue, because a new pin
 // is advisory and the create never drops a field without a word. The
 // strict check tier on the candidate decides the rest, for example a
@@ -1045,10 +1044,10 @@ func (a *authoring) candidate() error {
 }
 
 // strict adds the checker impact of an edit and refuses a candidate
-// that fails the strict check tier (contract K1). pinfile.Prepare runs
-// the same tier at the write. A refusal there comes after the review,
-// so the plan names it before the save instead. change is nil for a
-// create, which writes an advisory pin and so has no impact.
+// that fails the strict check tier. pinfile.Prepare runs the same tier
+// at the write. A refusal there comes after the review, so the plan
+// names it before the save instead. change is nil for a create, which
+// writes an advisory pin and so has no impact.
 //
 // The impact reads the lenient decodes, so the review shows it also when
 // the strict tier refuses the candidate. The route depends on the cause:
@@ -1162,8 +1161,8 @@ func (a *authoring) rewrite() *pinfile.Rewrite {
 		rw.Regions = &set
 	}
 
-	// The lesson-check keys follow the splice rule of lessons --set-mode
-	// (contract K6), so the form and the command write the same bytes.
+	// The lesson-check keys follow the splice rule of lessons --set-mode,
+	// so the form and the command write the same bytes.
 	if a.req.ModeSet {
 		mode := modeKey(a.req.Mode)
 		rw.Mode = &mode
@@ -1415,8 +1414,8 @@ func CommitAuthor(d Deps, p *AuthorPlan) (AuthorResult, error) {
 // nothing was written before the engine write: the refusal or the stale
 // observation. After the write starts, the error is nil and the result
 // holds the outcome. A failed write reads the file again, and
-// integration.Landed decides the outcome (P4-18). The pin authoring and
-// the check-definition authoring share this rule.
+// integration.Landed decides the outcome. The pin authoring and the
+// check-definition authoring share this rule.
 func writeAuthored(d Deps, guard integration.FileGuard, after []byte, create bool) (AuthorResult, error) {
 	err := d.author().Write(d.Reg, d.Root, guard, after, create)
 	if err == nil {

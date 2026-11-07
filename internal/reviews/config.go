@@ -72,14 +72,14 @@ type Config struct {
 	// Checks maps a check ID to its definition. The map keys are the IDs.
 	// The decode stays lenient: lessoncheck.Validate owns the semantic
 	// rules, so an advisory reader keeps its pins when a definition is
-	// wrong (contract K1, tier 2).
+	// wrong.
 	Checks map[string]CheckDef `yaml:"checks,omitempty"`
 }
 
 // MaxLessonChecksVersion is the newest lesson_checks_version that this
 // binary reads. ParseConfig accepts a newer version, because
 // lessoncheck.Validate reports it as version-unsupported and advisory
-// readers must keep the pins of such a file (contract K1, K-6).
+// readers must keep the pins of such a file.
 const MaxLessonChecksVersion = 1
 
 // CheckDef is one check definition under the checks key. Each parameter
@@ -268,11 +268,11 @@ func LoadConfig(root string) (*Config, error) {
 // candidate file before it writes. Empty input yields the defaults, the
 // same as an absent file. Every error carries ErrLessonsConfig.
 //
-// The lesson-check keys get only the decode tier here (contract K1).
-// yaml.v3 refuses a duplicate check ID, and a negative
-// lesson_checks_version is an error. A version above
-// MaxLessonChecksVersion decodes without an error: lessoncheck.Validate
-// reports it, and the advisory readers keep the pins of the file.
+// The lesson-check keys get only the decode tier here. yaml.v3 refuses
+// a duplicate check ID, and a negative lesson_checks_version is an
+// error. A version above MaxLessonChecksVersion decodes without an
+// error: lessoncheck.Validate reports it, and the advisory readers keep
+// the pins of the file.
 func ParseConfig(data []byte) (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -291,8 +291,8 @@ func ParseConfig(data []byte) (*Config, error) {
 			ErrLessonsConfig, HookDeliveryAlways, HookDeliveryOncePerContext, cfg.Delivery)
 	}
 
-	// The message text is frozen by contract K1, so it names the
-	// supported version literally.
+	// The message text is fixed, so it names the supported version
+	// literally.
 	if cfg.LessonChecksVersion < 0 {
 		return nil, fmt.Errorf("%w: lesson_checks_version must be 1, got %d",
 			ErrLessonsConfig, cfg.LessonChecksVersion)

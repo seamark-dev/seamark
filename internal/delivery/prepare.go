@@ -22,18 +22,18 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// This file holds preparation (contract L1): the scoped lesson guidance
-// that an agent asks for before it constructs a change. MCP change_set
-// and the CLI lessons --prepare get one result from Prepare, so the two
-// surfaces cannot disagree. Preparation has no receiver identity, so it
-// never reads or writes a delivery state: an edit that follows still
-// gets its own reminder (AC-26, A13).
+// This file holds preparation: the scoped lesson guidance that an agent
+// asks for before it constructs a change. MCP change_set and the CLI
+// lessons --prepare get one result from Prepare, so the two surfaces
+// cannot disagree. Preparation has no receiver identity, so it never
+// reads or writes a delivery state: an edit that follows still gets its
+// own reminder.
 
 // PreparationSchema is the schema of the preparation document.
 const PreparationSchema = "lesson-preparation/1"
 
-// PreparationNotice is the fixed last sentence of every preparation. The
-// contract freezes it, because guidance text and tests quote it.
+// PreparationNotice is the fixed last sentence of every preparation. It
+// stays fixed, because guidance text and tests quote it.
 const PreparationNotice = "Preparation is advisory: it authorizes no write, it does not show that a model read it, " +
 	"and every covered edit still meets its active checks. Plan with it, then construct the change in a later step, " +
 	"not in the same generated program."
@@ -102,8 +102,8 @@ const EmissionReturned = "returned"
 // surface gets a session or an agent ID, so the receiver is unknown.
 const receiverNoIdentity = "no-receiver-identity"
 
-// prepScopeLabel is the first compose part of the scope digest
-// (registry §2.2). A change of the parts or of their order is a new label.
+// prepScopeLabel is the first compose part of the scope digest. A
+// change of the parts or of their order is a new label.
 const prepScopeLabel = "prep-scope/1"
 
 // maxRequestedRunes bounds each requested path in the document, because
@@ -132,8 +132,8 @@ type PrepareRequest struct {
 	Config    *reviews.Config
 	ConfigErr error
 	// MinedStatus says what st is: MinedOK (or empty), MinedNoIndex, or
-	// MinedUnavailable. The contract request has no such field. The
-	// caller opens the index, so only the caller can say why st holds
+	// MinedUnavailable. The request of the document has no such field.
+	// The caller opens the index, so only the caller can say why st holds
 	// no mined lessons.
 	MinedStatus string
 	// Now gives the preparation time. Nil means time.Now.
@@ -145,9 +145,9 @@ type PrepareRequest struct {
 	SeamarkVersion string
 	// Capability is the lesson-capability/1 report of the workspace, or
 	// nil. Prepare copies the badges of each pin into
-	// CheckSummary.Enforcement (contract L1, milestone P4). The caller
-	// builds it, because the report joins the client inspections, and
-	// this package reads no client hook document.
+	// CheckSummary.Enforcement. The caller builds it, because the report
+	// joins the client inspections, and this package reads no client hook
+	// document.
 	Capability *lessoncheck.CapabilityReport
 }
 
@@ -277,9 +277,9 @@ type Omission struct {
 // path gives a preparation without a selection, not an error.
 //
 // A selection with at least one lesson has one firing record of
-// version 2 (contract L3). Prepare does not append it: the caller calls
-// Record after its answer is ready. So an answer that fails after
-// Prepare leaves no returned record (P3 review, ruling A).
+// version 2. Prepare does not append it: the caller calls Record after
+// its answer is ready. So an answer that fails after Prepare leaves no
+// returned record.
 func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Preparation, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -388,10 +388,10 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 	return p, nil
 }
 
-// Record appends the one firing record of the preparation (contract L3)
-// and sets EventID. The caller calls it after the rest of its answer
-// succeeds, so an answer that fails leaves no returned record (P3 review,
-// ruling A). A preparation without a selected lesson has no record.
+// Record appends the one firing record of the preparation and sets
+// EventID. The caller calls it after the rest of its answer succeeds,
+// so an answer that fails leaves no returned record. A preparation
+// without a selected lesson has no record.
 //
 // A second call writes nothing, so one call of a surface gives at most
 // one record. The append is best effort: a failure leaves EventID empty.
@@ -642,10 +642,10 @@ func checkSummaries(cfg *reviews.Config, refs map[reviews.PinKey]string, pinPath
 	return summaries, counts
 }
 
-// withEnforcement copies the K10 badges of each pin into its check
-// summary. A pin joins only with the same pin-ref and pin version, so a
-// report of another file state never lends its badges. Without a report
-// the field stays absent.
+// withEnforcement copies the enforcement badges of each pin into its
+// check summary. A pin joins only with the same pin-ref and pin
+// version, so a report of another file state never lends its badges.
+// Without a report the field stays absent.
 func withEnforcement(checks []CheckSummary, capability *lessoncheck.CapabilityReport) {
 	if capability == nil {
 		return
@@ -751,8 +751,8 @@ func firstPathOf(paths, files []string) string {
 
 // inspectCommand is the command that shows every lesson of one path.
 // The path is absolute, because another process runs the command, maybe
-// from another directory (contracts §1.3). The lessoncheck rerun command
-// quotes its paths with the same function, so the two commands agree.
+// from another directory. The lessoncheck rerun command quotes its
+// paths with the same function, so the two commands agree.
 func inspectCommand(root, rel string) string {
 	return "seamark lessons --file " + lessoncheck.QuoteArg(filepath.Join(root, filepath.FromSlash(rel)))
 }
@@ -768,10 +768,10 @@ func inspectRoot(root string) string {
 }
 
 // preparationRecord builds the one firing record of a preparation call
-// (contract L3, surfaces change_set and prepare). Record appends it
-// later. It is nil when no event ID is available. The receiver is
-// unknown, so the record carries no session, match, context, turn,
-// lane, or opt-in key.
+// (surfaces change_set and prepare). Record appends it later. It is nil
+// when no event ID is available. The receiver is unknown, so the record
+// carries no session, match, context, turn, lane, or record_evaluations
+// key.
 func preparationRecord(req PrepareRequest, at time.Time, files []string, rejected int, cfg *reviews.Config,
 	sel report.Selection, digest, status, scope string,
 ) *reviews.AuditEvent {

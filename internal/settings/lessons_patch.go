@@ -645,9 +645,8 @@ func verifyLessons(lp *LessonsPart, group Group, edits []Edit, after []byte) (*L
 	}
 
 	// The settings editor writes without pinfile.Prepare, so it runs the
-	// strict check tier itself (contract K1, writer rule). The check
-	// reads the whole candidate, so an error that an earlier hand edit
-	// made also refuses the save (§5 row 5).
+	// strict check tier itself. The check reads the whole candidate, so
+	// an error that an earlier hand edit made also refuses the save.
 	if reason := pinfile.CandidateRefusal(got.Config); reason != "" {
 		return nil, refusal(pinfile.File, reason)
 	}

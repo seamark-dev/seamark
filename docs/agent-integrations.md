@@ -261,8 +261,8 @@ document contains no handler.
 
 ### Delivery attribution
 
-Attribution is separate from hook installation and from the older
-capture/reminder recordings above:
+Attribution is separate from hook installation and from the native
+recordings above:
 
 | Item | Claude root | Claude child | Codex root | Codex child |
 | --- | --- | --- | --- | --- |
@@ -273,11 +273,12 @@ capture/reminder recordings above:
 | Model boundary | Unverified | Unverified | Unverified | Unverified |
 
 No reviewed native timing recording upgrades these pending identities or
-boundaries. Own-call advice remains `same-call-only`; a command/MCP
-preparation remains receiver-unknown. Otherwise negative observation
-windows remain incomplete with `lane-coverage-unknown`. A guard's
-requested deny is not proof of prevention; current reports retain
-`prevented: 0`. See [lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
+boundaries. Own-call advice arrives in the same call as the edit that it
+names, so it is no evidence of guidance before construction. A
+command/MCP preparation names no receiver. The delivery report reads
+every observation window as incomplete. A guard's requested deny is not
+proof of prevention; current reports retain `prevented: 0`. See
+[lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
 
 ### Disable and downgrade safely
 
@@ -293,10 +294,11 @@ seamark doctor
 ```
 
 These commands remove owned lesson-check/exploration entries, not the
-advisory reminders, accepted pins, policy, capture consent or archive.
-Inspect user-added duplicate handlers separately. A downgrade does not
-make a newer capture archive readable by an older binary; do not assume
-hook removal reverses an archive migration. Preserve a compatible backup.
+advisory reminders, accepted pins or policy. Inspect user-added duplicate
+handlers separately. A downgrade does not make a schema 8 database
+readable by an older binary, and hook removal does not reverse that
+upgrade. Preserve a compatible backup; see
+[Going back to an older seamark](configuration.md#going-back-to-an-older-seamark).
 For removal of the rest of an integration, see below.
 
 ## Choose an agent for inference
@@ -651,6 +653,8 @@ installed version to catch parser drift.
 | `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case, when the installed version is the recorded one (else it skips with the reason); the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
 | `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
 | `make agents-native-smoke CLIENT=codex` | the client CLI and operator authentication; costs tokens | one distillation group read through the client preset with no failed group and a proposed pin, the pin's client provenance in the ledger, the command disclosed by `--dry-run`, trigger extraction in dry-run only, and the workspace unchanged afterwards |
+| `make native-replay CLIENT=<client>` | Go and the repository's build prerequisites; no client CLI, no model, no credentials | the replay of the reviewed timing and guard recordings in `internal/integration/testdata/<client>/timing` and `.../guard`, and the offline tests of the recording script for that client; a replay without a reviewed recording skips as pending, and a skip gives no evidence |
+| `make native-record CLIENT=<client>` | the client CLI and operator authentication; costs tokens | the prompts of one scenario (`NATIVE_RECORD_SCENARIO=timing`, the default, or `guard`) in a scratch repository, with one cost line per run; it writes a sanitized copy for review and never writes into testdata; it refuses a binary or a tree with uncommitted changes unless `SEAMARK_ALLOW_DIRTY=1` |
 
 The Go checks use ordinary test results and label missing prerequisites
 as `blocked` in their failure messages. The shell script prints `ok`,
@@ -716,19 +720,21 @@ Before release:
   not close this prerequisite.
 
 Native recording commands require the operator's login, can cost tokens,
-and run in scratch workspaces. Cover the per-tool/context cases above;
-capture recordings alone do not verify timing or denial:
+and run in scratch workspaces. Cover the per-tool/context cases above:
 
 ```bash
-CAPTURE_NATIVE_SCENARIO=timing make capture-native-record CLIENT=claude
-CAPTURE_NATIVE_SCENARIO=timing make capture-native-record CLIENT=codex
-CAPTURE_NATIVE_SCENARIO=guard make capture-native-record CLIENT=claude
-CAPTURE_NATIVE_SCENARIO=guard make capture-native-record CLIENT=codex
+NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=claude
+NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=codex
+NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=claude
+NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=codex
 ```
 
 A sanitized recording needs review before evidence declarations change.
-Do not substitute an in-process handler fixture for a native result.
-Keep raw conversations and native identifiers out of public reports.
+The reviewer copies a reviewed recording into
+`internal/integration/testdata/<client>/timing` or `.../guard`, where
+`make native-replay CLIENT=<client>` replays it offline, with no model.
+Do not substitute an in-process handler fixture for a native result. Keep
+raw conversations and native identifiers out of public reports.
 
 Then run the existing release gates:
 
@@ -744,7 +750,12 @@ Then run the existing release gates:
 4. Review the generated files of the fixture run for anything
    credential-shaped; the checks grep for the canary they set, not for
    every possible secret.
-5. Update the per-agent table above, `docs/STATUS.md`, the README's
+5. `make native-replay CLIENT=claude` and `make native-replay CLIENT=codex`
+   replay the reviewed timing and guard recordings. A replay without a
+   reviewed recording skips as pending and gives no evidence. A reviewed
+   recording moves an aspect from pending to verified only for the client
+   version, tool and context that it shows.
+6. Update the per-agent table above, `docs/STATUS.md`, the README's
    setup section, and `CHANGELOG.md`. `TestUserDocsCoverEveryCommand`
    and `TestOnboardingGuidesNameRealCommands` check the command
    names and flags in the documentation against the CLI.

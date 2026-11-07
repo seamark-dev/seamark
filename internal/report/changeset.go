@@ -16,8 +16,7 @@ import (
 type ChangeSetOptions struct {
 	// Record appends the legacy firing record of the change_set surface
 	// for the printed lessons. MCP change_set sets it to false, because
-	// the record of its preparation is the one record of the call
-	// (contract L1).
+	// the record of its preparation is the one record of the call.
 	Record bool
 }
 
@@ -28,9 +27,9 @@ type ChangeSetOptions struct {
 // am I about to forget?" — answered from evidence, not vibes.
 //
 // ChangeSet records the printed lessons with the legacy writer. No
-// production caller uses it since MCP change_set moved to ChangeSetWith
-// (plan risk Lead P3-i). The tests of the text and of the legacy record
-// keep it.
+// production caller uses it since MCP change_set moved to
+// ChangeSetWith. The tests of the text and of the legacy record keep
+// it.
 func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error {
 	_, err := ChangeSetWith(w, st, root, files, ChangeSetOptions{Record: true})
 

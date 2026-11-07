@@ -28,13 +28,13 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
-// The lesson-check tests of Lessons › Pins (P4.10): the CHECK section,
-// the Mode and Check rows of the pin form, the check-definition form of
-// M, and the verification view of V. The screen tests use the fake
-// services with a pin inspection that the real engine reads, and a
-// capability report of the real join. The engine tests drive the screen
-// over the production services on a temporary git workspace, so the
-// console text is the text of lessons --verify.
+// The lesson-check tests of Lessons › Pins: the CHECK section, the Mode
+// and Check rows of the pin form, the check-definition form of M, and
+// the verification view of V. The screen tests use the fake services
+// with a pin inspection that the real engine reads, and a capability
+// report of the real join. The engine tests drive the screen over the
+// production services on a temporary git workspace, so the console text
+// is the text of lessons --verify.
 
 // checkLessonsYAML holds one pin of each lesson-check state: an enforce
 // pin, a check pin, an advisory pin with a check, and a prose pin.
@@ -121,7 +121,7 @@ func checkInspection(t *testing.T, text string) *maintain.Inspection {
 
 // checkReportOf joins text with Claude Code enforce hooks on every write
 // tool and context, and Codex without a lesson-check hook. It is the
-// real join of contract K10 (lessoncheck.CapabilityReportOf).
+// real capability join (lessoncheck.CapabilityReportOf).
 func checkReportOf(text string) (lessoncheck.CapabilityReport, error) {
 	cfg, errs, err := lessoncheck.Parse([]byte(text))
 	if err != nil {
@@ -610,9 +610,9 @@ func TestTUICheckDefinitionFormPreviewsImpact(t *testing.T) {
 	})
 }
 
-// TestTUICheckDefinitionFormLocksHostileText covers R-3 of the P4
-// review. A definition in lessons.yaml can hold terminal escapes in its
-// ID or pattern. The form must keep both rows read-only, name the
+// TestTUICheckDefinitionFormLocksHostileText covers hostile text in a
+// definition. A definition in lessons.yaml can hold terminal escapes in
+// its ID or pattern. The form must keep both rows read-only, name the
 // by-hand route, and never print a raw control byte.
 func TestTUICheckDefinitionFormLocksHostileText(t *testing.T) {
 	const hostile = "X\x1b]0;PWNED\aY\x1b[2JZ"
@@ -819,7 +819,7 @@ pin:
 
 // checkEngine returns the production services over a git workspace with
 // one commit and checkEngineYAML, with the write gate on. Only the agent
-// and the review fetch are fakes, and no test may call them (AC-1).
+// and the review fetch are fakes, and no test may call them.
 func checkEngine(t *testing.T) (workspace.Workspace, services.All, *servicestest.Agent, *servicestest.Fetch) {
 	t.Helper()
 
@@ -868,34 +868,25 @@ func installClaudeGuard(t *testing.T, ws workspace.Workspace) {
 }
 
 // auditCallers returns the caller of each record of the lesson-check
-// audit stream of ws. The writer rotates the live log by size and by the
-// age of its oldest record. A rotation moves the earlier records of a
-// test into the rotated generation, so the helper reads both files,
-// oldest first.
+// audit stream of ws.
 func auditCallers(t *testing.T, ws workspace.Workspace) []lessoncheck.Caller {
 	t.Helper()
 
-	live := filepath.Join(ws.Root, ".seamark", "lesson-check-audit.jsonl")
+	f, err := os.Open(filepath.Join(ws.Root, ".seamark", "lesson-check-audit.jsonl"))
+	require.NoError(t, err)
+
+	defer func() { _ = f.Close() }()
 
 	var out []lessoncheck.Caller
 
-	for _, path := range []string{live + ".1", live} {
-		data, err := os.ReadFile(path)
-		if path != live && errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-
-		require.NoError(t, err)
-
-		sc := bufio.NewScanner(bytes.NewReader(data))
-		for sc.Scan() {
-			var rec lessoncheck.AuditRecord
-			require.NoError(t, json.Unmarshal(sc.Bytes(), &rec))
-			out = append(out, rec.Caller)
-		}
-
-		require.NoError(t, sc.Err())
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var rec lessoncheck.AuditRecord
+		require.NoError(t, json.Unmarshal(sc.Bytes(), &rec))
+		out = append(out, rec.Caller)
 	}
+
+	require.NoError(t, sc.Err())
 
 	return out
 }

@@ -18,9 +18,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 )
 
-// contractPinVersion is the pin version of the L2 and L3 contract
-// examples. The delivered key of the L2 state example is its item digest.
-const contractPinVersion = "f128e3e12b9d12825e8f7a4396ebb003b517d1e162955edb04bf147a5aa89897"
+// examplePinVersion is the pin version of the example records. The
+// delivered key of the example state is its item digest.
+const examplePinVersion = "f128e3e12b9d12825e8f7a4396ebb003b517d1e162955edb04bf147a5aa89897"
 
 // exploreTestContext is a resettable root context of Claude Code, with
 // the receiver ID that integration.ReceivingContextOf builds.
@@ -31,7 +31,7 @@ func exploreTestItems() []ExploreItem {
 	return []ExploreItem{
 		{
 			Kind:   ExploreItemPin,
-			ID:     contractPinVersion,
+			ID:     examplePinVersion,
 			Lesson: model.Lesson{Region: "internal/parse", Symptom: "keep-parser-strict — Reject unknown fields in the parser."},
 		},
 		{
@@ -118,17 +118,17 @@ func TestExploreItemDigestVectors(t *testing.T) {
 	assert.Equal(t, "14:explore-item/17:explore3:pin2:v1",
 		compose(exploreItemScheme, ExploreSurface, ExploreItemPin, "v1"))
 
-	// Each digest was computed outside Go from the §1.2 composition.
+	// Each digest was computed outside Go from the compose scheme.
 	vectors := []struct {
 		name              string
 		surface, kind, id string
 		want              string
 	}{
-		{"the pin of the L2 state example", "explore", "pin", contractPinVersion,
+		{"the pin of the example state", "explore", "pin", examplePinVersion,
 			"5266b096177b70b2cd45f6112f0d701f9150d60da10e28dec56b6a9ea1d0afaf"},
 		{"a mined lesson by its cluster key", "explore", "lesson", "internal/parse|RUF001",
 			"858aef72092d9fdf40a67f0eed5424d422a35ad9ab03c8a1e3a4d719ef1a95ec"},
-		{"the same pin on another surface", "grep", "pin", contractPinVersion,
+		{"the same pin on another surface", "grep", "pin", examplePinVersion,
 			"16b312f13f8ce3e18a6236e998e714aa8902ab10ebd944ef592b88d3e1d99133"},
 		{"empty parts keep their length prefix", "", "pin", "",
 			"65ceaf0e9c078058e6dac9e8c4bf9b7fbd284b02efef92e9bfc240fa65a3525a"},
@@ -249,9 +249,9 @@ func TestExploreStateRefusesWhatItCannotRead(t *testing.T) {
 		require.ErrorContains(t, err, "lock is a symlink")
 	})
 
-	t.Run("the contract shape reads", func(t *testing.T) {
-		// The L2 example, with a fresh updated_at and this root's key: the
-		// delivered digest is the pin of exploreTestItems.
+	t.Run("the example shape reads", func(t *testing.T) {
+		// The example state, with a fresh updated_at and this root's key:
+		// the delivered digest is the pin of exploreTestItems.
 		root := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(root, ".seamark"), 0o700))
 
@@ -415,8 +415,8 @@ func TestExploreLeaseCommitsOnlyAfterEmitAndIsExclusive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, raw, unchanged)
 
-	// AC-26: exploration never created the edit hook state or its lock.
-	// So an edit of the same pin right after the read still gets it.
+	// Exploration never created the edit hook state or its lock. So an
+	// edit of the same pin right after the read still gets it.
 	assert.NoFileExists(t, editStatePath(root))
 	assert.NoFileExists(t, filepath.Join(root, ".seamark", deliveryLockFile))
 
@@ -432,7 +432,7 @@ func TestExploreLeaseCommitsOnlyAfterEmitAndIsExclusive(t *testing.T) {
 	require.NoError(t, parallel.Close())
 	require.NoError(t, edit.Close())
 
-	// AC-26 with a populated edit state: exploration commits and resets on
+	// With a populated edit state, the exploration commits and resets on
 	// the same context leave the edit state file byte for byte.
 	populated := t.TempDir()
 	editBefore := seedEditState(t, populated, exploreTestContext, lessonsOf(items))
@@ -628,7 +628,7 @@ func TestResetExploreDeliveryCreatesNoFile(t *testing.T) {
 // TestResetExploreDeliveryWaitsForALease shows that a reset waits a short
 // time for a lease of another context. One lock covers every context of
 // the file. A reset that fails keeps the old delivered items, so advice
-// stays hidden after a compaction (review finding cross-cutting:F2).
+// stays hidden after a compaction.
 func TestResetExploreDeliveryWaitsForALease(t *testing.T) {
 	root := t.TempDir()
 	items := exploreTestItems()

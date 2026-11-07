@@ -5,7 +5,7 @@ Provenance: shaped from the Codex hooks reference
 https://learn.chatgpt.com/docs/hooks; consulted 2026-09-13) and from the
 `apply_patch` grammar embedded in the installed CLI (`codex-cli 0.154.0`,
 Homebrew cask). Values are **synthetic**: session, turn, and call ids are
-placeholders, and no file here is a raw capture from a live Codex session.
+placeholders, and no file here is a raw recording from a live Codex session.
 A fixture is promoted to "confirmed" only when a recorded native run
 reproduces its shape. A native run of `codex-cli 0.154.0` on
 2026-09-20/21 reproduced the field sets of `PreToolUse` for `apply_patch`

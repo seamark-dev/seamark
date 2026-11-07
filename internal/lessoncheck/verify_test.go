@@ -649,8 +649,9 @@ func TestLessonCheckVerifyStaleOnChange(t *testing.T) {
 		v := g.verify("src", "ignored")
 		require.Equal(t, FreshnessFresh, v.Freshness)
 
-		// Step 3a lists the ignored files below a named path. A new
-		// ignored file changes only that output.
+		// An explicit selection runs a second git status call. It lists
+		// the ignored files below each named path. A new ignored file
+		// changes only that output.
 		onRevalidate(t, func() { g.write("ignored/y.txt", "y\n") })
 
 		v = g.verify("src", "ignored")

@@ -12,9 +12,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// This file holds check --lessons (contract K5). The policy path of
-// check runs unchanged first. Then lessoncheck.Verify reads the default
-// working-tree selection, whatever diff the policy read (§5 row 25).
+// This file holds check --lessons. The policy path of check runs
+// unchanged first. Then lessoncheck.Verify reads the default
+// working-tree selection, whatever diff the policy read.
 // report.NewCheckLessonsEnvelope combines both verdicts, and the command
 // exits with the combined exit code. The command decides no outcome
 // itself.
@@ -87,9 +87,9 @@ func runCheckLessons(cmd *cobra.Command, run checkLessonsRun) error {
 
 // checkLessonsExit returns the error that makes Execute exit with
 // c.ExitCode. Exit 0 returns nil. A blocking policy returns its
-// gate.Blocked error, so the policy line wins on stderr (contract K5).
-// Otherwise Combine and ExitError read the same summary state: exit 2
-// gets the violation error, and exit 1 gets the incomplete error.
+// gate.Blocked error, so the policy line wins on stderr. Otherwise
+// Combine and ExitError read the same summary state: exit 2 gets the
+// violation error, and exit 1 gets the incomplete error.
 func checkLessonsExit(c report.CombinedResult, d *gate.Decision, v *lessoncheck.Verification) error {
 	if c.ExitCode == 0 {
 		return nil

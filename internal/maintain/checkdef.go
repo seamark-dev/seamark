@@ -1,14 +1,13 @@
 package maintain
 
-// This file holds the authoring of one check definition (contract K1,
-// writer row "Check-definition authoring"). PlanCheckDef splices one
-// checks.<id> entry, and lesson_checks_version when the file needs it,
-// into the text of lessons.yaml. A verifier that shares no line
-// computation with the splice proves that the pin list keeps its bytes
-// and that only those two keys change. The candidate must then pass the
-// strict check tier. CommitCheckDef writes the candidate through
-// pinfile.Prepare, or pinfile.PrepareAppend for an absent file, so the
-// writer runs the strict tier once more (P0 lead row P4-d).
+// This file holds the authoring of one check definition. PlanCheckDef
+// splices one checks.<id> entry, and lesson_checks_version when the
+// file needs it, into the text of lessons.yaml. A verifier that shares
+// no line computation with the splice proves that the pin list keeps
+// its bytes and that only those two keys change. The candidate must
+// then pass the strict check tier. CommitCheckDef writes the candidate
+// through pinfile.Prepare, or pinfile.PrepareAppend for an absent file,
+// so the writer runs the strict tier once more.
 //
 // The edit never changes a pin. A pin binds a definition with its own
 // edit (lessons --set-mode or the pin form), so no write changes the
@@ -45,7 +44,7 @@ const routeCheckDef = "correct the kind or the pattern of the definition"
 // CheckDefRequest is one check definition as the person typed it.
 type CheckDefRequest struct {
 	// ID is the check ID: the key under checks. It must match the ID
-	// rule of contract K1, because the splice writes it as a key.
+	// rule of the lesson checks, because the splice writes it as a key.
 	ID string
 	// Kind is the checker kind, for example "no-added-pattern/1".
 	// Pattern is its parameter; an empty Pattern writes no pattern key.
@@ -83,8 +82,8 @@ type CheckDefPlan struct {
 	// so a pattern that the strict tier refuses still has a text, and a
 	// blocker names the refusal.
 	Predicate string
-	// Impact holds the K1 block of each check or enforce pin that binds
-	// the ID, in file order. An advisory pin gets no block.
+	// Impact holds the checker impact block of each check or enforce pin
+	// that binds the ID, in file order. An advisory pin gets no block.
 	Impact []lessoncheck.Impact
 	// Write is distill.write at plan time; GateErr is its read failure.
 	Write   bool
@@ -114,10 +113,10 @@ func (c *checkDefPlanner) block(kind BlockKind, text, route string) {
 // file and write gate. It writes nothing. It returns an error only for
 // an empty root; every other reason goes into the plan as a blocker.
 //
-// An ID that the K1 ID rule refuses stops before the splice, because the
-// splice writes the ID as a key. A kind or a pattern that the strict tier
-// refuses still gets a candidate, so the review shows the impact on the
-// bound pins next to the refusal (contract K1).
+// An ID that the check ID rule refuses stops before the splice, because
+// the splice writes the ID as a key. A kind or a pattern that the
+// strict tier refuses still gets a candidate, so the review shows the
+// impact on the bound pins next to the refusal.
 func PlanCheckDef(d Deps, req CheckDefRequest) (*CheckDefPlan, error) {
 	if d.Root == "" {
 		return nil, errors.New("maintain: workspace root is empty")
@@ -165,7 +164,7 @@ func (c *checkDefPlanner) read() *pinfile.Document {
 	}
 
 	// The save replaces the file by rename, so every other name of a
-	// hard-linked file keeps the old bytes (P4-17).
+	// hard-linked file keeps the old bytes.
 	if b, ok := hardLinkBlock(c.deps.Root); ok {
 		c.block(b.Kind, b.Text, b.Route)
 
@@ -175,8 +174,8 @@ func (c *checkDefPlanner) read() *pinfile.Document {
 	return doc
 }
 
-// checkID applies the K1 ID rule to the request. It asks Validate, so
-// the rule and its text have one owner. It reports whether the ID
+// checkID applies the check ID rule to the request. It asks Validate,
+// so the rule and its text have one owner. It reports whether the ID
 // passes.
 func (c *checkDefPlanner) checkID() bool {
 	id := c.plan.Request.ID
@@ -238,8 +237,8 @@ func (c *checkDefPlanner) candidate(doc *pinfile.Document) {
 }
 
 // strict adds the impact on the bound pins and refuses a candidate that
-// fails the strict check tier (contract K1, writer rule). The impact
-// reads the lenient decodes, so it shows also next to a refusal.
+// fails the strict check tier. The impact reads the lenient decodes, so
+// it shows also next to a refusal.
 func (c *checkDefPlanner) strict(before *reviews.Config, after []byte) {
 	p := c.plan
 
@@ -424,8 +423,8 @@ func spliceCheckDef(data []byte, req CheckDefRequest, version int) (after []byte
 }
 
 // spliceVersion sets lesson_checks_version to 1. An absent key goes
-// where a new top-level key goes. An explicit 0 means absent (contract
-// K1), so its value changes in place, and the comment on its line stays.
+// where a new top-level key goes. An explicit 0 means absent, so its
+// value changes in place, and the comment on its line stays.
 func spliceVersion(data []byte) ([]byte, error) {
 	doc, err := parseCheckDef(data)
 	if err != nil {
@@ -495,12 +494,12 @@ func checkDefBlock(reason string, line int) error {
 	return fmt.Errorf("%s cannot be changed here: %s", pinfile.File, reason)
 }
 
-// verifyCheckDef is the safety net under the definition splice (contract
-// K1, writer table). It proves that the pin list keeps its bytes, that
-// every comment stays in order, that no other top-level key and no
-// other check changes, and that the reader reads exactly the requested
-// definition. It reads both texts again and uses no line number of the
-// splice, so a defect of the splice cannot hide from it.
+// verifyCheckDef is the safety net under the definition splice. It
+// proves that the pin list keeps its bytes, that every comment stays in
+// order, that no other top-level key and no other check changes, and
+// that the reader reads exactly the requested definition. It reads both
+// texts again and uses no line number of the splice, so a defect of the
+// splice cannot hide from it.
 func verifyCheckDef(before, after []byte, req CheckDefRequest) error {
 	was, err := parseCheckDef(before)
 	if err != nil {

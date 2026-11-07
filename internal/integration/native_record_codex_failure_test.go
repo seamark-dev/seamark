@@ -1,6 +1,6 @@
 package integration
 
-// Tests of the Codex turn verdict of scripts/capture-native.sh. They run
+// Tests of the Codex turn verdict of scripts/native-record.sh. They run
 // the shell functions codex_failure and codex_verdict alone on event
 // streams in the shape of `codex exec --json`. So they need no model, no
 // login, and no client CLI. These tests prove the script, not the client.
@@ -53,7 +53,7 @@ func recordScript(t *testing.T, program string, functions ...string) (output str
 	t.Helper()
 	requireTools(t, "sh", "python3")
 
-	script := captureNativeScript(t)
+	script := nativeRecordScript(t)
 
 	var defs strings.Builder
 	defs.WriteString("FAILED=0\nOK=0\nBLOCKED=0\nMODE=record\nCLIENT=codex\nSCENARIO=timing\n")
@@ -91,11 +91,11 @@ func writeEvents(t *testing.T, events string) string {
 	return path
 }
 
-// TestCaptureNativeCodexFailureReadsEvents proves that codex_failure
+// TestNativeRecordCodexFailureReadsEvents proves that codex_failure
 // takes the failure reason from the event stream: a usage limit gives
 // verdict 2, another turn.failed gives verdict 1 with its message on one
 // line, and a completed turn gives verdict 0 with no message.
-func TestCaptureNativeCodexFailureReadsEvents(t *testing.T) {
+func TestNativeRecordCodexFailureReadsEvents(t *testing.T) {
 	cases := []struct {
 		name, events, reason string
 		verdict              string
@@ -123,11 +123,11 @@ func TestCaptureNativeCodexFailureReadsEvents(t *testing.T) {
 	}
 }
 
-// TestCaptureNativeCodexVerdictStopsAtLimit proves that codex_verdict
+// TestNativeRecordCodexVerdictStopsAtLimit proves that codex_verdict
 // stops the record call at a usage limit, also when codex exits non-zero
 // with an empty stderr. The FAIL line names the limit message, the
 // summary exits 1, and the next turn never starts.
-func TestCaptureNativeCodexVerdictStopsAtLimit(t *testing.T) {
+func TestNativeRecordCodexVerdictStopsAtLimit(t *testing.T) {
 	events := writeEvents(t, codexLimitEvents)
 	stderr := writeEvents(t, "")
 
@@ -142,11 +142,11 @@ func TestCaptureNativeCodexVerdictStopsAtLimit(t *testing.T) {
 	assert.NotContains(t, got, "next turn starts")
 }
 
-// TestCaptureNativeCodexVerdictFailsAndPasses proves that codex_verdict
+// TestNativeRecordCodexVerdictFailsAndPasses proves that codex_verdict
 // prints the turn.failed message as the reason and lets the call go on,
 // fails a turn that exits 0 with turn.failed, keeps the stderr line when
 // the stream has no message, and passes a completed turn.
-func TestCaptureNativeCodexVerdictFailsAndPasses(t *testing.T) {
+func TestNativeRecordCodexVerdictFailsAndPasses(t *testing.T) {
 	cases := []struct {
 		name, events, stderr, status, want string
 	}{
@@ -177,12 +177,12 @@ func TestCaptureNativeCodexVerdictFailsAndPasses(t *testing.T) {
 	}
 }
 
-// TestCaptureNativeCodexRunnersStopAtLimit proves that each Codex turn
+// TestNativeRecordCodexRunnersStopAtLimit proves that each Codex turn
 // runner of the script judges its turn with codex_verdict. A stand-in
 // codex prints the recorded limit stream, writes nothing to stderr, and
 // exits 1. Each runner then stops the call before the next turn. The
 // guard runner first restores the enforce setup, which a stub records.
-func TestCaptureNativeCodexRunnersStopAtLimit(t *testing.T) {
+func TestNativeRecordCodexRunnersStopAtLimit(t *testing.T) {
 	cases := []struct {
 		name, scenario, call string
 		functions            []string

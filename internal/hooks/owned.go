@@ -1,17 +1,15 @@
 package hooks
 
 // This file removes the hooks that seamark owns from a hook document.
-// Lesson setup and capture setup both remove owned entries, so the rule
-// is not in the capture specs.
+// Lesson setup removes owned entries with it.
 
 // RemoveOwned deletes every command hook that seamark owns with one of
 // the markers, under any event of the document. Ownership follows
 // OwnedBySeamark, so the binary path can be any path of the seamark
 // binary, and a wrapper or a foreign command stays. RemoveOwned also
 // deletes a command that is exactly bin and a marker, whatever the
-// basename of bin. Merge applies the same rule to a spec with
-// OwnsExactCommand. So a run of a renamed build removes the entries
-// that the same build wrote. An empty bin adds no command. RemoveOwned
+// basename of bin. So a run of a renamed build removes the entries that
+// the same build wrote. An empty bin adds no command. RemoveOwned
 // deletes an entry that loses its last hook. It also deletes an event
 // that loses its last entry. The "hooks" object stays, also when it
 // becomes empty. Both clients document a hook file as that object, and

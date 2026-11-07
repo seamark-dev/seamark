@@ -47,8 +47,8 @@ func readOneFiring(t *testing.T, root string) reviews.Firing {
 }
 
 // legacyFields returns the fields of rec that a version 1 record has.
-// A writer of version 2 keeps them byte for byte (contract L3), so a
-// golden of the legacy shape compares them alone.
+// A writer of version 2 keeps them byte for byte, so a golden of the
+// legacy shape compares them alone.
 func legacyFields(rec reviews.Firing) reviews.Firing {
 	return reviews.Firing{
 		TS: rec.TS, Surface: rec.Surface, File: rec.File, Files: rec.Files, Tool: rec.Tool,

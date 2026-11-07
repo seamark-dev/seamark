@@ -168,10 +168,10 @@ func (p *pinsView) formLines(w, rows int) (lines []string, keep [2]int) {
 	return lines, out.keep
 }
 
-// checkRows renders the Mode and Check rows of an edit (contract K1,
-// writer row "Manual edit"). Each row names its stored value when the
-// draft changes it. The review shows the checker impact before the
-// save, so the rows need no preview of their own.
+// checkRows renders the Mode and Check rows of an edit. Each row names
+// its stored value when the draft changes it. The review shows the
+// checker impact before the save, so the rows need no preview of their
+// own.
 func (p *pinsView) checkRows(row func(int, string, []string, []string), issues []maintain.FieldIssue, vw int) {
 	t := p.st.theme
 	f := p.author.form
@@ -538,8 +538,8 @@ func (r *pinReview) planView(w int) ui.ModalOpts {
 }
 
 // impactLines shows the checker impact of an edit of a check or enforce
-// pin (contract K1, "Checker impact before apply"), before y. An edit of
-// an advisory pin has no block, so its review keeps its lines.
+// pin, before y. An edit of an advisory pin has no block, so its review
+// keeps its lines.
 func (r *pinReview) impactLines(w int) []string {
 	if len(r.preview.Impact) == 0 {
 		return nil

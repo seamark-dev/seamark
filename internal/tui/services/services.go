@@ -92,7 +92,7 @@ type Reader interface {
 	// Stats reads the lesson delivery statistics.
 	Stats() lessonstats.Snapshot
 	// Delivery builds the delivery/1 reading. It opens sources read-only,
-	// assembles nothing, and calls no model. Source failures are report
+	// writes nothing, and calls no model. Source failures are report
 	// data; only a pin reference that cannot select one identity fails.
 	Delivery(req lessonreport.Request) (lessonreport.Report, error)
 	// Sample runs the lesson selection of one surface for explicit
@@ -195,9 +195,9 @@ type Maintenance interface {
 	// with ErrForeignRoot.
 	CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResult, error)
 	// PlanCheckDef plans the edit of one check definition: the
-	// checks.<id> entry and lesson_checks_version (contract K1). It
-	// writes nothing and takes no lock. A foreign root and a closed
-	// write gate are blockers of the plan.
+	// checks.<id> entry and lesson_checks_version. It writes nothing and
+	// takes no lock. A foreign root and a closed write gate are blockers
+	// of the plan.
 	PlanCheckDef(req maintain.CheckDefRequest) (*maintain.CheckDefPlan, error)
 	// CommitCheckDef writes exactly the reviewed definition plan under
 	// the engine lock. It never changes a pin and never writes the

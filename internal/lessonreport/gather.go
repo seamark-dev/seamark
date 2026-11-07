@@ -17,9 +17,9 @@ import (
 // become report states. Only a pin reference can return an error.
 // It never takes a writer lock or calls a model.
 //
-// No source read takes the context: each source is a read of local
-// files, and the report reads no capture archive. The parameter stays,
-// so every surface calls Gather in the same form.
+// No source read takes the context, because each source is a read of
+// local files. The parameter stays, so every surface calls Gather in the
+// same form.
 func Gather(_ context.Context, req Request) (Report, error) {
 	return gather(req, gatherSources{
 		audit: reviews.ReadAuditPrefix, checks: lessoncheck.ReadAuditPrefix,

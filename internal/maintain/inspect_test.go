@@ -573,10 +573,10 @@ func TestInspectWritesNothing(t *testing.T) {
 }
 
 // TestInspectReadsPinChecks covers the lesson-check reading of the
-// inspection (contract K1). Each pin carries its requested mode, its
-// check with the predicate, its scope, its listing, and its own errors.
-// A file without a lesson-check key reads Uses false, so the console
-// keeps the bytes of such a repository.
+// inspection. Each pin carries its requested mode, its check with the
+// predicate, its scope, its listing, and its own errors. A file without
+// a lesson-check key reads Uses false, so the console keeps the bytes
+// of such a repository.
 func TestInspectReadsPinChecks(t *testing.T) {
 	t.Run("a file without lesson-check keys", func(t *testing.T) {
 		f := inspectFixture(t)

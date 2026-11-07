@@ -17,11 +17,11 @@ type pinCounts struct {
 	enforce, check, advisory int
 }
 
-// gatherLessonChecks fills the lesson-check report of the status
-// (contract K10). It reads lessons.yaml once and joins it with the
-// inspection of the clients. The report is set only when a lesson-check
-// or exploration hook is installed for some client, or lessons.yaml uses
-// a lesson-check key. So the text and the JSON of a repository without
+// gatherLessonChecks fills the lesson-check report of the status. It
+// reads lessons.yaml once and joins it with the inspection of the
+// clients. The report is set only when a lesson-check or exploration
+// hook is installed for some client, or lessons.yaml uses a
+// lesson-check key. So the text and the JSON of a repository without
 // them keep their bytes.
 func gatherLessonChecks(s *Status, root string, self integration.BinaryIdentity) {
 	cfg, errs := lessoncheck.LoadForCapability(root)
@@ -39,8 +39,8 @@ func gatherLessonChecks(s *Status, root string, self integration.BinaryIdentity)
 }
 
 // printLessonChecks renders the lesson checks block after the clients
-// block: one line per client, then the pins line (contract K10). A
-// status without the report prints nothing.
+// block: one line per client, then the pins line. A status without the
+// report prints nothing.
 func printLessonChecks(w io.Writer, s *Status) {
 	r := s.LessonChecks
 	if r == nil {
@@ -64,7 +64,7 @@ func printLessonChecks(w io.Writer, s *Status) {
 // of the pre-write and post-edit paths, and the exploration state. The
 // paths of a client without a lesson-check hook read as the mode off
 // alone. A client without the structured Read path reads exploration
-// inactive (§5 row 42). Its report path keeps the state unsupported.
+// inactive. Its report path keeps the state unsupported.
 //
 // documentErr is the reason that the hook document cannot be read. The
 // mode text then says unreadable, in the words of doctor, because the

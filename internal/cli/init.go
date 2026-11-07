@@ -284,15 +284,15 @@ type initRun struct {
 	printOnly    bool
 	approveTools bool
 	// lessonChecks and lessonExploration are the lesson-check flags;
-	// empty keeps the installed choice (contract K10).
+	// empty keeps the installed choice.
 	lessonChecks      string
 	lessonExploration string
 }
 
-// lessonCheckFlagError checks the values of the two lesson-check flags
-// (contract K10). An explicit empty value is an error too: the empty
-// intent means "keep the installed choice", and a script that passes an
-// unset variable must learn that its flag did nothing.
+// lessonCheckFlagError checks the values of the two lesson-check flags.
+// An explicit empty value is an error too: the empty intent means "keep
+// the installed choice", and a script that passes an unset variable
+// must learn that its flag did nothing.
 func lessonCheckFlagError(cmd *cobra.Command, checks, exploration string) error {
 	switch {
 	case cmd.Flags().Changed("lesson-checks") &&

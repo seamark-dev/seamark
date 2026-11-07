@@ -19,12 +19,12 @@ import (
 )
 
 // The tests of the lesson checks block of status and of the
-// lesson_checks key of status --json (contract K10). Every root is a
-// temporary workspace. The hook binary is a link named seamark to the
-// test binary, so the report reads it as the running binary.
+// lesson_checks key of status --json. Every root is a temporary
+// workspace. The hook binary is a link named seamark to the test
+// binary, so the report reads it as the running binary.
 
-// statusLessonsYAML is the K10 example: one enforce pin and four
-// advisory pins.
+// statusLessonsYAML is the example: one enforce pin and four advisory
+// pins.
 const statusLessonsYAML = `lesson_checks_version: 1
 checks:
   frozen-assets:
@@ -90,13 +90,13 @@ func statusText(t *testing.T, st *store.Store, root string) (s *Status, text str
 	return s, b.String(), doc
 }
 
-// TestStatusLessonChecksBlockAndJSON proves the lesson checks block of
-// contract K10 and the lesson_checks key of status --json. A repository
-// without lesson-check hooks and keys keeps its text and JSON. The block
+// TestStatusLessonChecksBlockAndJSON proves the lesson checks block and
+// the lesson_checks key of status --json. A repository without
+// lesson-check hooks and keys keeps its text and JSON. The block
 // follows the clients block, names each client with its installed mode
 // and path states, reads exploration inactive for a client without the
 // structured Read path, and ends with the pins line. The clients[] JSON
-// gains no key (AC-34).
+// gains no key.
 func TestStatusLessonChecksBlockAndJSON(t *testing.T) {
 	seamark := statusSeamark(t)
 
@@ -110,7 +110,7 @@ func TestStatusLessonChecksBlockAndJSON(t *testing.T) {
 		assert.NotContains(t, doc, "lesson_checks")
 	})
 
-	t.Run("the K10 block", func(t *testing.T) {
+	t.Run("the lesson checks block", func(t *testing.T) {
 		st, root := seededStore(t)
 		require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(statusLessonsYAML), 0o600))
 		statusInstall(t, root, seamark, integration.ClientSetup{

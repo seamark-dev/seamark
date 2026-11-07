@@ -101,10 +101,10 @@ type Plan struct {
 	// no item is ready.
 	Change *pinfile.Change
 	// Impact holds the checker impact of each edited pin that is check or
-	// enforce (contract K1). A retarget and a replacement fill it from
-	// Change, so a surface shows it before the apply. It is empty for an
-	// advisory pin, a prune, and a plan without Change. Commit compares
-	// Change, and Impact follows from Change alone.
+	// enforce. A retarget or a scope edit fills it from Change, so a
+	// surface shows it before the apply. It is empty for an advisory pin,
+	// a prune, and a plan without Change. Commit compares Change, and
+	// Impact follows from Change alone.
 	Impact []lessoncheck.Impact
 	// Retarget and Supersede are the guarded ledger changes of the ready
 	// items, in item order.
@@ -499,7 +499,7 @@ func (pl *planner) edit() error {
 	pl.plan.Change = change
 
 	// A prune removes the pin, so no check evaluates it after the edit.
-	// Contract K1 shows the impact of a scope, note, or binding change.
+	// A retarget changes the scope, so its plan shows the checker impact.
 	if pl.plan.Action == ActionRetarget {
 		impact, err := checkImpact(pl.doc, change)
 		if err != nil {
@@ -513,10 +513,9 @@ func (pl *planner) edit() error {
 }
 
 // checkImpact returns the checker impact of the rewrites and retargets
-// in change (contract K1). It decodes both files with the lenient reader,
-// because the strict tier of pinfile.Prepare runs only at the write. A
-// decode error is returned: a pin that cannot be read must never pass
-// as advisory.
+// in change. It decodes both files with the lenient reader, because the
+// strict tier of pinfile.Prepare runs only at the write. A decode error
+// is returned: a pin that cannot be read must never pass as advisory.
 //
 // A pin entry is its position in doc.Entries. The listing skips null
 // items, as reviews.ParseConfig does, so that position is the position

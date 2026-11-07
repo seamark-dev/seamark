@@ -101,7 +101,7 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 			hunk, movable = kind, kind == patchUpdateFile
 		case strings.HasPrefix(line, patchEnvironment):
 			// The line names an environment that is not the primary one.
-			// No native capture shows that the event cwd belongs to that
+			// No native recording shows that the event cwd belongs to that
 			// environment, so no path of the patch can be resolved.
 			return nil, fmt.Errorf("%w: the patch names an environment", ErrUnsupportedGrammar)
 		case strings.HasPrefix(line, patchHeaderPrefix):

@@ -13,27 +13,26 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 )
 
-// The K2 vectors of the spec example pin and of the second example pin.
-// contracts.md lists them, and they were recomputed from the §1.2 scheme.
+// The version vectors of the example pin and of the second example pin.
+// They were computed outside Go from the compose scheme.
 const (
-	specIdentity   = "3215e7b483d134443a8204970767f1a0057d4726f235e946b6c0c27abd8cd055"
-	specRef        = "3215e7b483d1"
-	specVersion    = "ae4f17f75413b37e4142d80b529154f6166dd2bf155e6eac3dc86dc040aa7a7e"
-	specVersionOff = "e79201579c97670797201977d5d764110397a5eaf44ebb056646ee5a32817d6f"
-	strictIdentity = "ed5d4af5de3a230a089f19fb7de4c2b04a512cbec6dfb023eabc944d93a82488"
-	strictRef      = "ed5d4af5de3a"
-	strictVersion  = "f128e3e12b9d12825e8f7a4396ebb003b517d1e162955edb04bf147a5aa89897"
+	exampleIdentity   = "3215e7b483d134443a8204970767f1a0057d4726f235e946b6c0c27abd8cd055"
+	exampleRef        = "3215e7b483d1"
+	exampleVersion    = "ae4f17f75413b37e4142d80b529154f6166dd2bf155e6eac3dc86dc040aa7a7e"
+	exampleVersionOff = "e79201579c97670797201977d5d764110397a5eaf44ebb056646ee5a32817d6f"
+	strictIdentity    = "ed5d4af5de3a230a089f19fb7de4c2b04a512cbec6dfb023eabc944d93a82488"
+	strictRef         = "ed5d4af5de3a"
+	strictVersion     = "f128e3e12b9d12825e8f7a4396ebb003b517d1e162955edb04bf147a5aa89897"
 )
 
-// specPin is the spec example pin without mode and check (spec
-// "Configuration and executable checks").
-var specPin = PinRule{
+// examplePin is the example pin without mode and check.
+var examplePin = PinRule{
 	Rule:   "frozen-assets",
 	Region: "generated/",
 	Note:   "Changes to these files require a maintainer-managed update.",
 }
 
-// strictPin is the second example pin of contracts L1, L3, and L4.
+// strictPin is the second example pin.
 var strictPin = PinRule{
 	Rule:   "keep-parser-strict",
 	Region: "internal/parse",
@@ -41,15 +40,15 @@ var strictPin = PinRule{
 }
 
 // TestPinIdentityIgnoresModeAndCheck proves that the firing identity of
-// a pin stays as 96e14ef computes it (contracts K2). The goldens are the
-// spec example pin: NewPinKey, PinIdentity, and the delivery digest of
-// its rendered lesson. The firing log joins on these values, so a change
-// here splits the history of every installed pin. The edit hook state
-// reads the digest for a mined lesson only: it keys a pin by its version
-// (TestDeliveredPinKeyVector), so a mode change delivers the pin again.
-// The variants add a mode and a check, also values that Validate refuses,
-// because the lenient readers see such values too. The goldens and the
-// identity digest stay the same for every variant.
+// a pin stays as it was before the lesson-check keys existed. The
+// goldens are the example pin: NewPinKey, PinIdentity, and the delivery
+// digest of its rendered lesson. The firing log joins on these values,
+// so a change here splits the history of every installed pin. The edit
+// hook state reads the digest for a mined lesson only: it keys a pin by
+// its version (TestDeliveredPinKeyVector), so a mode change delivers
+// the pin again. The variants add a mode and a check, also values that
+// Validate refuses, because the lenient readers see such values too.
+// The goldens and the identity digest stay the same for every variant.
 func TestPinIdentityIgnoresModeAndCheck(t *testing.T) {
 	const deliveryDigest = "55057fe1065d828de2fe3cf35de5786fd67cb4a4f40f439d59119e618e42cbce"
 
@@ -59,7 +58,7 @@ func TestPinIdentityIgnoresModeAndCheck(t *testing.T) {
 		Symptom: "frozen-assets — changes to these files require a maintainer-managed update.",
 	}
 
-	// The spec example pin (spec "Configuration and executable checks").
+	// The example pin.
 	spec := PinRule{
 		Rule:   "frozen-assets",
 		Region: "generated/",
@@ -86,59 +85,59 @@ func TestPinIdentityIgnoresModeAndCheck(t *testing.T) {
 		assert.Equal(t, wantKey, NewPinKey(p.Rule, p.Region, p.Regions))
 		assert.Equal(t, wantIdentity, PinIdentity(p))
 		assert.Equal(t, deliveryDigest, lessonDeliveryDigest(pinLesson(p)))
-		assert.Equal(t, specIdentity, PinIdentityDigest(NewPinKey(p.Rule, p.Region, p.Regions)))
+		assert.Equal(t, exampleIdentity, PinIdentityDigest(NewPinKey(p.Rule, p.Region, p.Regions)))
 	}
 }
 
 // TestDeliveredPinKeyVector fixes the key of a delivered pin. The value
-// is the SHA-256 of compose("delivered-pin/1", specVersion), computed
+// is the SHA-256 of compose("delivered-pin/1", exampleVersion), computed
 // outside Go. A new value makes every installed context repeat its pins.
 func TestDeliveredPinKeyVector(t *testing.T) {
 	assert.Equal(t, "9e521d3dff6b65a8e7f6c2a8782fe36b2c8ab98b8acc0f55b4866e2ef2b4d81a",
-		DeliveryItem{Lesson: pinLesson(specPin), PinVersion: specVersion}.digest())
+		DeliveryItem{Lesson: pinLesson(examplePin), PinVersion: exampleVersion}.digest())
 
-	assert.Equal(t, lessonDeliveryDigest(pinLesson(specPin)), DeliveryItem{Lesson: pinLesson(specPin)}.digest(),
+	assert.Equal(t, lessonDeliveryDigest(pinLesson(examplePin)), DeliveryItem{Lesson: pinLesson(examplePin)}.digest(),
 		"an item without a version keeps its content key")
 }
 
-// TestPinVersionVectors asserts the K2 vector table. The configs come
+// TestPinVersionVectors asserts the version vectors. The configs come
 // from ParseConfig, the one lenient loader that the hook and the plan
 // freeze share. The last assertions prove that the compose copy of this
 // file gives the bytes of the inline loop in contextDigest.
 func TestPinVersionVectors(t *testing.T) {
 	assert.Equal(t, "3:pin13:frozen-assets9:generated", compose("pin", "frozen-assets", "generated"))
 
-	specKey := NewPinKey(specPin.Rule, specPin.Region, specPin.Regions)
-	assert.Equal(t, specIdentity, PinIdentityDigest(specKey))
+	exampleKey := NewPinKey(examplePin.Rule, examplePin.Region, examplePin.Regions)
+	assert.Equal(t, exampleIdentity, PinIdentityDigest(exampleKey))
 
 	assert.Equal(t, "9ceb9cddb5053035c0d9779ffab326503647b5295cb3f43791d5fe1e9be9cf7a",
 		CheckVersion(CheckDef{Kind: "forbid-path-change/1"}))
 	assert.Equal(t, "c044c91d812033b1da35c51ad301b6a3a06b09503b8e1126b392c1d643d7aa3b",
 		CheckVersion(CheckDef{Kind: "no-added-pattern/1", Pattern: `TODO\(`}))
 
-	enforced, err := ParseConfig([]byte(specExample))
+	enforced, err := ParseConfig([]byte(exampleConfig))
 	require.NoError(t, err)
 	require.Len(t, enforced.Pin, 1)
-	assert.Equal(t, specVersion, enforced.PinVersion(enforced.Pin[0]))
-	assert.Equal(t, specRef, enforced.ShortPinRef(specKey))
+	assert.Equal(t, exampleVersion, enforced.PinVersion(enforced.Pin[0]))
+	assert.Equal(t, exampleRef, enforced.ShortPinRef(exampleKey))
 
-	plain := &Config{Pin: []PinRule{specPin}}
-	assert.Equal(t, specVersionOff, plain.PinVersion(specPin))
+	plain := &Config{Pin: []PinRule{examplePin}}
+	assert.Equal(t, exampleVersionOff, plain.PinVersion(examplePin))
 
 	strictKey := NewPinKey(strictPin.Rule, strictPin.Region, strictPin.Regions)
-	both := &Config{Pin: []PinRule{specPin, strictPin}}
+	both := &Config{Pin: []PinRule{examplePin, strictPin}}
 	assert.Equal(t, strictIdentity, PinIdentityDigest(strictKey))
 	assert.Equal(t, strictRef, both.ShortPinRef(strictKey))
 	assert.Equal(t, strictVersion, both.PinVersion(strictPin))
 
 	// An unknown mode and an undefined check keep a deterministic
-	// version with a marked part (recomputed from the §1.2 scheme).
-	unknownMode := specPin
+	// version with a marked part (computed from the compose scheme).
+	unknownMode := examplePin
 	unknownMode.Mode = "strict"
 	assert.Equal(t, "614d25b44eb82f4e81dff0a833eeba45174a11c8556ed1b032a1b1c716a0e432",
 		plain.PinVersion(unknownMode))
 
-	unresolved := specPin
+	unresolved := examplePin
 	unresolved.Mode, unresolved.Check = "check", "no-such"
 	assert.Equal(t, "8e3fcd3f1f3db466d695e87d4f7a93d0f619abe381de45692189c7c68648b847",
 		plain.PinVersion(unresolved))
@@ -149,9 +148,9 @@ func TestPinVersionVectors(t *testing.T) {
 		composeDigest("context", "/repo", "a", "b\x00c"))
 }
 
-// TestGuidanceDigestVectors asserts the guidance/1 vectors of K2. File
-// order, budgets, mute, threshold, hook_delivery, and unreferenced checks
-// are not parts, so they keep the digest.
+// TestGuidanceDigestVectors asserts the guidance/1 vectors. File order,
+// budgets, mute, threshold, hook_delivery, and unreferenced checks are
+// not parts, so they keep the digest.
 func TestGuidanceDigestVectors(t *testing.T) {
 	const (
 		noPins      = "d977f991ac883e37bdee2be1d3f606d34e22e18002dcb4cffd01ef59119e0c5f"
@@ -196,9 +195,9 @@ checks:
 	assert.Equal(t, noPins, parse(t, "").GuidanceDigest())
 	assert.Equal(t, noPins, (&Config{}).GuidanceDigest())
 	assert.Equal(t, plainOnly, parse(t, "pin:\n"+plainEntry).GuidanceDigest())
-	assert.Equal(t, enforceOnly, parse(t, specExample).GuidanceDigest())
+	assert.Equal(t, enforceOnly, parse(t, exampleConfig).GuidanceDigest())
 	assert.Equal(t, enforceOnly, parse(t, checks+"pin:\n"+enforceEntry).GuidanceDigest(),
-		"the unreferenced no-todo check of the spec example is not a part")
+		"the unreferenced no-todo check of the example is not a part")
 
 	assert.Equal(t, duplicates, parse(t, checks+"pin:\n"+plainEntry+enforceEntry).GuidanceDigest())
 	assert.Equal(t, duplicates, parse(t, checks+"pin:\n"+enforceEntry+plainEntry).GuidanceDigest(),
@@ -213,12 +212,13 @@ change_budget: 2
 mute:
   - rule: E501
     region: scripts
-`+specExample+strictEntry).GuidanceDigest(), "budgets, mute, threshold, and hook_delivery are not parts")
+`+exampleConfig+strictEntry).GuidanceDigest(), "budgets, mute, threshold, and hook_delivery are not parts")
 }
 
-// TestPinVersionCosmeticVersusSemantic walks the AC-16 table of K2. Each
-// case parses two byte-different lessons.yaml texts with one pin and
-// compares the pin version and the pin-ref of that pin.
+// TestPinVersionCosmeticVersusSemantic walks the table of cosmetic and
+// semantic edits. Each case parses two byte-different lessons.yaml
+// texts with one pin and compares the pin version and the pin-ref of
+// that pin.
 func TestPinVersionCosmeticVersusSemantic(t *testing.T) {
 	const checks = `lesson_checks_version: 1
 checks:
@@ -401,13 +401,12 @@ func onePinRefAndVersion(t *testing.T, text string) (ref, version string) {
 	return cfg.ShortPinRef(NewPinKey(p.Rule, p.Region, p.Regions)), cfg.PinVersion(p)
 }
 
-// TestResolvePinRef proves the input rule and the four K2 failures with
-// their exact messages. The rules r1080792 and r8398215 (region x) were
-// found by a search: their identity digests share the first 12 hex
-// characters, so they prove the prefix extension of ShortPinRef. The
-// missing message is asserted by its head only (plan table (e)): the
-// final form appends the --delivery clause at the end in milestone P5,
-// and this test then passes unchanged.
+// TestResolvePinRef proves the input rule and the four resolution
+// failures with their exact messages. The rules r1080792 and r8398215
+// (region x) were found by a search: their identity digests share the
+// first 12 hex characters, so they prove the prefix extension of
+// ShortPinRef. The missing message is asserted by its head only, so a
+// clause at its end keeps the test valid.
 func TestResolvePinRef(t *testing.T) {
 	const (
 		nearA = "95c42e0485c95ac582fdd7385cd4d9af17b1386a1e27d2012676886eaf51660f"
@@ -419,7 +418,7 @@ func TestResolvePinRef(t *testing.T) {
 	keyA := NewPinKey(pinA.Rule, pinA.Region, pinA.Regions)
 	keyB := NewPinKey(pinB.Rule, pinB.Region, pinB.Regions)
 
-	cfg := &Config{Pin: []PinRule{specPin, strictPin, pinA, pinB}}
+	cfg := &Config{Pin: []PinRule{examplePin, strictPin, pinA, pinB}}
 
 	resolve := func(t *testing.T, cfg *Config, ref string) *PinRefError {
 		t.Helper()
@@ -436,14 +435,14 @@ func TestResolvePinRef(t *testing.T) {
 
 	t.Run("a unique prefix names one entry", func(t *testing.T) {
 		for ref, want := range map[string]int{
-			specRef:               0,
-			specIdentity:          0,
-			"  3215E7B483D1 \t":   0,
-			specRef[:MinPinRef]:   0,
-			strictRef:             1,
-			"95c42e0485c95":       2,
-			"95c42e0485c90":       3,
-			nearB[:ShownPinRef+2]: 3,
+			exampleRef:             0,
+			exampleIdentity:        0,
+			"  3215E7B483D1 \t":    0,
+			exampleRef[:MinPinRef]: 0,
+			strictRef:              1,
+			"95c42e0485c95":        2,
+			"95c42e0485c90":        3,
+			nearB[:ShownPinRef+2]:  3,
 		} {
 			got, err := cfg.ResolvePinRef(ref)
 			require.NoError(t, err, ref)
@@ -456,7 +455,7 @@ func TestResolvePinRef(t *testing.T) {
 		assert.Equal(t, nearB, PinIdentityDigest(keyB))
 		assert.Equal(t, nearA[:ShownPinRef+1], cfg.ShortPinRef(keyA))
 		assert.Equal(t, nearB[:ShownPinRef+1], cfg.ShortPinRef(keyB))
-		assert.Equal(t, specRef, cfg.ShortPinRef(NewPinKey(specPin.Rule, specPin.Region, nil)))
+		assert.Equal(t, exampleRef, cfg.ShortPinRef(NewPinKey(examplePin.Rule, examplePin.Region, nil)))
 
 		alone := &Config{Pin: []PinRule{pinA}}
 		assert.Equal(t, nearA[:ShownPinRef], alone.ShortPinRef(keyA), "without the near pin the shown length is enough")
@@ -508,14 +507,14 @@ func TestResolvePinRef(t *testing.T) {
 	t.Run("duplicate entries", func(t *testing.T) {
 		// Entry 3 has another note and another region spelling, but the
 		// same rule and region set, so it shares the identity of entry 1.
-		twin := specPin
+		twin := examplePin
 		twin.Region, twin.Note = "generated", "Another note."
 
-		dup := &Config{Pin: []PinRule{specPin, strictPin, twin}}
-		assert.Equal(t, specRef, dup.ShortPinRef(NewPinKey(twin.Rule, twin.Region, nil)),
+		dup := &Config{Pin: []PinRule{examplePin, strictPin, twin}}
+		assert.Equal(t, exampleRef, dup.ShortPinRef(NewPinKey(twin.Rule, twin.Region, nil)),
 			"duplicate entries share one digest and keep the shown length")
 
-		refErr := resolve(t, dup, specRef)
+		refErr := resolve(t, dup, exampleRef)
 		assert.Equal(t, PinRefDuplicateEntries, refErr.Kind)
 		assert.Equal(t, []int{1, 3}, refErr.Entries)
 		assert.Equal(t, "pin reference 3215e7b483d1 names 2 entries with the same rule and regions (pins 1,3); "+
@@ -548,10 +547,10 @@ func TestShortPinRefsMatchShortPinRef(t *testing.T) {
 	pinA := PinRule{Rule: "r1080792", Region: "x"}
 	pinB := PinRule{Rule: "r8398215", Region: "x"}
 
-	twin := specPin
+	twin := examplePin
 	twin.Region, twin.Note = "generated", "Another note."
 
-	cfg := &Config{Pin: []PinRule{specPin, pinA, strictPin, pinB, twin}}
+	cfg := &Config{Pin: []PinRule{examplePin, pinA, strictPin, pinB, twin}}
 	refs := cfg.ShortPinRefs()
 
 	assert.Len(t, refs, 4, "duplicate entries share one key")
@@ -569,7 +568,7 @@ func TestShortPinRefsMatchShortPinRef(t *testing.T) {
 		assert.Equal(t, scanRef(digests[i], digests), refs[key], "entry %d", i+1)
 	}
 
-	assert.Equal(t, specRef, refs[NewPinKey(twin.Rule, twin.Region, nil)],
+	assert.Equal(t, exampleRef, refs[NewPinKey(twin.Rule, twin.Region, nil)],
 		"a duplicate entry keeps the shown length")
 	assert.Len(t, refs[NewPinKey(pinA.Rule, pinA.Region, nil)], ShownPinRef+1, "the near pair extends the reference")
 	assert.Empty(t, (&Config{}).ShortPinRefs(), "a config without pins has no references")
@@ -622,7 +621,7 @@ func TestShortRefEqualsPrefixScan(t *testing.T) {
 	})
 
 	t.Run("an empty list gives the shown length", func(t *testing.T) {
-		assert.Equal(t, specRef, shortRef(specIdentity, nil))
+		assert.Equal(t, exampleRef, shortRef(exampleIdentity, nil))
 	})
 }
 

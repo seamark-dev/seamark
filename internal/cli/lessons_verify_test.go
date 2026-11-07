@@ -23,10 +23,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// The tests of lessons --verify (plan step P1.9; contracts K4, K5, §1.3,
-// §4). Every test builds a temporary repository and runs the command
-// under the AC-1 sentinel. Nothing reads the repository of this
-// checkout.
+// The tests of lessons --verify. Every test builds a temporary
+// repository and runs the command under the invoker sentinel. Nothing
+// reads the repository of this checkout.
 
 // verifyLessonsYAML arms two pins. frozen-assets forbids every change
 // under generated/ (enforce), and no-todo forbids an added TODO( line
@@ -54,7 +53,7 @@ pin:
     note: Compare errors with errors.Is.
 `
 
-// The exact stderr lines of contracts K5 for the fixture.
+// The exact stderr lines of lessons --verify for the fixture.
 const (
 	verifyViolationLine = "seamark: lesson check violation: 1 of 2 evaluated pins (see the report)"
 	verifyUnknownLine   = "seamark: lesson checks incomplete: 1 unknown; rerun seamark lessons --verify"
@@ -63,11 +62,10 @@ const (
 // verifyFixture builds a committed repository under dir with
 // verifyLessonsYAML, the sentinel, and a .gitignore that ignores
 // generated/*.log. The .gitignore also holds the .seamark carve-outs
-// that seamark init writes. Since milestone P4, every verification
-// appends a record to .seamark/lesson-check-audit.jsonl (contract K5),
-// and a later run must not see that file as a change. It returns the
-// git top level, which is dir with its symbolic links resolved, because
-// the rerun commands name that path.
+// that seamark init writes. Every verification appends a record to
+// .seamark/lesson-check-audit.jsonl, and a later run must not see that
+// file as a change. It returns the git top level, which is dir with its
+// symbolic links resolved, because the rerun commands name that path.
 func verifyFixture(t *testing.T, dir string) (root string, sentinel *invokerSentinel) {
 	t.Helper()
 
@@ -260,13 +258,13 @@ func seamarkLines(stderr string) []string {
 	return lines
 }
 
-// TestLessonsVerifyExitCodes proves the exit codes of contracts K5 and
-// §4.2 through the real Execute, in a child process: 0 for passed,
+// TestLessonsVerifyExitCodes proves the exit codes of lessons --verify
+// through the real Execute, in a child process: 0 for passed,
 // no-applicable-checks, and no-executable-checks; 2 for a violation,
 // also with an unknown result; 1 for an unknown result, a tier-1 and a
-// tier-2 configuration error (ruling P1-b), a root error, and a --file
-// error. It also checks the stderr line of each case and the error that
-// the in-process run returns.
+// tier-2 configuration error, a root error, and a --file error. It also
+// checks the stderr line of each case and the error that the in-process
+// run returns.
 func TestLessonsVerifyExitCodes(t *testing.T) {
 	if encoded, ok := os.LookupEnv(verifyProcessEnv); ok {
 		runAsSeamark(encoded)
@@ -446,9 +444,9 @@ func TestLessonsVerifyExitCodes(t *testing.T) {
 	})
 }
 
-// TestLessonsVerifyJSON proves the --json output (contract K5): stdout
-// holds only the lesson-verification/1 document that Verify returns,
-// also for a configuration error, and nothing on a usage or root error.
+// TestLessonsVerifyJSON proves the --json output: stdout holds only the
+// lesson-verification/1 document that Verify returns, also for a
+// configuration error, and nothing on a usage or root error.
 func TestLessonsVerifyJSON(t *testing.T) {
 	root, sentinel := verifyFixture(t, t.TempDir())
 
@@ -504,7 +502,7 @@ func TestLessonsVerifyJSON(t *testing.T) {
 		got := verifyDocument(t, stdout)
 		assert.Equal(t, lessoncheck.SelectionExplicitPaths, got.Selection.Kind)
 		assert.Equal(t, []string{"generated/a.txt"}, got.Selection.Paths)
-		assert.Equal(t, "seamark lessons --verify --file "+asset, got.Rerun, "the rerun names the absolute path (§1.3)")
+		assert.Equal(t, "seamark lessons --verify --file "+asset, got.Rerun, "the rerun names the absolute path")
 	})
 
 	t.Run("a configuration error still prints the document", func(t *testing.T) {
@@ -562,12 +560,12 @@ func TestLessonsVerifyJSON(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyFileRules proves the --file rules of contracts K4 and
-// §1.3: an absolute or relative value inside the repository selects its
-// path, several values select the sorted set, an ignored path named by
-// --file is checked, and a value outside the repository or naming the
-// whole repository is refused with the exact text. Without --verify,
-// --file keeps one value.
+// TestLessonsVerifyFileRules proves the --file rules: an absolute or
+// relative value inside the repository selects its path, several values
+// select the sorted set, an ignored path named by --file is checked,
+// and a value outside the repository or naming the whole repository is
+// refused with the exact text. Without --verify, --file keeps one
+// value.
 func TestLessonsVerifyFileRules(t *testing.T) {
 	root, sentinel := verifyFixture(t, t.TempDir())
 
@@ -674,11 +672,11 @@ func TestLessonsVerifyFileRules(t *testing.T) {
 }
 
 // TestLessonsVerifyFileFromSubdirectory proves that a relative --file
-// value starts at the process directory (contracts K4): run from src/,
-// handler.go selects src/handler.go. The test does not resolve the
-// temporary directory. On macOS the process directory then reads
-// /var/... while the git top level reads /private/var/..., the shape a
-// symbolic link above a real repository gives.
+// value starts at the process directory: run from src/, handler.go
+// selects src/handler.go. The test does not resolve the temporary
+// directory. On macOS the process directory then reads /var/... while
+// the git top level reads /private/var/..., the shape a symbolic link
+// above a real repository gives.
 func TestLessonsVerifyFileFromSubdirectory(t *testing.T) {
 	dir := t.TempDir()
 	root, sentinel := verifyFixture(t, dir)
@@ -735,15 +733,15 @@ const verifyGenPin = `  - rule: frozen-gen
     check: frozen-assets
 `
 
-// TestLessonsVerifyFileThroughALinkedRoot proves contracts §1.3 and K4
-// when the process directory reaches the repository through a link. The
-// git top level then differs from the process directory. Only that root
+// TestLessonsVerifyFileThroughALinkedRoot proves the path rules when
+// the process directory reaches the repository through a link. The git
+// top level then differs from the process directory. Only that root
 // alias is matched: a deleted path still compares, a link below the root
 // is never followed, and a linked parent keeps the limitation
 // path-through-link. A relative value starts at the resolved process
-// directory (P1 fix round F-A). The absolute values that name the alias
-// still test the root alias match. The test builds its own alias, so it
-// also runs on Linux, where no /var link exists.
+// directory. The absolute values that name the alias still test the
+// root alias match. The test builds its own alias, so it also runs on
+// Linux, where no /var link exists.
 func TestLessonsVerifyFileThroughALinkedRoot(t *testing.T) {
 	root, sentinel := verifyFixture(t, t.TempDir())
 
@@ -840,7 +838,7 @@ func TestLessonsVerifyFileThroughALinkedRoot(t *testing.T) {
 
 		// The tree is clean, and the producer does not look through the
 		// link, so it observes no difference: the forbid pin reads unknown,
-		// never violation (review fixes snapshot-git:F5, checkers:K3-F2).
+		// never violation.
 		frozen := result(t, got, "frozen-gen")
 		assert.Equal(t, lessoncheck.OutcomeUnknown, frozen.Outcome)
 		assert.Equal(t, lessoncheck.ReasonContentUnavailable, frozen.Reason)
@@ -868,13 +866,12 @@ func TestLessonsVerifyFileThroughALinkedRoot(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyFileFromALinkedProcessDirectory proves fix item F-A
-// of the P1 review (contracts K4 Addition of the P1 fix round). The CLI
-// resolves the links of the process directory before the inside check,
-// as capture resolves the hook cwd (correction-learning F6). So a link
-// from outside the repository into it gives paths inside the repository.
-// A link in the tree that leads outside gives the outside error. The
-// value itself stays lexical, so a link that it names is never followed.
+// TestLessonsVerifyFileFromALinkedProcessDirectory proves that the CLI
+// resolves the links of the process directory before the inside check.
+// So a link from outside the repository into it gives paths inside the
+// repository. A link in the tree that leads outside gives the outside
+// error. The value itself stays lexical, so a link that it names is
+// never followed.
 func TestLessonsVerifyFileFromALinkedProcessDirectory(t *testing.T) {
 	root, sentinel := verifyFixture(t, t.TempDir())
 
@@ -892,9 +889,9 @@ func TestLessonsVerifyFileFromALinkedProcessDirectory(t *testing.T) {
 		return verifyDocument(t, stdout), err
 	}
 
-	// refused requires the outside error of contracts K4 and no stdout.
-	// It names the root with -C. Without -C, a process directory outside
-	// the repository fails earlier, at the root step.
+	// refused requires the outside error and no stdout. It names the root
+	// with -C. Without -C, a process directory outside the repository
+	// fails earlier, at the root step.
 	refused := func(t *testing.T, value string) {
 		t.Helper()
 
@@ -944,7 +941,7 @@ func TestLessonsVerifyFileFromALinkedProcessDirectory(t *testing.T) {
 
 	t.Run("an absolute value through the outside link stays outside", func(t *testing.T) {
 		// Only the process directory is resolved. A value that names the
-		// link is a path outside root (§1.3: never followed).
+		// link is a path outside root, because a link is never followed.
 		t.Chdir(proj)
 
 		refused(t, filepath.Join(proj, "handler.go"))
@@ -974,12 +971,12 @@ func TestLessonsVerifyFileFromALinkedProcessDirectory(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyFlagConflicts proves the guards of contracts §4.2 for
-// milestone P1. --verify combines with no other mode, and --json and a
-// second --file need --verify. The texts that later milestones extend
-// are asserted by the table (e) rule: the head, each mode of milestone
-// P1, and the tail. The --hook cases use only forms that §4.1 keeps
-// refusing after milestone P4.
+// TestLessonsVerifyFlagConflicts proves the flag guards of --verify.
+// --verify combines with no other mode, and --json and a second --file
+// need --verify. A text that lists the modes is asserted by its head,
+// the modes that this test names, and its tail, because a new mode
+// extends it. The --hook cases use only forms that stay refused beside
+// the post-edit hook --verify --hook.
 func TestLessonsVerifyFlagConflicts(t *testing.T) {
 	root, sentinel := verifyFixture(t, t.TempDir())
 
@@ -1072,11 +1069,11 @@ func TestLessonsVerifyFlagConflicts(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyNeverInvokes proves AC-1 for lessons --verify: every
-// outcome, both output forms, explicit paths, and a configuration error
-// run without an agent, a model CLI, or the network. The command also
-// writes no index and no state. Its only write is the record of the
-// lesson-check audit stream (contract K5, milestone P4).
+// TestLessonsVerifyNeverInvokes proves that lessons --verify calls no
+// model: every outcome, both output forms, explicit paths, and a
+// configuration error run without an agent, a model CLI, or the
+// network. The command also writes no index and no state. Its only
+// write is the record of the lesson-check audit stream.
 func TestLessonsVerifyNeverInvokes(t *testing.T) {
 	root, sentinel := verifyFixture(t, t.TempDir())
 
@@ -1111,9 +1108,8 @@ func TestLessonsVerifyNeverInvokes(t *testing.T) {
 	delete(before, filepath.Join(root, ".seamark", "lessons.yaml"))
 	delete(after, filepath.Join(root, ".seamark", "lessons.yaml"))
 
-	// Since milestone P4, each run appends one record to the lesson-check
-	// audit stream (contract K5). The stream, its lock, and the entry of
-	// .seamark are the only writes.
+	// Each run appends one record to the lesson-check audit stream. The
+	// stream, its lock, and the entry of .seamark are the only writes.
 	assert.FileExists(t, filepath.Join(root, ".seamark", "lesson-check-audit.jsonl"))
 
 	for _, rel := range []string{".seamark", ".seamark/lesson-check-audit.jsonl", ".seamark/lesson-check-audit.jsonl.lock"} {
@@ -1162,8 +1158,8 @@ func TestLessonsVerifyNamesOwnAudit(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyWritesAuditRecord proves the milestone P4 additions
-// of contract K5 through the CLI: each run appends one verify record to
+// TestLessonsVerifyWritesAuditRecord proves the audit record of lessons
+// --verify through the CLI: each run appends one verify record to
 // .seamark/lesson-check-audit.jsonl with the caller cli, and a failed
 // record gives one stderr line on an exit-0 path only. The failure
 // never changes the exit code, and the report keeps its own line.
@@ -1223,7 +1219,7 @@ func TestLessonsVerifyWritesAuditRecord(t *testing.T) {
 		assert.Equal(t, "keep\n", string(data), "nothing goes through the link")
 	})
 
-	t.Run("a failed record on a non-zero exit keeps the K5 line alone", func(t *testing.T) {
+	t.Run("a failed record on a non-zero exit keeps the exit line alone", func(t *testing.T) {
 		verifyEditAsset(t, root)
 
 		_, stderr, code := seamarkProcess(t, root, "-C", root, "lessons", "--verify")

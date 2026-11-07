@@ -1,14 +1,13 @@
 package cli
 
-// Tests of lessons --set-mode (contracts K6 and §4, AC-27, AC-1). The
-// command changes only the mode and check keys of one pin, refuses every
-// K6 case with exit code 1 and no write, obeys distill.write, and calls
-// no model.
+// Tests of lessons --set-mode. The command changes only the mode and
+// check keys of one pin, refuses every bad request with exit code 1 and
+// no write, obeys distill.write, and calls no model.
 //
-// Two outputs change in later milestones, so these tests assert only the
-// parts that every later form keeps (plan table (e), F8). Milestone P4
-// replaces the fixed active line with the K10 join. Milestone P5 adds
-// --delivery to the --pin text and to the K2 missing text.
+// Some outputs depend on other features, so these tests assert only the
+// parts that every form keeps. The active line reads the installed
+// hooks, and the --pin text lists every mode that takes --pin. The
+// missing pin-ref text is asserted by its head only.
 
 import (
 	"io/fs"
@@ -26,7 +25,7 @@ import (
 )
 
 // setModeYAMLHead is the top of every fixture: a tuning value and the
-// spec example of a check configuration.
+// example check configuration.
 const setModeYAMLHead = `threshold: 3
 lesson_checks_version: 1
 checks:
@@ -38,8 +37,8 @@ checks:
 pin:
 `
 
-// setModeYAML holds the spec example pin without a mode or a check
-// (spec L137-140) and the second example pin of contract K2.
+// setModeYAML holds the example pin without a mode or a check and a
+// second example pin.
 const setModeYAML = setModeYAMLHead + `  - rule: frozen-assets
     region: generated/
     note: Changes to these files require a maintainer-managed update.
@@ -49,8 +48,7 @@ const setModeYAML = setModeYAMLHead + `  - rule: frozen-assets
 `
 
 // setModeYAMLEnforced is setModeYAML after
-// --set-mode enforce --pin 3215e7b483d1 --check frozen-assets (K6
-// example).
+// --set-mode enforce --pin 3215e7b483d1 --check frozen-assets.
 const setModeYAMLEnforced = setModeYAMLHead + `  - rule: frozen-assets
     region: generated/
     note: Changes to these files require a maintainer-managed update.
@@ -62,7 +60,7 @@ const setModeYAMLEnforced = setModeYAMLHead + `  - rule: frozen-assets
 `
 
 // setModeYAMLAdvisory is setModeYAMLEnforced after
-// --set-mode advisory --pin 3215e7b483d1: the check stays (K6 example).
+// --set-mode advisory --pin 3215e7b483d1: the check stays.
 const setModeYAMLAdvisory = setModeYAMLHead + `  - rule: frozen-assets
     region: generated/
     note: Changes to these files require a maintainer-managed update.
@@ -72,8 +70,9 @@ const setModeYAMLAdvisory = setModeYAMLHead + `  - rule: frozen-assets
     note: Reject unknown fields in the parser.
 `
 
-// The pin-refs and the short versions of the spec example pin (K2
-// vectors), and the short version of its check definition.
+// The pin-refs and the short versions of the example pin (from the
+// vectors of TestPinVersionVectors), and the short version of its check
+// definition.
 const (
 	setModePinRef      = "3215e7b483d1"
 	setModeSecondRef   = "ed5d4af5de3a"
@@ -83,7 +82,7 @@ const (
 )
 
 // setModeWorkspace writes lessons as the pin file of a new root, sets
-// the write gate, and installs the AC-1 sentinel after the config,
+// the write gate, and installs the invoker sentinel after the config,
 // because the sentinel adds its agent section to config.yaml. The root
 // has no index, because --set-mode needs none.
 func setModeWorkspace(t *testing.T, lessons string, gateOn bool) (string, *invokerSentinel) {
@@ -121,9 +120,9 @@ func setModeTree(t *testing.T, root string) []string {
 	return paths
 }
 
-// setModeBlockHead returns the first four lines of the K1 impact block
-// of the spec example pin when it becomes enforced. The fifth line, the
-// active state, changes in milestone P4.
+// setModeBlockHead returns the first four lines of the checker impact
+// block of the example pin when it becomes enforced. The fifth line,
+// the active state, depends on the installed hooks.
 func setModeBlockHead(t *testing.T) string {
 	t.Helper()
 
@@ -137,11 +136,11 @@ func setModeBlockHead(t *testing.T) string {
 		"  version " + setModeShortPlain + " -> " + setModeShortEnf + "\n"
 }
 
-// TestLessonsSetMode proves the K6 success path (AC-27): the command
-// writes only the mode and check keys of the pin, prints the impact
-// block, the K6 success line, the requested mode, the active state, and
-// the supported paths, and exits 0. An unchanged request exits 0
-// without a write, also with the gate off.
+// TestLessonsSetMode proves the success path: the command writes only
+// the mode and check keys of the pin, prints the impact block, the
+// success line, the requested mode, the active state, and the supported
+// paths, and exits 0. An unchanged request exits 0 without a write,
+// also with the gate off.
 func TestLessonsSetMode(t *testing.T) {
 	t.Run("enforce binds a check and writes both keys", func(t *testing.T) {
 		root, sentinel := setModeWorkspace(t, setModeYAML, true)
@@ -155,7 +154,7 @@ func TestLessonsSetMode(t *testing.T) {
 		assert.Contains(t, stdout, "\npin "+setModePinRef+": mode advisory -> enforce, check none -> frozen-assets; "+
 			"version "+setModeShortEnf+"\n")
 		assert.Contains(t, stdout, "\nrequested mode: enforce\n")
-		assert.Contains(t, stdout, "requested; inactive: ", "the active line keeps this part in every milestone")
+		assert.Contains(t, stdout, "requested; inactive: ", "the root has no hooks, so no client covers the pin")
 		assert.Contains(t, stdout, "seamark lessons --verify")
 		assert.Contains(t, stdout, "seamark check --lessons")
 
@@ -217,11 +216,10 @@ func TestLessonsSetMode(t *testing.T) {
 	})
 }
 
-// TestLessonsSetModeRefusals proves the K6 message table and the §4
-// flag rules. Every refusal exits 1, prints nothing on stdout, and
-// leaves the pin file as it was (AC-27). A text that a later milestone
-// extends is asserted by its kept head and tail only (§4.2 subset
-// rule, F8).
+// TestLessonsSetModeRefusals proves the refusal texts and the flag
+// rules of --set-mode. Every refusal exits 1, prints nothing on stdout,
+// and leaves the pin file as it was. A text that lists the modes is
+// asserted by its head and tail only, because a new mode extends it.
 func TestLessonsSetModeRefusals(t *testing.T) {
 	invalidOther := strings.Replace(setModeYAML, "    note: Reject unknown fields in the parser.\n",
 		"    note: Reject unknown fields in the parser.\n    mode: check\n", 1)
@@ -321,7 +319,7 @@ func TestLessonsSetModeRefusals(t *testing.T) {
 		sentinel.requireNoCall(t)
 	})
 
-	t.Run("a missing pin-ref keeps the K2 head", func(t *testing.T) {
+	t.Run("a missing pin-ref keeps the head of its refusal", func(t *testing.T) {
 		root, sentinel := setModeWorkspace(t, setModeYAML, true)
 
 		out, _, err := runErr(t, "-C", root, "lessons", "--set-mode", "check", "--pin", "00000000")
@@ -351,9 +349,10 @@ func TestLessonsSetModeRefusals(t *testing.T) {
 	})
 }
 
-// TestLessonsSetModeWriteGateOff proves §5 row 28: with distill.write
-// off, the command prints the checker impact, refuses with the K6 text
-// and the lines to set by hand, exits 1, and writes nothing.
+// TestLessonsSetModeWriteGateOff proves the gate-off path: with
+// distill.write off, the command prints the checker impact, refuses
+// with the gate-off text and the lines to set by hand, exits 1, and
+// writes nothing.
 func TestLessonsSetModeWriteGateOff(t *testing.T) {
 	const head = "distill.write is off in .seamark/config.yaml — nothing was written; set these lines on pin "
 
@@ -401,9 +400,9 @@ func TestLessonsSetModeWriteGateOff(t *testing.T) {
 	}
 }
 
-// TestLessonsSetModeNeverInvokes proves AC-1 for --set-mode: a write,
-// an unchanged request, a gate-off answer, and a refusal start no agent
-// CLI, no claude, codex, or gh, and create no index.
+// TestLessonsSetModeNeverInvokes proves that --set-mode calls no model:
+// a write, an unchanged request, a gate-off answer, and a refusal start
+// no agent CLI, no claude, codex, or gh, and create no index.
 func TestLessonsSetModeNeverInvokes(t *testing.T) {
 	root, sentinel := setModeWorkspace(t, setModeYAML, true)
 	set := []string{"-C", root, "lessons", "--set-mode", "enforce", "--pin", setModePinRef, "--check", "frozen-assets"}

@@ -96,10 +96,10 @@ type Firing struct {
 	// contexts, so SessionSHA alone does not say who got the advice.
 	ContextSHA string `json:"context_sha256,omitempty"`
 
-	// The keys of record version 2 (contract L3) follow the legacy keys
-	// in this order. A v2 line without them is the legacy line byte for
-	// byte, so every legacy reader keeps its counts. Only RecordEvent
-	// sets them, and the v1 entry points above leave them empty.
+	// The keys of record version 2 follow the legacy keys in this order.
+	// A v2 line without them is the legacy line byte for byte, so every
+	// legacy reader keeps its counts. Only RecordEvent sets them, and the
+	// v1 entry points above leave them empty.
 	SchemaVersion     int         `json:"schema_version,omitempty"`
 	EventID           string      `json:"event_id,omitempty"`
 	EventSeq          int         `json:"event_seq,omitempty"`
@@ -114,7 +114,7 @@ type Firing struct {
 	Lane              string      `json:"lane,omitempty"`
 	ContextResettable *bool       `json:"context_resettable,omitempty"`
 	ExploreGeneration uint64      `json:"explore_generation,omitempty"`
-	CaptureOptIn      bool        `json:"capture_opt_in,omitempty"`
+	RecordEvaluations bool        `json:"record_evaluations,omitempty"`
 	Read              *bool       `json:"read,omitempty"`
 	ScopeSHA          string      `json:"scope_sha256,omitempty"`
 	Pins              []FiringPin `json:"pins,omitempty"`

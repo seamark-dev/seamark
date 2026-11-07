@@ -45,7 +45,7 @@ type Server struct {
 	logf    func(format string, a ...any)
 	// protocol is the protocol version that initialize negotiated. It
 	// is "" before initialize. outputResult reads it to decide on the
-	// structuredContent of change_set (contract L1).
+	// structuredContent of change_set.
 	protocol string
 	// client is the raw clientInfo.name of initialize. It is "" before
 	// initialize. The usage record cleans it and names only this value.
@@ -385,7 +385,7 @@ func toolResult(text string, isErr bool) map[string]any {
 
 // structuredSince is the first protocol version whose tool results can
 // hold structuredContent. The versions are dates, so a string compare
-// orders them (contract L1).
+// orders them.
 const structuredSince = "2025-06-18"
 
 // toolOutput is the result of one tool runner. Each Text entry is one
@@ -600,9 +600,9 @@ var prepareChangeSet = delivery.Prepare
 // repository state makes a store read fail between the two calls.
 var changeSetText = report.ChangeSetWith
 
-// changeSet answers one change_set call from the open store st
-// (contract L1). content[0] is the change_set text of the P2 head, byte
-// for byte. A second text part and structuredContent carry the
+// changeSet answers one change_set call from the open store st.
+// content[0] is the change_set text from before preparation existed,
+// byte for byte. A second text part and structuredContent carry the
 // lesson-preparation/1 result. The change_set runner adds the key
 // change_set_report beside that document, because only the runner holds
 // the final content[0].
@@ -610,9 +610,9 @@ var changeSetText = report.ChangeSetWith
 // Prepare runs first and returns the one firing record of the call, so
 // the text runs without its legacy record. The record is written only
 // after the text succeeds: a call that returns an error leaves no
-// returned record (P3 review, ruling A). A failed preparation never
-// fails the call: the second part names the error, and the fallback
-// record keeps the lessons of the text in the firing log.
+// returned record. A failed preparation never fails the call: the
+// second part names the error, and the fallback record keeps the
+// lessons of the text in the firing log.
 func (s *Server) changeSet(st *store.Store, files []string) (toolOutput, error) {
 	// MCP has no receiver identity and no request context. MCP paths are
 	// relative to the workspace root, so the root is also the directory
@@ -621,8 +621,8 @@ func (s *Server) changeSet(st *store.Store, files []string) (toolOutput, error) 
 	//
 	// The badges of each check come from the capability report of the
 	// workspace, so preparation computes no badge. Every change_set call
-	// runs this read, so the narrow reading avoids the Git processes of
-	// Inspect.
+	// runs this read, so the narrow reading reads only the hook
+	// documents.
 	capability := integration.LessonCapability(integration.Builtin().InspectLessonHooks(s.root), s.root,
 		integration.SelfIdentity(s.version))
 
@@ -690,10 +690,10 @@ func minedStatus(st *store.Store) string {
 }
 
 // recordFailedPreparation writes the firing record of a change_set call
-// whose preparation failed (contract L3). The record keeps the lessons
-// of the text, so the firing log still counts the call. It carries no
-// pins, because no preparation named them. A call without lessons
-// writes nothing, as in the legacy rule. The write is best effort.
+// whose preparation failed. The record keeps the lessons of the text,
+// so the firing log still counts the call. It carries no pins, because
+// no preparation named them. A call without lessons writes nothing, as
+// in the legacy rule. The write is best effort.
 func (s *Server) recordFailedPreparation(st *store.Store, files []string, selected []model.Lesson) {
 	if len(selected) == 0 {
 		return
@@ -717,8 +717,8 @@ func (s *Server) recordFailedPreparation(st *store.Store, files []string, select
 	}
 }
 
-// checkUsage is the refusal of malformed check arguments (contracts
-// §4.1). It names every argument, so the model can correct the call.
+// checkUsage is the refusal of malformed check arguments. It names
+// every argument, so the model can correct the call.
 const checkUsage = `check takes {"diff": "<unified diff>", "lesson_checks": true|false} (both optional)`
 
 // lessonsRoot returns the top level of the git work tree of the server
@@ -733,13 +733,13 @@ func (s *Server) lessonsRoot() (string, error) {
 }
 
 // checkLessons appends the lesson verification to the policy text of
-// one check call (contract K5): a blank line, the lesson report, and the
-// combined line. report.NewCheckLessonsEnvelope derives the combined
-// values, so this line and check --lessons print the same verdict.
+// one check call: a blank line, the lesson report, and the combined
+// line. report.NewCheckLessonsEnvelope derives the combined values, so
+// this line and check --lessons print the same verdict.
 //
 // A violation and a blocking policy stay in band: the result is text,
 // not an isError result. Only a usage or root failure of Verify is an
-// error. No path here constructs an invoker (AC-1).
+// error. No path here constructs an invoker.
 func (s *Server) checkLessons(policyText, root string, decision *gate.Decision, policyInput string) (string, error) {
 	// Verify sets the verify-timeout deadline itself. The server has no
 	// request context, so the call starts from the background context.

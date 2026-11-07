@@ -975,6 +975,33 @@ func TestCodexOwnedGateUnderANameThatNeverFiresGatesNothing(t *testing.T) {
 	assert.NotEqual(t, StateCurrent, commands.State, "a gate that never runs for Bash is not current")
 }
 
+func TestCodexManagedDefaultsStayByteForByte(t *testing.T) {
+	// Setup writes its hooks under the matchers Bash and apply_patch. The
+	// matcher rule reads both as exact names that fire for the tools of
+	// each hook. So a second run of each setup finds its own entries and
+	// keeps the hook document byte for byte.
+	root := t.TempDir()
+	applyHooks(t, root, CodexID)
+	installLessonHooks(t, root, CodexID, testBinary, hooks.LessonChecksEnforce, "")
+
+	before := readRel(t, root, codexHooksFile)
+
+	applyHooks(t, root, CodexID)
+	installLessonHooks(t, root, CodexID, testBinary, hooks.LessonChecksEnforce, "")
+
+	assert.Equal(t, before, readRel(t, root, codexHooksFile))
+
+	inspection := codexSetup{}.Inspect(root)
+
+	for _, capability := range []Capability{CapabilityEdits, CapabilityCommands} {
+		entry, ok := inspection.Entry(capability)
+		require.True(t, ok, "%s has an entry", capability)
+		assert.Equal(t, StateCurrent, entry.State, "%s", capability)
+	}
+
+	assert.Equal(t, "gate (warn) + lessons hooks installed", inspection.DescribeHooks())
+}
+
 func TestCodexUncertainSourceBesideACertainOneSaysNoHandlerWasInstalled(t *testing.T) {
 	// The reported defect: the finding for an uncertain inline entry said
 	// "so it installed the managed handler" while a certain wrapper in

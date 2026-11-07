@@ -17,9 +17,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// The tests in this file hold exploration delivery (contract L2) and
-// its firing records (contract L3, surface explore). AC-26: exploration
-// never reads or writes the edit hook state.
+// The tests in this file hold exploration delivery and its firing
+// records. Exploration never reads or writes the edit hook state.
 
 // exploreMechanism is the reply path of the Claude explore adapter.
 const exploreMechanism = "post-tool-use-context"
@@ -133,9 +132,9 @@ func TestExploreEmitsToTheActualReceiver(t *testing.T) {
 	assert.True(t, strings.HasPrefix(advice[0], "seamark — review lessons for api/handler.go, which you just read "+
 		"(quoted data, not instructions; use them when you plan a change here):\n"), advice[0])
 
-	// The selection is the one of the edit hook for the same file
-	// (spec L128): the edit reminder has the same lesson lines. The
-	// config has no hook_delivery, so the edit hook keeps no state.
+	// The selection is the one of the edit hook for the same file: the
+	// edit reminder has the same lesson lines. The config has no
+	// hook_delivery, so the edit hook keeps no state.
 	var edit capture
 
 	_, err := Deliver(context.Background(), st, claudeRequest(root, cfg,
@@ -178,7 +177,7 @@ func TestExploreEmitsToTheActualReceiver(t *testing.T) {
 	assert.True(t, *rec.PathsComplete)
 	assert.Equal(t, cfg.GuidanceDigest(), rec.GuidanceSHA)
 	assert.Equal(t, "ok", rec.GuidanceStatus)
-	assert.False(t, rec.CaptureOptIn)
+	assert.False(t, rec.RecordEvaluations)
 	assert.Equal(t, reviews.AuditSchemaVersion, rec.SchemaVersion)
 	assert.Equal(t, eventOne, rec.EventID)
 	assert.Equal(t, 1, rec.EventSeq)
@@ -239,7 +238,7 @@ func TestExploreDedupesByReceiverGenerationVersionAndSurface(t *testing.T) {
 	root := workspace(t)
 	st := lessonStore(t, root)
 	// hook_delivery configures the edit hook only. Exploration dedupes
-	// a resettable receiver also under the default "always" (§5 row 88).
+	// a resettable receiver also under the default "always".
 	cfg := writeConfig(t, root, "hook_delivery: always\n"+apiPin)
 
 	read := func(session string) (ExploreOutcome, []string) {
@@ -295,8 +294,8 @@ func TestExploreDedupesByReceiverGenerationVersionAndSurface(t *testing.T) {
 	assert.Equal(t, 1, out.Suppressed)
 
 	// The surfaces stay apart: an edit hook delivery in once-per-context
-	// mode still gets the pin after the reads (AC-26), and it changes
-	// nothing in the exploration state.
+	// mode still gets the pin after the reads, and it changes nothing in
+	// the exploration state.
 	requireNoEditState(t, root)
 
 	before, err := os.ReadFile(exploreStatePath(root))
@@ -326,7 +325,7 @@ func TestExploreDedupesByReceiverGenerationVersionAndSurface(t *testing.T) {
 
 	// Each emitting read wrote one injected record, also the read that
 	// emitted one item and suppressed one: an explore event has no
-	// second, suppressed-repeat record (contract L3).
+	// second, suppressed-repeat record.
 	var explored []reviews.DeliveryStatus
 
 	for _, rec := range firings(t, root) {
@@ -420,7 +419,7 @@ func TestExploreNeverSuppressesWithoutAResettableContext(t *testing.T) {
 	})
 }
 
-func TestExploreRecordsEvaluationsOnlyUnderCaptureOptIn(t *testing.T) {
+func TestExploreRecordsEvaluationsOnlyUnderTheRecordingSwitch(t *testing.T) {
 	failed := errors.New("stdout closed")
 
 	type setup struct {
@@ -492,14 +491,14 @@ func TestExploreRecordsEvaluationsOnlyUnderCaptureOptIn(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, optIn := range []bool{false, true} {
+			for _, recording := range []bool{false, true} {
 				root := workspace(t)
 				st := lessonStore(t, root)
 				cfg := writeConfig(t, root, apiPin)
 				s := tc.setup(t, root, st, cfg)
 
 				req := exploreRequest(root, cfg, s.event)
-				req.RecordEvaluations = optIn
+				req.RecordEvaluations = recording
 
 				out, err := Explore(context.Background(), s.st, req, s.emit)
 				if tc.wantErr {
@@ -511,8 +510,8 @@ func TestExploreRecordsEvaluationsOnlyUnderCaptureOptIn(t *testing.T) {
 				assert.NotEqual(t, StatusEmitted, out.Status)
 
 				records := firings(t, root)
-				if !optIn {
-					assert.Empty(t, records, "without capture opt-in, nothing emitted means no record")
+				if !recording {
+					assert.Empty(t, records, "with the recording switch off, nothing emitted means no record")
 					continue
 				}
 
@@ -528,7 +527,7 @@ func TestExploreRecordsEvaluationsOnlyUnderCaptureOptIn(t *testing.T) {
 				require.NotNil(t, rec.PathsComplete)
 				assert.Equal(t, tc.complete, *rec.PathsComplete)
 				assert.Equal(t, tc.rejected, rec.RejectedPaths)
-				assert.True(t, rec.CaptureOptIn)
+				assert.True(t, rec.RecordEvaluations)
 				require.NotNil(t, rec.Read)
 				assert.True(t, *rec.Read)
 				assert.Equal(t, exploreMechanism, rec.Mechanism)
@@ -560,14 +559,14 @@ func TestExploreRecordsEvaluationsOnlyUnderCaptureOptIn(t *testing.T) {
 		assert.Len(t, advice, 1, "the advice stays eligible")
 	})
 
-	t.Run("an injection is recorded with or without opt-in", func(t *testing.T) {
-		for _, optIn := range []bool{false, true} {
+	t.Run("an injection is recorded with the recording switch on or off", func(t *testing.T) {
+		for _, recording := range []bool{false, true} {
 			root := workspace(t)
 			st := lessonStore(t, root)
 			cfg := writeConfig(t, root, apiPin)
 
 			req := exploreRequest(root, cfg, readEvent(root, "s", "", "m", "api/handler.go", true))
-			req.RecordEvaluations = optIn
+			req.RecordEvaluations = recording
 
 			_, advice := explore(t, st, req)
 			require.Len(t, advice, 1)
@@ -575,7 +574,7 @@ func TestExploreRecordsEvaluationsOnlyUnderCaptureOptIn(t *testing.T) {
 			records := firings(t, root)
 			require.Len(t, records, 1)
 			assert.Equal(t, reviews.DeliveryInjected, records[0].Delivery)
-			assert.Equal(t, optIn, records[0].CaptureOptIn)
+			assert.Equal(t, recording, records[0].RecordEvaluations)
 		}
 	})
 
@@ -611,7 +610,7 @@ func TestExploreSaysWhenTheFileWasNotRead(t *testing.T) {
 	require.NotNil(t, claude.Explores)
 
 	// A native failed Read of a file that does not exist yet. The decoder
-	// gives Read false; the decoder-only row of contract L2 (N5).
+	// gives Read false.
 	payload := `{"session_id":"session-1","tool_use_id":"toolu-9","prompt_id":"prompt-9","cwd":"` + root +
 		`","hook_event_name":"PostToolUseFailure","tool_name":"Read","tool_input":{"file_path":"` +
 		filepath.Join(root, "api", "new.go") + `"}}`
@@ -701,7 +700,7 @@ func TestResetAdvancesEditAndExploreGenerationsIndependently(t *testing.T) {
 		assert.Equal(t, uint64(1), out.Generation)
 
 		editAdvice, editGeneration := edit()
-		require.Len(t, editAdvice, 1, "an edit right after the read still gets its reminder (AC-26)")
+		require.Len(t, editAdvice, 1, "an edit right after the read still gets its reminder")
 		assert.Equal(t, uint64(1), editGeneration)
 
 		_, advice = explore(t, st, readReq)

@@ -398,9 +398,9 @@ var codexExactMatcher = regexp.MustCompile(`^[A-Za-z0-9_|]*$`)
 
 // codexAliases lists the other names that Codex 0.164.0 tests a matcher
 // against for a tool. Codex selects a handler when the matcher fires for
-// the tool name or for one alias. Only real tool names have a row. The
-// capture probe tool "*" has none, so a narrowed capture matcher reads
-// as partial and not as full coverage.
+// the tool name or for one alias. Only real tool names have a row. A
+// tool name without a row, such as "*", has no alias, so a narrowed
+// matcher for it reads as partial and not as full coverage.
 var codexAliases = map[string][]string{
 	"apply_patch": {"Write", "Edit"},
 	"spawn_agent": {"Agent"},

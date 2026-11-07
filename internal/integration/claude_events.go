@@ -1,8 +1,9 @@
 package integration
 
-// The Claude Code hook event names. Capture, the advice replies, and the
-// completion decoder share them, so each native name has one identifier.
-// A reply repeats the name of the event that it answers.
+// The Claude Code hook event names. The list keeps one identifier for
+// each native name, also for an event that no decoder of this build
+// reads. The advice replies and the completion decoder use these
+// identifiers. A reply repeats the name of the event that it answers.
 const (
 	claudeEventPrompt        = "UserPromptSubmit"
 	claudeEventPreToolUse    = "PreToolUse"

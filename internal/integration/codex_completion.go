@@ -97,10 +97,10 @@ func (codexCompletions) EncodeFindings(text string, _ lessoncheck.ToolOutcome) (
 // because each unknown line and the rerun command list every path.
 const codexMaxFindingsBytes = 3072
 
-// toolOutcomeOf converts a capture outcome to the tool outcome of the
-// lesson-check stream. Both lists hold the same words, so a type
-// conversion is enough. The empty capture outcome gives unknown,
-// because a post-edit record always names an outcome.
+// toolOutcomeOf converts the Outcome of the completion decoders to the
+// tool outcome of the lesson-check stream. Both lists hold the same
+// words, so a type conversion is enough. The empty Outcome gives
+// unknown, because a post-edit record always names an outcome.
 func toolOutcomeOf(o Outcome) lessoncheck.ToolOutcome {
 	if o == OutcomeNone {
 		return lessoncheck.ToolUnknown

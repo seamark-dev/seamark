@@ -3,13 +3,9 @@ package cli
 import (
 	"encoding/json"
 	"errors"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,15 +19,16 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// The tests of the two pre-edit hooks (plan step P4.4; contracts K7,
-// K8, K9, §4): lessons --guard --hook and lessons --baseline --hook.
-// Every test builds a temporary repository and runs the hooks under the
-// AC-1 sentinel. Nothing reads or writes the repository of this checkout
-// (BRIEF rule 7), and no test opens a real archive.
+// The tests of the two pre-edit hooks: lessons --guard --hook and
+// lessons --baseline --hook. Every test builds a temporary repository
+// and runs the hooks under the invoker sentinel. The sentinel records
+// each start of an agent or of a model client, so a test proves that a
+// hook calls no model. Nothing reads or writes the repository of this
+// checkout.
 
 // guardLessonsYAML arms two enforce pins and one check pin. The note of
 // the check pin and of the advisory pin use the word enforce: a note
-// never changes a decision (AC-36, R-38).
+// never changes a decision.
 const guardLessonsYAML = `lesson_checks_version: 1
 checks:
   frozen-assets:
@@ -293,13 +290,13 @@ func requireNoRawIDs(t *testing.T, root string) {
 	assert.NotContains(t, string(data), guardToolUse, "a record holds digests, never a raw tool-use ID")
 }
 
-// TestLessonsGuardHookDeniesViolation proves the deny path of contract
-// K8 for the Claude Code edit tools: a forbidden path change and an
-// added pattern line deny with the exact K8 texts, exit 2, and no
-// pending record. The record holds the decision and the digests over
-// the identity root, and no excerpt, note, or raw ID. The last subtest
-// runs the real Execute in a child process for the stderr line and the
-// exit code.
+// TestLessonsGuardHookDeniesViolation proves the deny path of the guard
+// for the Claude Code edit tools: a forbidden path change and an added
+// pattern line deny with the exact guard texts, exit 2, and no pending
+// record. The record holds the decision and the digests over the
+// identity root, and no excerpt, note, or raw ID. The last subtest runs
+// the real Execute in a child process for the stderr line and the exit
+// code.
 func TestLessonsGuardHookDeniesViolation(t *testing.T) {
 	if encoded, ok := os.LookupEnv(guardProcessEnv); ok {
 		runAsSeamark(encoded)
@@ -426,9 +423,9 @@ func TestLessonsGuardHookDeniesViolation(t *testing.T) {
 }
 
 // TestLessonsGuardHookDeniesMultiFileWhole proves that the guard judges
-// a native call as a whole (contract K8): one violating file of a
-// multi-file patch, or one failing step of a MultiEdit, denies the whole
-// call, and no path of it gets a pending record.
+// a native call as a whole: one violating file of a multi-file patch,
+// or one failing step of a MultiEdit, denies the whole call, and no
+// path of it gets a pending record.
 func TestLessonsGuardHookDeniesMultiFileWhole(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	frozen := guardPins(t, root)["frozen-assets"]
@@ -478,11 +475,11 @@ func TestLessonsGuardHookDeniesMultiFileWhole(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsGuardHookFailsClosed proves the fail-closed cases of
-// contract K8 (AC-33): an unreadable request, an invalid or unreadable
-// check set, a path that the guard cannot resolve, an edit that the
-// projection cannot compute, a limit, a broken hook command, a missing
-// work tree, and a panic each deny. No case writes a pending record.
+// TestLessonsGuardHookFailsClosed proves the fail-closed cases of the
+// guard: an unreadable request, an invalid or unreadable check set, a
+// path that the guard cannot resolve, an edit that the projection
+// cannot compute, a limit, a broken hook command, a missing work tree,
+// and a panic each deny. No case writes a pending record.
 func TestLessonsGuardHookFailsClosed(t *testing.T) {
 	const (
 		cannotRead  = "lesson check guard cannot read this request: "
@@ -660,7 +657,7 @@ func TestLessonsGuardHookFailsClosed(t *testing.T) {
 			},
 		},
 		{
-			name: "a panic denies with internal-error (contract K8, step 7)",
+			name: "a panic denies with internal-error",
 			setup: func(t *testing.T, _ string) {
 				beforeGuardDecision = func() { panic("boom: secret payload text") }
 				t.Cleanup(func() { beforeGuardDecision = nil })
@@ -728,11 +725,11 @@ func TestLessonsGuardHookFailsClosed(t *testing.T) {
 	})
 }
 
-// TestLessonsGuardHookAllowsWithEmptyReply proves the allow path of
-// contract K8: exit 0 with nothing on stdout or stderr, a pending record
-// for the paths that an executable pin scopes (contract K7), and a guard
-// record without any capture opt-in. Every digest hashes over the K2
-// identity root, also when the index records a linked root.
+// TestLessonsGuardHookAllowsWithEmptyReply proves the allow path of the
+// guard. The hook exits 0 with nothing on stdout or stderr. It writes a
+// pending record for the paths that an executable pin scopes, and one
+// guard record. Every digest hashes over the identity root, also when
+// the index records a linked root.
 func TestLessonsGuardHookAllowsWithEmptyReply(t *testing.T) {
 	root, sentinel := guardFixture(t)
 
@@ -815,12 +812,9 @@ func TestLessonsGuardHookAllowsWithEmptyReply(t *testing.T) {
 		assert.Empty(t, rec.Paths)
 	})
 
-	t.Run("no record needs the capture opt-in, and no archive appears", func(t *testing.T) {
+	t.Run("one guard record per run, with no raw identifier", func(t *testing.T) {
 		assert.Len(t, checkRecords(t, root), 5, "one guard record per run")
 		requireNoRawIDs(t, root)
-
-		_, err := os.Lstat(filepath.Join(root, ".seamark", "private"))
-		assert.ErrorIs(t, err, fs.ErrNotExist)
 	})
 
 	t.Run("every digest hashes over the identity root", func(t *testing.T) {
@@ -843,7 +837,7 @@ func TestLessonsGuardHookAllowsWithEmptyReply(t *testing.T) {
 	})
 
 	t.Run("an absent lessons.yaml arms no pin and allows", func(t *testing.T) {
-		// Only an absent file means no checks (contract K8, step 1).
+		// Only an absent file means no checks.
 		require.NoError(t, os.Remove(filepath.Join(root, ".seamark", "lessons.yaml")))
 		require.NoError(t, lessoncheck.DeletePending(root, integration.ClaudeID, lastRecord(t, root, lessoncheck.AuditGuard).MatchSHA))
 
@@ -856,9 +850,9 @@ func TestLessonsGuardHookAllowsWithEmptyReply(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsGuardHookAuditFailureKeepsDecision proves AC-33 and §5 row
-// 33: a failed audit append or pending write changes neither the reply
-// nor the exit code, and the hook says nothing about it.
+// TestLessonsGuardHookAuditFailureKeepsDecision proves that a failed
+// audit append or pending write changes neither the reply nor the exit
+// code, and the hook says nothing about it.
 func TestLessonsGuardHookAuditFailureKeepsDecision(t *testing.T) {
 	t.Run("an audit stream that cannot be written", func(t *testing.T) {
 		// A directory at the lock path fails the open of the lock, so
@@ -926,10 +920,10 @@ func TestLessonsGuardHookAuditFailureKeepsDecision(t *testing.T) {
 	})
 }
 
-// TestLessonsGuardHookCheckModeAndNoteNeverDeny proves AC-36 and R-38:
-// a check pin never denies, the word enforce in a note never arms a pin,
+// TestLessonsGuardHookCheckModeAndNoteNeverDeny proves three rules: a
+// check pin never denies, the word enforce in a note never arms a pin,
 // and a prepare record of the same pin version and path never lets an
-// enforce violation pass (F9).
+// enforce violation pass.
 func TestLessonsGuardHookCheckModeAndNoteNeverDeny(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	frozen := guardPins(t, root)["frozen-assets"]
@@ -969,11 +963,11 @@ func TestLessonsGuardHookCheckModeAndNoteNeverDeny(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsGuardHookCodexApplyPatch proves the Codex rows of contract
-// K8 and ruling A8: Add, Delete, and Move project; an Update with hunks
-// in a pattern scope stays unknown and denies; a forbid pin decides on
-// paths alone; a grammar that the decoder cannot read arms every enforce
-// pin; relative paths start at the event directory.
+// TestLessonsGuardHookCodexApplyPatch proves the guard rules for Codex
+// apply_patch: Add, Delete, and Move project; an Update with hunks in a
+// pattern scope stays unknown and denies; a forbid pin decides on paths
+// alone; a grammar that the decoder cannot read arms every enforce pin;
+// relative paths start at the event directory.
 func TestLessonsGuardHookCodexApplyPatch(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	pins := guardPins(t, root)
@@ -1114,54 +1108,10 @@ func TestLessonsGuardHookCodexApplyPatch(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsGuardHookNeverOpensArchive proves that the pre-edit hooks
-// never open or create the capture archive: the K9 record needs no
-// capture opt-in (spec L263). A run without an archive creates none,
-// and the handler file imports neither the archive nor the capture
-// package.
-func TestLessonsGuardHookNeverOpensArchive(t *testing.T) {
-	runs := func(t *testing.T, root string) {
-		t.Helper()
-
-		_, _, err := guardHook(t, root, claudeWriteEvent(t, root, "generated/a.txt", "changed\n"))
-		requireDenied(t, err)
-
-		_, _, err = guardHook(t, root, claudeWriteEvent(t, root, "docs/readme.md", "readme\nmore\n"))
-		require.NoError(t, err)
-
-		_, _, err = baselineHook(t, root, claudeWriteEvent(t, root, "src/handler.go", "package src\n"))
-		require.NoError(t, err)
-	}
-
-	t.Run("without an archive", func(t *testing.T) {
-		root, sentinel := guardFixture(t)
-
-		runs(t, root)
-
-		_, err := os.Lstat(filepath.Join(root, ".seamark", "private"))
-		assert.ErrorIs(t, err, fs.ErrNotExist, "no hook creates the archive")
-		assert.Len(t, checkRecords(t, root), 3, "the records need no capture opt-in")
-
-		sentinel.requireNoCall(t)
-	})
-
-	t.Run("the handler file imports no archive or capture package", func(t *testing.T) {
-		file, err := parser.ParseFile(token.NewFileSet(), "lessons_guard.go", nil, parser.ImportsOnly)
-		require.NoError(t, err)
-
-		for _, spec := range file.Imports {
-			path, err := strconv.Unquote(spec.Path.Value)
-			require.NoError(t, err)
-
-			assert.NotEqual(t, "github.com/seamark-dev/seamark/internal/archive", path)
-			assert.NotEqual(t, "github.com/seamark-dev/seamark/internal/capture", path)
-		}
-	})
-}
-
-// TestLessonsGuardHookCallsNoInvoker proves AC-1 for the guard: every
-// path of the handler (allow, deny, unparseable, configuration error,
-// and the Codex decoder) runs without a model or network call.
+// TestLessonsGuardHookCallsNoInvoker proves that the guard calls no
+// model: every path of the handler (allow, deny, unparseable,
+// configuration error, and the Codex decoder) runs without a model or
+// network call.
 func TestLessonsGuardHookCallsNoInvoker(t *testing.T) {
 	root, sentinel := guardFixture(t)
 
@@ -1186,11 +1136,11 @@ func TestLessonsGuardHookCallsNoInvoker(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsGuardFlagRules proves the §4.1 refusals of --guard and
-// --baseline, their exclusivity (§4.2), and the final --client text,
-// asserted whole (table (e)). A refused call writes nothing. The
-// positive controls show that the routed calls reach the pre-edit
-// handlers and not the advisory edit hook.
+// TestLessonsGuardFlagRules proves the refusals of --guard and
+// --baseline, their exclusivity, and the final --client text, asserted
+// whole. A refused call writes nothing. The positive controls show that
+// the routed calls reach the pre-edit handlers and not the advisory
+// edit hook.
 func TestLessonsGuardFlagRules(t *testing.T) {
 	root, sentinel := guardFixture(t)
 
@@ -1283,10 +1233,10 @@ func TestLessonsGuardFlagRules(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsBaselineHookNeverDenies proves the check-only row of
-// contract K8: lessons --baseline --hook exits 0 with nothing on stdout
-// or stderr for every request. It stores the pending baseline with the
-// installed mode check (contract K7). A run that stores none names the
+// TestLessonsBaselineHookNeverDenies proves that the baseline hook
+// never denies: lessons --baseline --hook exits 0 with nothing on
+// stdout or stderr for every request. It stores the pending baseline
+// with the installed mode check. A run that stores none names the
 // reason in its baseline record.
 func TestLessonsBaselineHookNeverDenies(t *testing.T) {
 	quiet := func(t *testing.T, root, payload string, args ...string) lessoncheck.AuditRecord {
@@ -1342,7 +1292,7 @@ func TestLessonsBaselineHookNeverDenies(t *testing.T) {
 
 	t.Run("each pre-edit run sweeps an expired baseline", func(t *testing.T) {
 		// A crash or a cancelled tool leaves a record that no post-edit
-		// run consumes (contract K7, crash recovery).
+		// run consumes.
 		root, sentinel := guardFixture(t)
 		old := time.Now().Add(-2 * lessoncheck.DefaultLimits().PendingMaxAge)
 
@@ -1447,9 +1397,9 @@ func TestLessonsBaselineHookNeverDenies(t *testing.T) {
 	}
 }
 
-// TestLessonsBaselineHookCallsNoInvoker proves AC-1 for the baseline
-// handler: the decode, the projection, and the pending write of both
-// clients run without a model or network call.
+// TestLessonsBaselineHookCallsNoInvoker proves that the baseline
+// handler calls no model: the decode, the projection, and the pending
+// write of both clients run without a model or network call.
 func TestLessonsBaselineHookCallsNoInvoker(t *testing.T) {
 	root, sentinel := guardFixture(t)
 
@@ -1465,10 +1415,10 @@ func TestLessonsBaselineHookCallsNoInvoker(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsHookNeverDeniesUnderEnforce proves BRIEF rule 15 and §6 A7:
-// the advisory edit hook never runs the guard. With an enforce pin in
-// scope and a violating edit, lessons --hook exits 0 with advice only,
-// creates nothing under .seamark/checks, and writes no K9 record. An
+// TestLessonsHookNeverDeniesUnderEnforce proves that the advisory edit
+// hook never runs the guard. With an enforce pin in scope and a
+// violating edit, lessons --hook exits 0 with advice only, creates
+// nothing under .seamark/checks, and writes no post-edit record. An
 // invalid lessons.yaml keeps it fail-open too.
 func TestLessonsHookNeverDeniesUnderEnforce(t *testing.T) {
 	root, sentinel := guardFixture(t)
@@ -1584,8 +1534,7 @@ func shortHookBudgets(t *testing.T) (wait time.Duration) {
 }
 
 // commitRepeatedLines commits src/repeated.txt with n equal lines. A
-// later edit of it makes the worst input of the quadratic line diff
-// (review finding R-1).
+// later edit of it makes the worst input of the quadratic line diff.
 func commitRepeatedLines(t *testing.T, root string, n int) {
 	t.Helper()
 
@@ -1595,12 +1544,11 @@ func commitRepeatedLines(t *testing.T, root string, n int) {
 }
 
 // TestLessonsGuardHookBudgetBoundsEvaluation proves that the guard
-// budget bounds the evaluation, and not only the projection (review
-// finding R-1, contract K8, step 2). The diff of 20000 equal lines took
-// 19 s before the fix. The hook now waits past the budget, and the
-// decision must come from the ended budget: an enforce pin denies with
-// resource-limit and never finds the marker, and a check pin stays
-// advisory.
+// budget bounds the evaluation, and not only the projection. The diff
+// of 20000 equal lines took 19 s before the fix. The hook now waits
+// past the budget, and the decision must come from the ended budget: an
+// enforce pin denies with resource-limit and never finds the marker,
+// and a check pin stays advisory.
 func TestLessonsGuardHookBudgetBoundsEvaluation(t *testing.T) {
 	lines := lessoncheck.DefaultLimits().MaxDiffLines
 	edited := strings.Repeat("}\n", lines/2-1) + "TODO(x)\n" + strings.Repeat("}\n", lines/2)
@@ -1656,7 +1604,7 @@ func requireCaseInsensitive(t *testing.T, root string) {
 	}
 }
 
-// TestLessonsGuardHookCaseAliases checks R-2: a client path that
+// TestLessonsGuardHookCaseAliases checks that a client path that
 // differs from the on-disk spelling by case reaches the same file, so
 // it needs the same decision and the same audited path as the on-disk
 // spelling.

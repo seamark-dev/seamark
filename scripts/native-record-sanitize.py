@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Sanitize one native recording for the committed evidence.
 
-Usage: capture-native-sanitize.py <record.json> <out-dir>
+Usage: native-record-sanitize.py <record.json> <out-dir>
 
-record.json is written by scripts/capture-native.sh record. It names the
+record.json is written by scripts/native-record.sh record. It names the
 client, the scratch repository, the home directory, the seamark binary,
 the instrumentation directory, the observer output, the transcript files
 of the recorded sessions, and the extra files of the scenario. The
@@ -318,7 +318,7 @@ def hooks(record, s, out_dir):
 
 def main():
     if len(sys.argv) != 3:
-        sys.exit("usage: capture-native-sanitize.py <record.json> <out-dir>")
+        sys.exit("usage: native-record-sanitize.py <record.json> <out-dir>")
 
     with open(sys.argv[1], encoding="utf-8") as f:
         record = json.load(f)

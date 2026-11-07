@@ -229,8 +229,8 @@ func TestBuildCountsDeliveryPerVersion(t *testing.T) {
 	assert.Equal(t, 2, b.Delivery.LegacyIdentityRecords, "v1 records name the identity as rendered with the note; the note-less and older-note records stay out")
 	assert.Equal(t, 1, r.Coverage.DeniedCallInjections)
 
-	// The older version is never pooled into the current one. The report
-	// reads no capture archive, so no historical reading holds it.
+	// The older version is never pooled into the current one. The
+	// historical section is a fixed field, so no reading holds it.
 	assert.Empty(t, r.Historical)
 
 	// Totals come from reviews.Summarize and the v2 counts.
@@ -250,9 +250,8 @@ func TestBuildCountsDeliveryPerVersion(t *testing.T) {
 	assert.Empty(t, exp.Occurrences)
 
 	// Only the sessions of delivered injections of the current version open
-	// a window: s2 and s6. The report reads no capture archive, so no
-	// session is captured. The denied call s5 opens no window, and the
-	// older version is not in the expansion.
+	// a window: s2 and s6. Each window reads incomplete. The denied call
+	// s5 opens no window, and the older version is not in the expansion.
 	require.Len(t, exp.Sessions, 2)
 
 	for _, w := range exp.Sessions {
@@ -364,7 +363,7 @@ func TestBuildStatesAreData(t *testing.T) {
 // TestBuildLeavesUnderivedSectionsEmpty keeps the sections that Build does
 // not derive yet empty: a default there would read like a real result. The
 // observation is derived: a delivered session reads incomplete, because
-// the report reads no capture archive.
+// this build has no source for another partition.
 func TestBuildLeavesUnderivedSectionsEmpty(t *testing.T) {
 	cfg := testConfig("n")
 	id, ver := pinOf(cfg, 0)
@@ -382,7 +381,7 @@ func TestBuildLeavesUnderivedSectionsEmpty(t *testing.T) {
 	assert.Empty(t, p.NextSteps)
 	assert.Equal(t, 0, p.Observation.Linked)
 	assert.Equal(t, 0, p.Observation.NoLinkedCorrection)
-	assert.Equal(t, 1, p.Observation.Incomplete, "the delivered session is not captured")
+	assert.Equal(t, 1, p.Observation.Incomplete, "every delivered session reads incomplete")
 	assert.Equal(t, map[Code]int{CodeSessionNotCaptured: 1}, p.Observation.IncompleteByReason)
 	assert.Equal(t, map[Timing]Partition{TimingUnknown: {Incomplete: 1}}, p.Observation.ByTiming)
 	assert.Equal(t, Unlinked{Unit: "feedback items", ByReason: map[Code]int{}, NextSteps: []NextStep{}}, r.Unlinked)

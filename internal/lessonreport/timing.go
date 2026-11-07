@@ -1,8 +1,8 @@
 package lessonreport
 
-// This file holds the closed list of the decision timings. The timing of
-// a corrected action needs the capture archive, which this build does not
-// read. So every timing that the report prints reads unknown.
+// This file holds the closed list of the decision timings. This build
+// has no source for a decision timing, so every timing that the report
+// prints reads unknown.
 
 // The action-level timings.
 const (

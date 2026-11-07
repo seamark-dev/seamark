@@ -8,9 +8,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// specExample is the lessons.yaml example of the spec ("Configuration
-// and executable checks"), byte for byte as contract K1 quotes it.
-const specExample = `lesson_checks_version: 1
+// exampleConfig is the example lessons.yaml: two check definitions and
+// one enforced pin.
+const exampleConfig = `lesson_checks_version: 1
 checks:
   frozen-assets:
     kind: forbid-path-change/1
@@ -25,13 +25,14 @@ pin:
     check: frozen-assets
 `
 
-// TestConfigDecodesLessonChecks proves the decode tier of contract K1.
-// ParseConfig reads the new keys and refuses only YAML and type errors,
-// a duplicate check ID, and a negative version. Every semantic rule
-// belongs to lessoncheck.Validate, so an advisory reader keeps its pins.
+// TestConfigDecodesLessonChecks proves the decode tier of the
+// lesson-check keys. ParseConfig reads the new keys and refuses only
+// YAML and type errors, a duplicate check ID, and a negative version.
+// Every semantic rule belongs to lessoncheck.Validate, so an advisory
+// reader keeps its pins.
 func TestConfigDecodesLessonChecks(t *testing.T) {
-	t.Run("spec example", func(t *testing.T) {
-		cfg, err := ParseConfig([]byte(specExample))
+	t.Run("the example", func(t *testing.T) {
+		cfg, err := ParseConfig([]byte(exampleConfig))
 		require.NoError(t, err)
 
 		assert.Equal(t, 1, cfg.LessonChecksVersion)
@@ -108,9 +109,9 @@ func TestConfigDecodesLessonChecks(t *testing.T) {
 	})
 
 	t.Run("a newer version keeps the pins", func(t *testing.T) {
-		// Contract K1 and ruling K-6: a version above the supported one
-		// is the tier-2 error version-unsupported. The advisory readers
-		// must not fall back to DefaultConfig and drop every pin.
+		// A version above the supported one is the tier-2 error
+		// version-unsupported. The advisory readers must not fall back to
+		// DefaultConfig and drop every pin.
 		body := "lesson_checks_version: 2\nchecks:\n  x:\n    kind: future-kind/4\n    window: 5\n" +
 			"pin:\n  - rule: a\n    region: api\n    note: n\n    mode: audit\n    check: x\n"
 

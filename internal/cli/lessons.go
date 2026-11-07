@@ -224,7 +224,7 @@ a file has no lessons.`,
 
 			// The plain --hook and --hook-reset calls are checked last: a
 			// granted --file, --region, --list, or --stats prefix never
-			// reaches an advisory hook (P3 review ruling R3).
+			// reaches an advisory hook.
 			if err := hookFlagError(cmd, hookMode, hookReset); err != nil {
 				return err
 			}
@@ -274,8 +274,8 @@ a file has no lessons.`,
 			// inference agent of --distill is a separate setting, agent.cli.
 			// A user can take one for the other, so the error names both.
 			// --guard, --baseline, --explore, and --verify --hook need
-			// --hook, so the --hook check covers them. The text is the
-			// final form of contracts §4.1.
+			// --hook, so the --hook check covers them. The text names every
+			// mode that accepts --client.
 			if hookClient != "" && !hookMode && !hookReset {
 				return fmt.Errorf("--client applies to --hook, --hook-reset, --guard, --baseline, --explore, " +
 					"and --verify --hook only; the agent that --distill runs is agent.cli in .seamark/config.yaml")
@@ -297,8 +297,8 @@ a file has no lessons.`,
 				return runLessonsExplore(cmd, opts, hookClient)
 			case guard:
 				// Before --hook: the guard fails closed, and the advisory
-				// edit hook fails open. The two never share a path (§6 A7,
-				// BRIEF rule 15).
+				// edit hook fails open. The two never share a path, because an
+				// advisory hook never denies and runs no check.
 				return runLessonsGuard(cmd, opts, hookClient)
 			case baseline:
 				// Before --hook, for the same reason: the baseline handler
@@ -306,7 +306,7 @@ a file has no lessons.`,
 				return runLessonsBaseline(cmd, opts, hookClient)
 			case verify && hookMode:
 				// Before --hook: --verify --hook reads a completion event and
-				// checks the actual result of the edit (contract K9).
+				// checks the actual result of the edit.
 				return runLessonsVerifyHook(cmd, opts, hookClient)
 			case hookMode:
 				return runLessonsHook(cmd, opts, hookClient)
@@ -360,8 +360,8 @@ a file has no lessons.`,
 		},
 	}
 
-	// --file is a list, because --verify takes several paths (A12). Every
-	// other mode takes one value, and verifyFlagError refuses more.
+	// --file is a list, because --verify takes several paths. Every other
+	// mode takes one value, and verifyFlagError refuses more.
 	cmd.Flags().StringArrayVar(&files, "file", nil,
 		"repo-relative (or absolute) path to look up; with --verify, a path to check (repeatable)")
 	cmd.Flags().BoolVar(&verify, "verify", false,
@@ -1203,11 +1203,10 @@ func runLessonsHookReset(cmd *cobra.Command, opts *options, clientID string) err
 
 	// The edit hook and the exploration hook key their state under the
 	// index-meta root of openHookIndex. hookIdentityRoot reads the same
-	// meta (contract K2), so the reset finds the state keys of the hooks.
-	// The git top level can differ, and a reset there leaves the advice
-	// hidden after compaction (P3 review ruling R1). The reset record
-	// hashes over this root too, so it joins the edit records of the same
-	// receiver (§5 row 121).
+	// meta, so the reset finds the state keys of the hooks. The git top
+	// level can differ, and a reset there leaves the advice hidden after
+	// compaction. The reset record hashes over this root too, so it joins
+	// the edit records of the same receiver.
 	idRoot := hookIdentityRoot(opts)
 	if idRoot == "" {
 		// No root resolves, so no state file of the hooks can be found.

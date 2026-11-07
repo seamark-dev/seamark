@@ -417,9 +417,8 @@ func TestMaintFactTextDropsTheRouteOfABlockedTrigger(t *testing.T) {
 		"review the trigger or edit its regions in seamark tui, Lessons › Pins, with i"))
 }
 
-// TestPinFileBlockNoteFollowsTheRecordedRoot covers the note of a retarget
-// or a replace preview. The first sentence names the file that the step
-// leaves true.
+// TestPinFileBlockNoteFollowsTheRecordedRoot covers the note of a Pins
+// preview. The first sentence names the file that the step leaves true.
 func TestPinFileBlockNoteFollowsTheRecordedRoot(t *testing.T) {
 	want := handWords{
 		"The console cannot change .seamark/lessons.yaml: the file is read-only. Edit the file by hand.",

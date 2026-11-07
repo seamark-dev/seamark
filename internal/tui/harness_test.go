@@ -69,8 +69,8 @@ type fakeServices struct {
 	stats        lessonstats.Snapshot
 	agentsOnPath []string
 
-	// delivery answers the delivery reading; nil keeps capture unavailable
-	// and lists no pins, so existing scenes need no delivery fixture.
+	// delivery answers the delivery reading; nil gives the fixed fields and
+	// lists no pins, so existing scenes need no delivery fixture.
 	delivery func(lessonreport.Request) (lessonreport.Report, error)
 
 	planSetup       func([]integration.ClientSetup) (*services.SetupPreview, error)
@@ -110,16 +110,15 @@ type fakeServices struct {
 	commitAuthor      func(*maintain.AuthorPlan) (maintain.AuthorResult, error)
 
 	// planCheckDef and commitCheckDef answer the check-definition
-	// authoring (contract K1); nil answers with an empty plan and an
-	// empty result.
+	// authoring; nil answers with an empty plan and an empty result.
 	planCheckDef   func(maintain.CheckDefRequest) (*maintain.CheckDefPlan, error)
 	commitCheckDef func(*maintain.CheckDefPlan) (maintain.AuthorResult, error)
 
-	// lessonCapability is the lesson-capability/1 report (contract K10).
-	// The zero value lists no client and no pin.
+	// lessonCapability is the lesson-capability/1 report. The zero value
+	// lists no client and no pin.
 	lessonCapability lessoncheck.CapabilityReport
-	// verifyLessons answers a verification (contract K5). nil answers
-	// with an error, so no test reads an unscripted result as a pass.
+	// verifyLessons answers a verification. nil answers with an error, so
+	// no test reads an unscripted result as a pass.
 	verifyLessons func(context.Context, []string) (*lessoncheck.Verification, error)
 	// revalidateLessons answers a revalidation. nil answers stale, so no
 	// test reads an unscripted result as fresh.

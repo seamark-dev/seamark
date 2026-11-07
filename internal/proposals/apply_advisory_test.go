@@ -12,9 +12,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// checksLessons is a pin file with the check definitions of the spec
-// example, an enforced pin, and a tuning value. An apply must keep all of
-// it byte for byte.
+// checksLessons is a pin file with the example check definitions, an
+// enforced pin, and a tuning value. An apply must keep all of it byte
+// for byte.
 const checksLessons = `threshold: 2
 lesson_checks_version: 1
 checks:
@@ -31,11 +31,11 @@ pin:
     check: frozen-assets
 `
 
-// TestApplyNewPinIsAdvisory proves the K1 writer row "Proposal apply"
-// and AC-27. distill.RenderPins writes no mode and no check, so a pin
-// that an apply adds is advisory (§5 row 111). The apply adds the block
-// under the pin key and keeps the checks map and the enforced pin. The
-// candidate passes the strict check tier of pinfile.PrepareAppend.
+// TestApplyNewPinIsAdvisory covers the proposal apply writer.
+// distill.RenderPins writes no mode and no check, so a pin that an
+// apply adds is advisory. The apply adds the block under the pin key
+// and keeps the checks map and the enforced pin. The candidate passes
+// the strict check tier of pinfile.PrepareAppend.
 func TestApplyNewPinIsAdvisory(t *testing.T) {
 	f := newFixture(t, true)
 	f.writeLessons(checksLessons)

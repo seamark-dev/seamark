@@ -3,9 +3,9 @@ package lessonreport
 import "github.com/seamark-dev/seamark/internal/reviews"
 
 // ResolveRef resolves a pin reference to one pin identity digest. It
-// reads the current config only (Config.ResolvePinRef). The report reads
-// no capture archive, so a pin version that is no longer configured has
-// no reference.
+// reads the current config only (Config.ResolvePinRef). The historical
+// section is a fixed field, so a pin version that is no longer
+// configured has no reference.
 //
 // Every failure is the *reviews.PinRefError of the config: a malformed,
 // missing, ambiguous, or duplicate-entries reference. A nil config reads

@@ -49,8 +49,8 @@ const (
 const budgetHeading = "Selection budgets (current lessons.yaml; a past count can come from another budget):"
 
 // selectionReading builds the selection part of the report from the two
-// sources that it depends on. It needs no capture, so it reads the audit
-// state and the config only.
+// sources that it depends on. It reads the audit state and the config
+// only.
 func selectionReading(in Inputs, audit SourceRead) *SelectionReading {
 	state := EvidenceUnknown
 	if audit.State == StateRead {
@@ -113,11 +113,10 @@ func requestedBudget(stored, resolved int, unread bool) (source string, requeste
 }
 
 // SelectionLine returns the selection text of one pin version, one line per
-// part. The console prints it and adds no word and no count, so the CLI and
-// the console cannot differ. The budget lines read lessons.yaml, so they stay
-// when the audit does not read. The count lines then stay out, because
-// each one would print a zero that no record states. The bool is false
-// when the report holds no reading of that version.
+// part. The budget lines read lessons.yaml, so they stay when the audit
+// does not read. The count lines then stay out, because each one would
+// print a zero that no record states. The bool is false when the report
+// holds no reading of that version.
 func SelectionLine(r *Report, pinVersion string) (string, bool) {
 	if r == nil || r.Selection == nil {
 		return "", false

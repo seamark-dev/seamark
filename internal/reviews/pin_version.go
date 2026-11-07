@@ -12,9 +12,9 @@ import (
 )
 
 // This file holds the pin version, the pin-ref, the guidance digest, and
-// the exported identity digests (contract K2). They live in reviews, not
-// in lessoncheck: the audit writer, distill, archive, delivery, and the
-// delivery report already import reviews and cannot import lessoncheck.
+// the exported identity digests. They live in reviews, not in
+// lessoncheck, because lessoncheck imports reviews. The audit writer,
+// distill, delivery, and the delivery report read them from here.
 
 // PinVersionScheme labels the version composition. A change of the parts
 // below is a new label and therefore a new version for every pin.
@@ -31,18 +31,14 @@ const GuidanceDigestScheme = "guidance/1"
 const pinIdentityLabel = "pin"
 
 // MinPinRef is the shortest pin-ref prefix that ResolvePinRef accepts.
-// It equals archive.minPlanRef, so both kinds of reference read alike.
 const MinPinRef = 8
 
-// ShownPinRef is the shortest pin-ref that ShortPinRef prints. It equals
-// the shown length of a live plan key.
+// ShownPinRef is the shortest pin-ref that ShortPinRef prints.
 const ShownPinRef = 12
 
 // compose joins the parts with a length prefix on each part. A part can
 // hold any byte, and the lengths keep two different part lists apart.
-// The bytes equal capture.compose and the loop of contextDigest. reviews
-// keeps its own copy because the capture package pulls sqlite into the
-// hook paths.
+// The bytes equal the loop of contextDigest.
 func compose(parts ...string) string {
 	var b strings.Builder
 
@@ -61,8 +57,8 @@ func composeDigest(parts ...string) string {
 }
 
 // ComposeDigest is composeDigest for a package that builds a digest of
-// its own label (registry §2.2), such as the scope digest of a
-// preparation. One composer keeps every compose digest byte-equal.
+// its own label, such as the scope digest of a preparation. One
+// composer keeps every compose digest byte-equal.
 func ComposeDigest(parts ...string) string {
 	return composeDigest(parts...)
 }
@@ -91,7 +87,7 @@ func CheckVersion(def CheckDef) string {
 // PinVersion is the hex SHA-256 of compose("pin-version/1", key.Rule,
 // key.Region, note, mode, check). The audit, preparation, verification,
 // and the delivery report carry it. A cosmetic edit of lessons.yaml
-// keeps it, and a change of meaning gives a new one (AC-16).
+// keeps it, and a change of meaning gives a new one.
 //
 // The version stays deterministic for a config that Validate refuses.
 // An unknown mode and an undefined check each get a marked part, because
@@ -320,10 +316,10 @@ func (c *Config) ResolvePinRef(ref string) (int, error) {
 	return matched[0], nil
 }
 
-// normalizePinRef is the one input rule for a pin-ref (contracts §1.2):
-// trim the surrounding spaces, lowercase, then require 8 to 64 lowercase
-// hex characters. It returns the normalized text also when the rule
-// fails, because the malformed message quotes it.
+// normalizePinRef is the one input rule for a pin-ref: trim the
+// surrounding spaces, lowercase, then require 8 to 64 lowercase hex
+// characters. It returns the normalized text also when the rule fails,
+// because the malformed message quotes it.
 func normalizePinRef(ref string) (string, bool) {
 	ref = strings.ToLower(strings.TrimSpace(ref))
 	if len(ref) < MinPinRef || len(ref) > sha256.Size*2 {

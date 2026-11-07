@@ -176,8 +176,8 @@ after the agent has constructed the call. For earlier guidance, use
 `seamark lessons --prepare path/to/file` before building a change.
 `seamark report --open` opens a local report of proposals and accepted lessons;
 `seamark lessons --stats` shows which reminders have been delivered.
-The Unreleased `seamark lessons --delivery` reading keeps captured
-corrections separate from finding-based outcomes; it proves no prevention.
+The Unreleased `seamark lessons --delivery` reading counts the delivery
+records of each pin version in the audit logs; it proves no prevention.
 See the [lesson guide](docs/lessons.md) for executable checks and limits.
 
 [Learning guide: review, tune, dismiss, and update lessons →](docs/lessons.md)

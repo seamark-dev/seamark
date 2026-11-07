@@ -349,7 +349,7 @@ func pinRouteByHand(st *state) string {
 }
 
 // pinFileBlockNote is the note of a preview whose pin file the console
-// cannot change. Pins and Proposals show the same words.
+// cannot change.
 func pinFileBlockNote(st *state, block string) string {
 	step, file := pinHandPlace(st)
 

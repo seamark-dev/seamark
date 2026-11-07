@@ -99,11 +99,11 @@ func checkLegacyHeadDiff(t *testing.T) string {
 	return head
 }
 
-// TestCheckIdleStdinFallsBackToGitDiffHead covers X1: an agent harness
-// can give check a stdin pipe that stays open and sends nothing. In warn
-// mode check then uses `git diff HEAD` after the wait and names that
-// fallback on stderr. The goroutine that waits for the first byte ends
-// when the pipe closes.
+// TestCheckIdleStdinFallsBackToGitDiffHead covers an idle stdin: an
+// agent harness can give check a stdin pipe that stays open and sends
+// nothing. In warn mode check then uses `git diff HEAD` after the wait
+// and names that fallback on stderr. The goroutine that waits for the
+// first byte ends when the pipe closes.
 func TestCheckIdleStdinFallsBackToGitDiffHead(t *testing.T) {
 	// The production wait prints as "1s" in the stderr line.
 	// TestCheckIdleStdinProcess checks that check passes this wait.
@@ -139,7 +139,7 @@ func TestCheckIdleStdinFallsBackToGitDiffHead(t *testing.T) {
 	}
 }
 
-// TestCheckIdleStdinBlocksUnderEnforcement covers the X1 review: under
+// TestCheckIdleStdinBlocksUnderEnforcement covers enforcement: under
 // enforcement an idle stdin blocks and check reads no `git diff HEAD`.
 // A diff producer that is slow to start would otherwise get the verdict
 // of `git diff HEAD`, and that verdict can allow what the diff blocks.
@@ -162,10 +162,10 @@ func TestCheckIdleStdinBlocksUnderEnforcement(t *testing.T) {
 	}
 }
 
-// TestCheckEmptyStdinFallsBackQuietly covers the X1 review: a stdin that
-// ends before its first byte is empty, not idle. check then uses `git
-// diff HEAD` and prints no notice, in both modes. A hook or a script
-// that closes stdin, or pipes no bytes, depends on this.
+// TestCheckEmptyStdinFallsBackQuietly covers an empty stdin: a stdin
+// that ends before its first byte is empty, not idle. check then uses
+// `git diff HEAD` and prints no notice, in both modes. A hook or a
+// script that closes stdin, or pipes no bytes, depends on this.
 func TestCheckEmptyStdinFallsBackQuietly(t *testing.T) {
 	root := checkLegacyFixture(t)
 	wantHead := checkLegacyHeadDiff(t)
@@ -211,9 +211,10 @@ func TestCheckEmptyStdinFallsBackQuietly(t *testing.T) {
 	}
 }
 
-// TestCheckReadsADiffThatStartsWithinTheWait covers X1: a writer that
-// starts late, but within the wait, gives the whole diff. The first byte
-// arrives alone, so a lost first read shows as a missing "d".
+// TestCheckReadsADiffThatStartsWithinTheWait covers a late writer: a
+// writer that starts late, but within the wait, gives the whole diff.
+// The first byte arrives alone, so a lost first read shows as a missing
+// "d".
 func TestCheckReadsADiffThatStartsWithinTheWait(t *testing.T) {
 	root := checkLegacyFixture(t)
 
@@ -247,10 +248,10 @@ func TestCheckReadsADiffThatStartsWithinTheWait(t *testing.T) {
 	}
 }
 
-// TestCheckFirstReadReadyAtTheDeadlineWins covers the X1 review: when
-// the first read and the deadline are both ready, the diff wins. One
-// select picks at random between ready channels. 100 rounds then show
-// such a loss with a chance of 1 - 2^-100.
+// TestCheckFirstReadReadyAtTheDeadlineWins covers a tie: when the first
+// read and the deadline are both ready, the diff wins. One select picks
+// at random between ready channels. 100 rounds then show such a loss
+// with a chance of 1 - 2^-100.
 func TestCheckFirstReadReadyAtTheDeadlineWins(t *testing.T) {
 	deadline := make(chan time.Time)
 	close(deadline)
@@ -320,11 +321,11 @@ func seamarkProcessIdleStdin(t *testing.T, dir string, args ...string) (stdout, 
 	return out.String(), errOut.String(), code
 }
 
-// TestCheckIdleStdinProcess covers X1 through a real seamark process
-// with an idle pipe as fd 0 and the production wait. In warn mode check
-// falls back to `git diff HEAD` after 1 s. Under enforcement, from the
-// flag or from the policy, the idle stdin blocks with exit 2 and check
-// prints no verdict.
+// TestCheckIdleStdinProcess covers an idle stdin through a real seamark
+// process with an idle pipe as fd 0 and the production wait. In warn
+// mode check falls back to `git diff HEAD` after 1 s. Under
+// enforcement, from the flag or from the policy, the idle stdin blocks
+// with exit 2 and check prints no verdict.
 func TestCheckIdleStdinProcess(t *testing.T) {
 	const (
 		notice  = "seamark: stdin idle after 1s; checking git diff HEAD"

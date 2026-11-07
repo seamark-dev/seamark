@@ -1,11 +1,11 @@
 package cli
 
-// Tests of the K10 capability join in the CLI (plan step P4.8): the
-// active lines of lessons --set-mode, the enforcement badges of lessons
-// --prepare, and the AC-1 proof of doctor, status, and --set-mode. Every
-// root is a temporary directory. The hook binary is a link named
-// seamark to the test binary, so the report reads it as the running
-// binary and never runs it.
+// Tests of the capability join in the CLI: the active lines of lessons
+// --set-mode, the enforcement badges of lessons --prepare, and the
+// proof that doctor, status, and --set-mode call no model. Every root
+// is a temporary directory. The hook binary is a link named seamark to
+// the test binary, so the report reads it as the running binary and
+// never runs it.
 
 import (
 	"encoding/json"
@@ -57,8 +57,8 @@ func capabilityInstall(t *testing.T, root string, setups ...integration.ClientSe
 	require.NoError(t, err)
 }
 
-// The K10 active lines of the spec example pin under Claude Code enforce
-// hooks and no Codex hooks.
+// The active lines of the example pin under Claude Code enforce hooks
+// and no Codex hooks.
 const (
 	activeEnforceBlock  = "  active: requested; claude enforced-unverified, codex requested-inactive\n"
 	activeEnforceClaude = "active: claude enforced-unverified (native-deny-unverified, native-timeout-unverified) · " +
@@ -66,12 +66,12 @@ const (
 	activeCodexInactive = "active: codex requested; inactive: not-installed\n"
 )
 
-// TestLessonsSetModeShowsActiveState proves K6 step 6 from milestone P4
-// (§5 row 41): the active state is the K10 join of the file that the
-// command wrote, per client, hook stage, and tool, in the impact block
-// and in the active lines. A client that no handler covers reads
-// "requested; inactive: <reasons>". The fixed text of milestone P1 is
-// gone, and a root without handlers keeps its words.
+// TestLessonsSetModeShowsActiveState proves that the active state is
+// the capability join of the file that the command wrote, per client,
+// hook stage, and tool, in the impact block and in the active lines. A
+// client that no handler covers reads "requested; inactive: <reasons>".
+// The fixed active line is gone, and a root without handlers keeps its
+// words.
 func TestLessonsSetModeShowsActiveState(t *testing.T) {
 	t.Run("claude enforce hooks, no codex hooks", func(t *testing.T) {
 		root, sentinel := setModeWorkspace(t, setModeYAML, true)
@@ -82,7 +82,7 @@ func TestLessonsSetModeShowsActiveState(t *testing.T) {
 		assert.Empty(t, stderr)
 		assert.True(t, strings.HasPrefix(stdout, setModeBlockHead(t)+activeEnforceBlock), stdout)
 		assert.Contains(t, stdout, "\nrequested mode: enforce\n"+activeEnforceClaude+activeCodexInactive)
-		assert.NotContains(t, stdout, "\nactive: "+lessoncheck.ActiveRequested+"\n", "the P1 fixed line is gone")
+		assert.NotContains(t, stdout, "\nactive: "+lessoncheck.ActiveRequested+"\n", "the fixed active line is gone")
 
 		stdout, _ = goldenRun(t, root, "lessons", "--set-mode", "check", "--pin", setModePinRef)
 		assert.Contains(t, stdout, "\nrequested mode: check\n"+
@@ -115,7 +115,7 @@ func TestLessonsSetModeShowsActiveState(t *testing.T) {
 			"--check", "frozen-assets")
 		require.Error(t, err, "nothing is written")
 		assert.True(t, strings.HasPrefix(stdout, setModeBlockHead(t)+activeEnforceBlock),
-			"the impact block shows the K10 state of the candidate:\n%s", stdout)
+			"the impact block shows the capability state of the candidate:\n%s", stdout)
 
 		content, _ := maintainLessons(t, root)
 		assert.Equal(t, setModeYAML, content)
@@ -133,10 +133,10 @@ func TestLessonsSetModeShowsActiveState(t *testing.T) {
 	})
 }
 
-// TestLessonsPrepareShowsEnforcement proves the L1 enforcement field
-// from milestone P4: each check summary carries the K10 badge of every
-// client, in the JSON and in the text, from the capability report of
-// the workspace. Preparation computes no badge.
+// TestLessonsPrepareShowsEnforcement proves the enforcement field of a
+// preparation: each check summary carries the enforcement badge of
+// every client, in the JSON and in the text, from the capability report
+// of the workspace. Preparation computes no badge.
 func TestLessonsPrepareShowsEnforcement(t *testing.T) {
 	root := prepareRepo(t, false)
 	asset := filepath.Join(root, "generated", "new.txt")
@@ -177,10 +177,10 @@ func TestLessonsPrepareShowsEnforcement(t *testing.T) {
 	})
 }
 
-// TestLessonCheckHealthSurfacesCallNoInvoker proves AC-1 for the K10
-// surfaces of the CLI: doctor, status, status --json, and --set-mode
-// read the capability report offline. The invoker sentinel records no
-// call.
+// TestLessonCheckHealthSurfacesCallNoInvoker proves that the capability
+// surfaces of the CLI call no model: doctor, status, status --json, and
+// --set-mode read the capability report offline. The invoker sentinel
+// records no call.
 func TestLessonCheckHealthSurfacesCallNoInvoker(t *testing.T) {
 	root := prepareRepo(t, true)
 	maintainWriteConfig(t, root, maintainGateOn)

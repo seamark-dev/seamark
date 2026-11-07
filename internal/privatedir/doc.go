@@ -2,10 +2,9 @@
 // worktree: a real directory, an owner-only mode, and a .gitignore that
 // excludes the directory from Git.
 //
-// The capture archive (.seamark/private) uses these rules. This package
-// keeps them for other private state too, such as the lesson checks
-// (.seamark/checks). So one copy of each safety check exists, because
-// two copies of a safety check can drift apart.
+// The lesson checks (.seamark/checks) use these rules. One package holds
+// them, so one copy of each safety check exists, because two copies of
+// a safety check can drift apart.
 //
 // The package also holds the hardening of an append-only log in such a
 // directory: the link refusal, the exclusive lock, and the rotation. The

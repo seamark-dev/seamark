@@ -37,9 +37,9 @@ pin:
     check: no-todo-calls
 `
 
-// pinVersionWire is one pin of a JSON document, by the K2 key names.
-// Each surface decodes its own bytes through it, so a surface with
-// another key name fails the test too.
+// pinVersionWire is one pin of a JSON document, by the shared key
+// names. Each surface decodes its own bytes through it, so a surface
+// with another key name fails the test too.
 type pinVersionWire struct {
 	PinIdentity string `json:"pin_identity"`
 	PinVersion  string `json:"pin_version"`

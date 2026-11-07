@@ -16,9 +16,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
-// The tests of `seamark init --lesson-checks` and `--lesson-exploration`
-// (contract K10). Every root is a temporary directory: a test never
-// installs a hook in the checkout.
+// The tests of `seamark init --lesson-checks` and
+// `--lesson-exploration`. Every root is a temporary directory: a test
+// never installs a hook in the checkout.
 
 // initLessonRun runs init with the lesson-check flags through the shared
 // path with a temporary executable. Without a client it is the form without
@@ -69,7 +69,7 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 	binary := capabilitySeamark(t)
 	root := t.TempDir()
 
-	// A fresh init installs nothing new (L170), and says nothing of it.
+	// A fresh init installs nothing new, and says nothing of it.
 	out := initLessons(t, root, binary, "", "")
 	assert.Equal(t, hooks.LessonChecksOff, lessonMode(t, root, integration.ClaudeID))
 	assert.NotContains(t, out, "lesson checks")
@@ -96,7 +96,7 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 	assert.Contains(t, out, "          PreToolUse Edit|Write|MultiEdit "+binary+" lessons --baseline --hook\n")
 	assert.NotContains(t, out, "  lesson checks  ")
 
-	// The gate mode and the lesson-check mode stay independent (R-36).
+	// The gate mode and the lesson-check mode stay independent.
 	_, err := initLessonRun(t, root, binary, initRun{gateMode: gateModeEnforce})
 	require.NoError(t, err)
 	assert.Equal(t, hooks.LessonChecksCheck, lessonMode(t, root, integration.ClaudeID))
@@ -141,7 +141,7 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 func TestRunInitLessonChecksRefusesUnsupportedEnforce(t *testing.T) {
 	binary := capabilitySeamark(t)
 	// A client without a pre-write guard: the refusal names the client,
-	// the tools, and the contexts (P0 ruling M5), before any write.
+	// the tools, and the contexts, before any write.
 	codex, _ := integration.Builtin().Lookup(integration.CodexID)
 	codex.SetupOps.LessonGuard = false
 
@@ -164,7 +164,7 @@ func TestRunInitLessonChecksRefusesUnsupportedEnforce(t *testing.T) {
 	assert.Empty(t, b.String())
 
 	// A known-bad state refuses with its reason, and setup never
-	// substitutes check-only behavior (L172).
+	// substitutes check-only behavior.
 	root = t.TempDir()
 	require.NoError(t, inspecttest.Named("disabled").Write(root))
 
@@ -235,8 +235,7 @@ func TestRunInitLessonChecksFlagValues(t *testing.T) {
 	assert.Equal(t, before, snapshot(t, root), "--print writes nothing")
 
 	// Exploration for a client without the structured Read path: no
-	// failure, the client is named, and nothing is installed for it
-	// (contracts §5 row 42, P0 ruling A14).
+	// failure, the client is named, and nothing is installed for it.
 	root = t.TempDir()
 	out := initLessons(t, root, binary, "", hooks.LessonExplorationOn, integration.ClaudeID, integration.CodexID)
 	assert.Contains(t, out, "  note    lesson exploration: nothing was installed for codex (no structured Read path); "+
@@ -270,7 +269,7 @@ func TestRunInitLessonChecksOffIsTheRollback(t *testing.T) {
 	assert.Contains(t, out, "  lesson checks  codex off — no pre-write or post-edit hook installed\n")
 
 	// Every file, also the gate, lessons, and reset entries, has the bytes
-	// it had before the first lesson-check request (R-39).
+	// it had before the first lesson-check request.
 	assert.Equal(t, before, snapshot(t, root))
 
 	assert.Equal(t, hooks.LessonChecksOff, lessonMode(t, root, integration.ClaudeID))
@@ -283,8 +282,8 @@ func TestRunInitLessonChecksOffIsTheRollback(t *testing.T) {
 }
 
 func TestRunInitLessonChecksCallsNoInvoker(t *testing.T) {
-	// AC-1: setup of the lesson-check and exploration hooks starts no
-	// agent, no model, and no network request.
+	// Setup of the lesson-check and exploration hooks starts no agent, no
+	// model, and no network request.
 	root := writeFixture(t)
 	sentinel := newInvokerSentinel(t, root)
 

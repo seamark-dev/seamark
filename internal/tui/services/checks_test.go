@@ -2,10 +2,8 @@ package services
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,9 +23,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
-// The engine tests of the lesson-check services (contracts K1, K5, K10)
-// run the production engine over temporary git workspaces. Only the
-// agent invoker is a fake, and no test may call it (AC-1).
+// The engine tests of the lesson-check services run the production
+// engine over temporary git workspaces. Only the agent invoker is a
+// fake, and no test may call it.
 
 // checksLessons holds one enforce pin on generated and its check.
 const checksLessons = `lesson_checks_version: 1
@@ -64,41 +62,33 @@ func checksWorkspace(t *testing.T) workspace.Workspace {
 }
 
 // auditRecords returns the records of the lesson-check audit stream.
-// The writer rotates the live log by size and by the age of its oldest
-// record. A rotation moves the earlier records of a test into the
-// rotated generation, so the helper reads both files, oldest first.
 func auditRecords(t *testing.T, ws workspace.Workspace) []lessoncheck.AuditRecord {
 	t.Helper()
 
-	live := filepath.Join(ws.Root, ".seamark", "lesson-check-audit.jsonl")
+	f, err := os.Open(filepath.Join(ws.Root, ".seamark", "lesson-check-audit.jsonl"))
+	require.NoError(t, err)
+
+	defer func() { _ = f.Close() }()
 
 	var out []lessoncheck.AuditRecord
 
-	for _, path := range []string{live + ".1", live} {
-		data, err := os.ReadFile(path)
-		if path != live && errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-
-		require.NoError(t, err)
-
-		sc := bufio.NewScanner(bytes.NewReader(data))
-		for sc.Scan() {
-			var rec lessoncheck.AuditRecord
-			require.NoError(t, json.Unmarshal(sc.Bytes(), &rec))
-			out = append(out, rec)
-		}
-
-		require.NoError(t, sc.Err())
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var rec lessoncheck.AuditRecord
+		require.NoError(t, json.Unmarshal(sc.Bytes(), &rec))
+		out = append(out, rec)
 	}
+
+	require.NoError(t, sc.Err())
 
 	return out
 }
 
-// TestServicesVerifyLessonsUsesCallerTUI proves the console part of
-// AC-35: the console verifies with the one service of the CLI, names the
-// caller tui in the result and in the K9 audit record, and revalidates a
-// shown result with lessoncheck.Revalidate. It calls no model (AC-1).
+// TestServicesVerifyLessonsUsesCallerTUI proves that the console shares
+// the verification of the CLI. The console verifies with the one
+// service of the CLI, names the caller tui in the result and in the
+// audit record, and revalidates a shown result with
+// lessoncheck.Revalidate. It calls no model.
 func TestServicesVerifyLessonsUsesCallerTUI(t *testing.T) {
 	ws := checksWorkspace(t)
 	agent := &servicestest.Agent{}
@@ -265,8 +255,8 @@ func TestServicesCheckImpactCandidate(t *testing.T) {
 // commit is a console mutation: it takes the engine lock with TryLock,
 // fails with ErrBusy while another mutation runs, and writes nothing
 // then. The plan writes nothing and takes no lock, as the pin authoring
-// plan does. The impact block gets the K10 active state of the
-// installed hooks, not the fixed text of milestone P1.
+// plan does. The impact block gets the active state of the installed
+// hooks, not the fixed text of the engine.
 func TestServicesCheckDefinitionTakesEngineLock(t *testing.T) {
 	ws := checksWorkspace(t)
 	servicestest.Write(t, ws, ".seamark/config.yaml", "distill:\n  write: true\n")

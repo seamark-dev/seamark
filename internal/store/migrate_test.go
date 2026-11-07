@@ -295,8 +295,11 @@ func TestMigrateAddsTheScopeChoice(t *testing.T) {
 
 // TestOpenUpgradesTheV080Database proves the upgrade from the last release.
 // testdata/schema-v0.8.0.sql is a byte copy of the schema.sql of v0.8.0,
-// which stamps schema 6. After Open, each table must equal the table of a
-// fresh database, column by column, and the old row must keep its fields.
+// which stamps schema 6. The copy keeps the old planning IDs in its SQL
+// comments. An edit would make it differ from schema.sql at the v0.8.0
+// tag, and the test must replay the released file unchanged. After Open,
+// each table must equal the table of a fresh database, column by column,
+// and the old row must keep its fields.
 func TestOpenUpgradesTheV080Database(t *testing.T) {
 	ddl, err := os.ReadFile(filepath.Join("testdata", "schema-v0.8.0.sql"))
 	require.NoError(t, err)

@@ -861,8 +861,10 @@ required before v0.9.0 can ship. See the
 
 ## Lesson delivery: lessons --delivery
 
-This model-free reading asks which exact pin version reached the context
-of an assessed correction. It does not judge whether the pin works:
+This model-free reading asks which exact pin version Seamark delivered,
+through which surface, and what the lesson checks recorded for it. It
+reads the audit logs, not a conversation, so it does not judge whether
+the pin works:
 
 ```bash
 seamark lessons --delivery
@@ -870,51 +872,40 @@ seamark lessons --delivery --pin <pin-ref>
 seamark lessons --delivery --pin <pin-ref> --json
 ```
 
-JSON uses `delivery/1`. The overview separates current entries from
-historical versions. `--pin` expands one identity into its versions,
-occurrences, cited actions, observation windows, reasons, limitations and
-inspection commands. A historical identity prefix can select a removed
-pin. Ambiguous or missing references fail instead of selecting another
-pin. Source failures such as an absent, busy or older archive are report
-data, not a zero-correction success claim. The report never assembles
-new evidence or calls a model.
+JSON uses `delivery/1`. The overview has one reading for each pin entry
+of the current `lessons.yaml`. A reading counts the records of that exact
+pin version in `.seamark/lessons-audit.jsonl`, and its check and guard
+records in `.seamark/lesson-check-audit.jsonl`. `--pin` selects one pin
+by its pin-ref and lists its version; versions are never pooled. A
+missing, ambiguous or duplicated reference fails instead of selecting
+another pin. An absent, unreadable or over-limit audit is report data,
+not a zero count. The report writes no durable state and never calls a
+model; SQLite can still create empty WAL/SHM sidecars when it opens the
+index read-only.
 
-An assessed feedback item associated with the same behavior of one pin
-version is an **occurrence**. Known copies count once. Located corrected
-actions supply **incidents**; one occurrence can cite several actions.
-A shared incident or session can leave independence unresolved. Human,
-unverified-user and peer origins stay distinct. Association is an
-assessment, not proof of cause; missing actions remain unknown.
+A record shows what Seamark emitted or left out. It does not show what a
+model saw, or that the pin came before the agent built its call.
 
-| Class | What the records establish |
-| --- | --- |
-| `at-action` | The action's own pre-tool hook emitted the version. The call arguments already existed. |
-| `earlier-in-context` | An earlier injection in the same receiving context supports the recorded repeat suppression. |
-| `other-lane` | Earlier delivery reached another context, not the lane of the corrected action. Parent delivery does not cover a child. |
-| `region-not-matched` | A complete evaluation of the exact configuration establishes that the action's paths did not match. |
-| `not-emitted` | The version matched but was held back or emission failed; the reason names why. |
-| `unknown` | Identity, configuration, audit, action or continuity evidence cannot support a stronger reading. |
-| `mixed` | The cited actions of one occurrence have different classes. |
+The text shows what the audit logs give. The JSON keeps the full
+`delivery/1` field set, and the fields without a source in this build
+hold fixed values. So every build writes the same fields:
 
-`decision_timing` is separate. Own-call delivery is `same-call-only`,
-not an earlier chance to build that call. Preparation has the separate
-fact `receiver-unknown-preparation`; returning guidance proves no
-receiving lane or model boundary. `before-construction` requires verified
-boundary and continuity evidence, unavailable in the current native
-evidence. Current timing stays `same-call-only` or `unknown`, with
-`mixed` for occurrences whose action timings differ. Timestamps alone
-do not prove that a model read guidance.
+- `capture` reads `unavailable`, and `as_of.archive` reads `absent`, each
+  with a fixed message.
+- `historical`, `unlinked` and `expanded.occurrences` are empty. The
+  occurrence counts of each pin stay at zero, and its timing, facts,
+  reasons, limitations and next steps are empty.
+- In `coverage`, only `unknown_lane_records`, `events_without_pins` and
+  `denied_call_injections` come from the audit. The other counts stay at
+  zero.
+- Each delivered session opens an observation window for that version.
+  Every window reads `incomplete` with the fixed reason
+  `session-not-captured`, because this build reads no evidence after the
+  delivery. So `linked` and `no_linked_correction` stay at zero.
 
-A delivered session opens an observation window for that version. Its
-endpoint is a captured session end, not a wall-clock wait. A window is
-linked, incomplete, or **no linked correction observed (qualified)**.
-The last phrase requires consent coverage, an ended and unreopened
-session, complete capture and assembly, assessed evidence, a complete
-comparison, a captured edit after injection, and verified lane coverage.
-Unresolved exclusions and audit gaps also prevent that negative reading.
-Today unverified lane identity leaves otherwise negative windows
-`incomplete` with `lane-coverage-unknown`. No absence is a success or
-prevention rate, or proof that the agent obeyed.
+A fixed value is empty, zero, `unknown` or a fixed state, so it never
+reads like a result. An incomplete window is not a success or prevention
+rate, or proof that the agent obeyed.
 
 The report keeps these units separate:
 
@@ -922,14 +913,13 @@ The report keeps these units separate:
 | --- | --- |
 | Records | Physical firing-log lines; one edit can write more than one. |
 | Events | Surface invocations with a distinct event identity. |
-| Sessions | Distinct captured or audited sessions. |
 | Delivered sessions | Sessions with an injected hook/exploration record of this version, excluding calls the guard denied. |
-| Occurrences | Assessed feedback-item/pin-version pairs, with known copies collapsed. |
-| Incidents / actions | Distinct located corrected calls / cited corrected actions. |
-| Feedback items | Captured feedback episode keys. |
 | Check operations | Retained verify, post-edit and guard audit records. |
 | Pin evaluations | Executable pins evaluated inside those operations. |
 | Guard attempts | Pre-write decisions, not edits or corrections. |
+
+The text prints these six units. The JSON unit table also defines the
+units of the fixed fields.
 
 A requested deny is not a prevented write. The report separately shows
 requested denies, later execution, no execution observed and verified
@@ -1016,7 +1006,7 @@ records add a digest of the turn, the lane (`root`, `child`, or `unknown`),
 and whether the receiving context is resettable; preparation, `change_set`,
 and `check` records name no receiver. Two record kinds need the recording
 switch: the hook process must run with `SEAMARK_RECORD_EVALUATIONS=1` in its
-environment. The native recording script (`make capture-native-record`) sets
+environment. The native recording script (`make native-record`) sets
 it for its paid runs. A hook process sees it only when the client that
 starts the hook passes its own environment on. The two kinds are an
 `evaluation` record when a
@@ -1024,7 +1014,7 @@ hook emitted nothing (no match, a rejected path, a failed selection or reply,
 or, for a read, only lessons that the context already got), and a `reset`
 record when `PostCompact` resets a receiving context. Without the switch,
 the hooks write the same record kinds as before, with the new keys.
-Records written with the switch on say so (`capture_opt_in`), because a
+Records written with the switch on say so (`record_evaluations`), because a
 missing `reset` record shows that no compaction happened only between two
 such records. Raw session, agent, tool-use, and turn identifiers are never
 stored.
@@ -1093,8 +1083,7 @@ this file.
 ### Do pins actually change behavior? The outcome loop
 
 The finding-based outcome below is independent of lesson delivery.
-A captured peer correction is not a mined recurrence. Neither reading
-proves causation.
+The outcome proves no cause.
 
 Firing counts measure *exposure* — a pin reached an agent. The `pin
 outcomes` block measures *effect*: did the pin's mistake recur after

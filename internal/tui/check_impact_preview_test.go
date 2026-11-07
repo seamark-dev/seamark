@@ -11,10 +11,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// The checker impact in the retarget preview of Pins (contract K1,
-// "Checker impact before apply"; moved from P1.14 by P0 ruling P1-a).
-// The engine fills maintain.Plan.Impact, and the preview shows its lines
-// before y with the renderer of the CLI.
+// The checker impact in the retarget preview of Pins. The engine fills
+// maintain.Plan.Impact, and the preview shows its lines before y with
+// the renderer of the CLI.
 
 // checkImpactWrapYAML is the wrap-sql-errors pin of the maintenance
 // fixture as an enforce pin with a no-added-pattern/1 check. region is
