@@ -8,29 +8,29 @@ import (
 	"github.com/seamark-dev/seamark/internal/maintain"
 )
 
-// The lesson-check services (contracts K1, K5, K10). The capability
-// report, the verification, and the revalidation call the engines of
-// doctor, status, and lessons --verify, so the console and the CLI give
-// one account. The check-definition authoring is part of Maintenance,
-// because it writes .seamark/lessons.yaml as the pin authoring does.
+// The lesson-check services. The capability report, the verification,
+// and the revalidation call the engines of doctor, status, and lessons
+// --verify, so the console and the CLI give one account. The
+// check-definition authoring is part of Maintenance, because it writes
+// .seamark/lessons.yaml as the pin authoring does.
 
 // Checks covers the executable lesson checks of the workspace: what the
 // installed hooks cover, the verification of the working tree, and the
 // freshness of a shown verification. Lessons › Pins and the Integrations
 // detail use it. VerifyLessons appends one record to the lesson-check
-// audit stream (contract K9), so the area is not part of Reader.
+// audit stream, so the area is not part of Reader.
 type Checks interface {
 	// LessonCapability joins insps, the inspections that Integrations
 	// returned, with .seamark/lessons.yaml of the workspace root into
-	// the lesson-capability/1 report (contract K10). The hooks of the
-	// workspace read that file, so the report uses it. It reads only and
-	// runs no hook binary.
+	// the lesson-capability/1 report. The hooks of the workspace read
+	// that file, so the report uses it. It reads only and runs no hook
+	// binary.
 	LessonCapability(insps []integration.Inspection) lessoncheck.CapabilityReport
 	// VerifyLessons verifies the working tree of the workspace root
-	// against every executable pin, as `seamark lessons --verify` does
-	// (contract K5). paths holds repository-relative paths; empty is the
-	// default selection. The result names the caller tui. It appends one
-	// audit record and sweeps the stale pending baselines.
+	// against every executable pin, as `seamark lessons --verify` does.
+	// paths holds repository-relative paths; empty is the default
+	// selection. The result names the caller tui. It appends one audit
+	// record and sweeps the stale pending baselines.
 	VerifyLessons(ctx context.Context, paths []string) (*lessoncheck.Verification, error)
 	// RevalidateLessons reports whether the binding of an earlier
 	// result of VerifyLessons still holds (lessoncheck.Revalidate). It
@@ -39,7 +39,7 @@ type Checks interface {
 }
 
 // LessonCapability joins the inspections that the console holds, so one
-// refresh inspects each client once (P0 lead row P4-g).
+// refresh inspects each client once.
 func (e *engine) LessonCapability(insps []integration.Inspection) lessoncheck.CapabilityReport {
 	return integration.LessonCapability(insps, e.ws.Root, e.self())
 }
@@ -99,7 +99,7 @@ func (e *engine) CommitCheckDef(p *maintain.CheckDefPlan) (maintain.AuthorResult
 }
 
 // joinActive replaces the fixed active text of each impact block with
-// the K10 join on the candidate bytes (contract K1 "active:" line), as
+// the capability join on the candidate bytes (the "active:" line), as
 // lessons --set-mode does. The candidate holds the mode that each pin
 // requests after the save, also when the save is blocked. A candidate
 // that does not decode keeps the fixed text, because its plan is blocked

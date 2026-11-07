@@ -2,9 +2,9 @@ package hooks
 
 import "slices"
 
-// This file holds the managed lesson-check and exploration hook entries
-// (contract K10). They are not in ClaudeSpecs and CodexSpecs. The lesson
-// and gate inspection reads those lists by position, and init installs
+// This file holds the managed lesson-check and exploration hook
+// entries. They are not in ClaudeSpecs and CodexSpecs. The lesson and
+// gate inspection reads those lists by position, and init installs
 // these entries only on an explicit request (--lesson-checks,
 // --lesson-exploration). A fresh setup must add nothing new.
 
@@ -51,9 +51,9 @@ const (
 	CodexLessonVerifyMarker   = LessonVerifyMarker + codexClientSelector
 )
 
-// The timeouts of the lesson-check hooks in seconds (contracts §5 row
-// 36). The handlers keep their own budgets of 5 s and 10 s inside them,
-// so each client stops a hook only after its handler gave up.
+// The timeouts of the lesson-check hooks in seconds. The handlers keep
+// their own budgets of 5 s and 10 s inside them, so each client stops a
+// hook only after its handler gave up.
 const (
 	lessonPreWriteTimeout    = 10
 	lessonPostEditTimeout    = 15
@@ -150,7 +150,7 @@ func (c lessonCheckClient) specs(mode string) []Spec {
 // structured Read reaches the hook after the tool ran. The status
 // message stays empty, because a message on every read is noise. The
 // failure event is not matched: its context has no native recording
-// yet that shows that it reaches the model (contracts §5 row 89).
+// yet that shows that it reaches the model.
 func ClaudeExplorationSpec() Spec {
 	return Spec{
 		Name:  "lesson exploration",

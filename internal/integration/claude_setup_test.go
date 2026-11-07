@@ -938,21 +938,21 @@ func TestClaudeHooksDisabledFollowsClaudeCodePrecedence(t *testing.T) {
 		path            string
 		note            string
 	}{
-		"P1 shared true, local absent":           {settings: "true", state: claudeLocalRead, path: approve.ClaudeSettings},
-		"P1 shared true, local without the key":  {settings: "true", local: "{}", state: claudeLocalRead, path: approve.ClaudeSettings},
-		"P2 local false wins over shared true":   {settings: "true", local: "false", state: claudeLocalRead},
-		"P3 local true, shared absent":           {local: "true", state: claudeLocalRead, path: claudeLocalSettings},
-		"P3 local true wins over shared false":   {settings: "false", local: "true", state: claudeLocalRead, path: claudeLocalSettings},
-		"P4 a local string leaves the shared":    {settings: "true", local: `"yes"`, state: claudeLocalRead, path: approve.ClaudeSettings},
-		"P5 a shared string is not set":          {settings: `"true"`, state: claudeLocalRead},
-		"P5 a shared number is not set":          {settings: "1", state: claudeLocalRead},
-		"P5 a shared null is not set":            {settings: "null", state: claudeLocalRead},
-		"P6 both absent":                         {state: claudeLocalRead},
-		"P7 the local file is not read":          {settings: "true", local: "false", state: claudeLocalUnread, path: approve.ClaudeSettings, note: "this run did not read"},
-		"P8 the local file cannot be read":       {settings: "true", state: claudeLocalUnreadable, path: approve.ClaudeSettings, note: "could not be read"},
-		"P9 shared false, local cannot be read":  {settings: "false", state: claudeLocalUnreadable},
-		"P9 shared absent, local cannot be read": {state: claudeLocalUnreadable},
-		"P7 shared absent, local true is unread": {local: "true", state: claudeLocalUnread},
+		"shared true, local absent":           {settings: "true", state: claudeLocalRead, path: approve.ClaudeSettings},
+		"shared true, local without the key":  {settings: "true", local: "{}", state: claudeLocalRead, path: approve.ClaudeSettings},
+		"local false wins over shared true":   {settings: "true", local: "false", state: claudeLocalRead},
+		"local true, shared absent":           {local: "true", state: claudeLocalRead, path: claudeLocalSettings},
+		"local true wins over shared false":   {settings: "false", local: "true", state: claudeLocalRead, path: claudeLocalSettings},
+		"a local string leaves the shared":    {settings: "true", local: `"yes"`, state: claudeLocalRead, path: approve.ClaudeSettings},
+		"a shared string is not set":          {settings: `"true"`, state: claudeLocalRead},
+		"a shared number is not set":          {settings: "1", state: claudeLocalRead},
+		"a shared null is not set":            {settings: "null", state: claudeLocalRead},
+		"both absent":                         {state: claudeLocalRead},
+		"the local file is not read":          {settings: "true", local: "false", state: claudeLocalUnread, path: approve.ClaudeSettings, note: "this run did not read"},
+		"the local file cannot be read":       {settings: "true", state: claudeLocalUnreadable, path: approve.ClaudeSettings, note: "could not be read"},
+		"shared false, local cannot be read":  {settings: "false", state: claudeLocalUnreadable},
+		"shared absent, local cannot be read": {state: claudeLocalUnreadable},
+		"shared absent, local true is unread": {local: "true", state: claudeLocalUnread},
 	} {
 		t.Run(name, func(t *testing.T) {
 			settings, local := doc(tc.settings), doc(tc.local)

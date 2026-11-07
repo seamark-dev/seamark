@@ -23,9 +23,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
-// The engine tests of the lesson-check services (contracts K1, K5, K10)
-// run the production engine over temporary git workspaces. Only the
-// agent invoker is a fake, and no test may call it (AC-1).
+// The engine tests of the lesson-check services run the production
+// engine over temporary git workspaces. Only the agent invoker is a
+// fake, and no test may call it.
 
 // checksLessons holds one enforce pin on generated and its check.
 const checksLessons = `lesson_checks_version: 1
@@ -84,10 +84,11 @@ func auditRecords(t *testing.T, ws workspace.Workspace) []lessoncheck.AuditRecor
 	return out
 }
 
-// TestServicesVerifyLessonsUsesCallerTUI proves the console part of
-// AC-35: the console verifies with the one service of the CLI, names the
-// caller tui in the result and in the K9 audit record, and revalidates a
-// shown result with lessoncheck.Revalidate. It calls no model (AC-1).
+// TestServicesVerifyLessonsUsesCallerTUI proves that the console shares
+// the verification of the CLI. The console verifies with the one
+// service of the CLI, names the caller tui in the result and in the
+// audit record, and revalidates a shown result with
+// lessoncheck.Revalidate. It calls no model.
 func TestServicesVerifyLessonsUsesCallerTUI(t *testing.T) {
 	ws := checksWorkspace(t)
 	agent := &servicestest.Agent{}
@@ -254,8 +255,8 @@ func TestServicesCheckImpactCandidate(t *testing.T) {
 // commit is a console mutation: it takes the engine lock with TryLock,
 // fails with ErrBusy while another mutation runs, and writes nothing
 // then. The plan writes nothing and takes no lock, as the pin authoring
-// plan does. The impact block gets the K10 active state of the
-// installed hooks, not the fixed text of milestone P1.
+// plan does. The impact block gets the active state of the installed
+// hooks, not the fixed text of the engine.
 func TestServicesCheckDefinitionTakesEngineLock(t *testing.T) {
 	ws := checksWorkspace(t)
 	servicestest.Write(t, ws, ".seamark/config.yaml", "distill:\n  write: true\n")

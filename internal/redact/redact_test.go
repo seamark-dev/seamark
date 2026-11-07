@@ -41,9 +41,9 @@ func TestSecretsPatterns(t *testing.T) {
 	}
 }
 
-// Review finding X2: a bearer token directly after a terminal escape
-// stayed visible. The escape ends in a word character, so "\b" finds no
-// boundary, and render.Sanitize drops only the ESC byte.
+// A bearer token directly after a terminal escape stayed visible. The
+// escape ends in a word character, so "\b" finds no boundary, and
+// render.Sanitize drops only the ESC byte.
 func TestSecretsRedactsBearerAfterTerminalEscape(t *testing.T) {
 	for input, want := range map[string]string{
 		// The reported input: an SGR color sequence ends in "m".
@@ -112,10 +112,10 @@ func TestSecretsExceptKeepsTheMatchesThatKeepSelects(t *testing.T) {
 		SecretsExcept(`--token "$(cat key)" API_KEY=plain`, shell))
 }
 
-// Review finding X2-R1: the bearer match can start at a terminal escape,
-// and keep received the escape bytes. A keep that looks for shell bytes
-// then kept a token after "\x1b>" or "\x1b[1;31m". The keep below stands
-// in for tui.shellActive, which this leaf package cannot import.
+// The bearer match can start at a terminal escape, and keep received
+// the escape bytes. A keep that looks for shell bytes then kept a token
+// after "\x1b>" or "\x1b[1;31m". The keep below stands in for
+// tui.shellActive, which this leaf package cannot import.
 func TestSecretsExceptGivesKeepTheTextAfterTheEscape(t *testing.T) {
 	shellLike := func(m string) bool { return strings.ContainsAny(m, ";<>`") }
 

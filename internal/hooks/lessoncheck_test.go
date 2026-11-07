@@ -11,8 +11,8 @@ import (
 const lessonBinary = "/bin/seamark"
 
 func TestLessonCheckSpecsUseDistinctMarkers(t *testing.T) {
-	// The specs of contract K10: events, matchers, markers, legacy
-	// pairing, and timeouts (contracts §5 row 36).
+	// The lesson-check specs: events, matchers, markers, legacy pairing,
+	// and timeouts.
 	type shape struct {
 		event, matcher, marker string
 		legacy                 []string
@@ -49,8 +49,8 @@ func TestLessonCheckSpecsUseDistinctMarkers(t *testing.T) {
 		{"PostToolUse", "apply_patch", "lessons --verify --hook --client codex", nil, 15},
 	}, shapes(CodexLessonCheckSpecs(LessonChecksCheck)))
 
-	// Exploration runs on a successful Read only (contracts §5 row 89),
-	// without a status message on every read.
+	// Exploration runs on a successful Read only, without a status
+	// message on every read.
 	explore := ClaudeExplorationSpec()
 	assert.Equal(t, shape{"PostToolUse", "Read", "lessons --explore --hook", nil, 10},
 		shape{explore.Event, explore.Matcher, explore.Marker, explore.Legacy, explore.Timeout})

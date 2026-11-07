@@ -11,9 +11,9 @@ import (
 
 // TestPrivateDirImportsOnlyStandardLibrary keeps this package free of
 // module imports. The policy gate, the lesson checks, and the MCP usage
-// log import it, so any internal import can make an import cycle. The test reads every
-// file, also the files of other platforms, because perm_other.go has
-// its own imports.
+// log import it, so any internal import can make an import cycle. The
+// test reads every file, also the files of other platforms, because
+// perm_other.go has its own imports.
 func TestPrivateDirImportsOnlyStandardLibrary(t *testing.T) {
 	ctx := build.Default
 	ctx.UseAllFiles = true

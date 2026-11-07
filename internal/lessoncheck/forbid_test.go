@@ -8,9 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// forbidExampleJSON is the expected JSON result of the specYAML pin on
-// one modified file. Its digests are the fixed digests of specYAML. The
-// test compares the whole result, because scripts read the JSON form.
+// forbidExampleJSON is the expected JSON result of the referenceYAML
+// pin on one modified file. Its digests are the fixed digests of
+// referenceYAML. The test compares the whole result, because scripts
+// read the JSON form.
 const forbidExampleJSON = `{
   "pin_ref": "3215e7b483d1",
   "pin_identity": "3215e7b483d134443a8204970767f1a0057d4726f235e946b6c0c27abd8cd055",
@@ -26,7 +27,7 @@ const forbidExampleJSON = `{
 }`
 
 func TestLessonCheckForbidPathChange(t *testing.T) {
-	spec := parseValid(t, specYAML)
+	spec := parseValid(t, referenceYAML)
 
 	t.Run("the full JSON result of a modified file", func(t *testing.T) {
 		snap := snapshotOf(BoundaryWorkingTree, modifyChange("generated/a.txt", fileSide("a\n"), fileSide("b\n")))

@@ -195,9 +195,9 @@ type Maintenance interface {
 	// with ErrForeignRoot.
 	CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResult, error)
 	// PlanCheckDef plans the edit of one check definition: the
-	// checks.<id> entry and lesson_checks_version (contract K1). It
-	// writes nothing and takes no lock. A foreign root and a closed
-	// write gate are blockers of the plan.
+	// checks.<id> entry and lesson_checks_version. It writes nothing and
+	// takes no lock. A foreign root and a closed write gate are blockers
+	// of the plan.
 	PlanCheckDef(req maintain.CheckDefRequest) (*maintain.CheckDefPlan, error)
 	// CommitCheckDef writes exactly the reviewed definition plan under
 	// the engine lock. It never changes a pin and never writes the

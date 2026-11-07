@@ -11,8 +11,8 @@ import (
 )
 
 // impactChecks is the checks map of the impact fixtures: the two
-// definitions of contractYAML, and frozen-copy, a second ID with the
-// definition of frozen-assets.
+// definitions of referencePatternYAML, and frozen-copy, a second ID
+// with the definition of frozen-assets.
 const impactChecks = `lesson_checks_version: 1
 checks:
   frozen-assets:

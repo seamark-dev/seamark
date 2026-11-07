@@ -14,9 +14,8 @@ import (
 )
 
 // This file holds the check-definition form of M in Lessons › Pins and
-// its review (contract K1, writer row "Check-definition authoring").
-// The form holds one definition: an ID, a checker kind, and the pattern
-// of no-added-pattern/1. s plans the edit through services
+// its review. The form holds one definition: an ID, a checker kind, and
+// the pattern of no-added-pattern/1. s plans the edit through services
 // (PlanCheckDef). The review shows the predicate, the impact on every
 // pin that binds the ID, each blocker, and the exact diff. Only y
 // writes, under the mutation slot (CommitCheckDef). The edit never
@@ -128,7 +127,7 @@ func (m *checkDefModal) patternRow() int {
 }
 
 // takesPattern reports whether the chosen kind reads a pattern. Only
-// no-added-pattern/1 does (contract K3).
+// no-added-pattern/1 does.
 func (m *checkDefModal) takesPattern() bool {
 	return m.kind == lessoncheck.KindNoAddedPattern
 }
@@ -533,9 +532,9 @@ func (m *checkDefModal) resultContent(w int) ui.ModalOpts {
 	return ui.ModalOpts{Title: t.ToneStyle(tone).Render(title), Body: body, Actions: m.keys()}
 }
 
-// impactLines renders the K1 impact blocks with the renderer of the
-// engine (lessoncheck.ImpactLines), so the console shows the words of
-// the CLI. none is the line of a plan without a block.
+// impactLines renders the checker impact blocks with the renderer of
+// the engine (lessoncheck.ImpactLines), so the console shows the words
+// of the CLI. none is the line of a plan without a block.
 func impactLines(t *ui.Theme, impacts []lessoncheck.Impact, none string, w int) []string {
 	blocks := lessoncheck.ImpactLines(impacts)
 	if len(blocks) == 0 {

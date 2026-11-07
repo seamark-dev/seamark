@@ -15,10 +15,10 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
-// The tests of the doctor row "checks" (contract K10, "Doctor and
-// status lines"). Every root is a temporary workspace. The hook binary
-// is a link named seamark to the test binary, so the report identifies
-// it as the running binary without running it.
+// The tests of the doctor row "checks". Every root is a temporary
+// workspace. The hook binary is a link named seamark to the test
+// binary, so the report identifies it as the running binary without
+// running it.
 
 // lessonEnforceYAML holds one enforce pin with a forbid check.
 const lessonEnforceYAML = `lesson_checks_version: 1
@@ -92,13 +92,14 @@ func checksRow(t *testing.T, root, dbPath string) (Check, bool) {
 	return c, ok
 }
 
-// TestDoctorLessonChecksRow proves the doctor row of contract K10: it is
-// absent without lesson-check hooks and keys, so doctor keeps its bytes;
-// it names the installed mode of each client, the pin counts, and the
-// configuration state; it warns on a requested pin that no handler
-// covers and on an invalid configuration, and fails only when a guard is
-// installed and the configuration does not validate. A newer
-// lesson_checks_version reads invalid with the K-6 note (AC-34).
+// TestDoctorLessonChecksRow proves the lesson-check row of doctor: it
+// is absent without lesson-check hooks and keys, so doctor keeps its
+// bytes; it names the installed mode of each client, the pin counts,
+// and the configuration state; it warns on a requested pin that no
+// handler covers and on an invalid configuration, and fails only when a
+// guard is installed and the configuration does not validate. A newer
+// lesson_checks_version reads invalid with the note that advisory pins
+// still deliver.
 func TestDoctorLessonChecksRow(t *testing.T) {
 	stubAgent(t)
 
@@ -197,7 +198,7 @@ func TestDoctorLessonChecksRow(t *testing.T) {
 		assert.Contains(t, row.Fix, "until then the installed guard denies every covered edit")
 	})
 
-	t.Run("a newer lesson_checks_version reads invalid with the K-6 note", func(t *testing.T) {
+	t.Run("a newer lesson_checks_version reads invalid with the advisory note", func(t *testing.T) {
 		root, dbPath := fixtureRoot(t)
 		writeLessons(t, root, "lesson_checks_version: 2\npin:\n  - rule: kept\n    region: a/\n")
 
@@ -256,9 +257,9 @@ func dropOwnedHooks(t *testing.T, root string, markers ...string) {
 }
 
 // TestDoctorLessonChecksPartialFix proves that the fix of a partial
-// install repairs it (R-5). Setup repairs a half stage pair only when
-// the request names a lesson-check mode, so a plain `init --client`
-// leaves the install partial and doctor repeats the advice.
+// install repairs it. Setup repairs a half stage pair only when the
+// request names a lesson-check mode, so a plain `init --client` leaves
+// the install partial and doctor repeats the advice.
 func TestDoctorLessonChecksPartialFix(t *testing.T) {
 	stubAgent(t)
 
@@ -318,9 +319,9 @@ func TestDoctorLessonChecksPartialFix(t *testing.T) {
 }
 
 // TestDoctorLessonChecksUnreadableDocument proves the row of an
-// unreadable hook document (R-5). The mode off would claim that no hook
-// is installed, and an init cannot repair a file that does not parse.
-// So the detail says unreadable, and the fix names the file.
+// unreadable hook document. The mode off would claim that no hook is
+// installed, and an init cannot repair a file that does not parse. So
+// the detail says unreadable, and the fix names the file.
 func TestDoctorLessonChecksUnreadableDocument(t *testing.T) {
 	stubAgent(t)
 

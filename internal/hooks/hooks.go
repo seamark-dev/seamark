@@ -85,7 +85,7 @@ func OwnedBySeamark(cmd string, markers []string) bool {
 // OwnedCommand splits a command that OwnedBySeamark accepts into the
 // binary path of its one shell word, unquoted, and the marker that ends
 // it. The capability report identifies the hook binary from the path
-// without running it (contract K10). ok is false for any other command.
+// without running it. ok is false for any other command.
 func OwnedCommand(cmd string, markers []string) (binary, marker string, ok bool) {
 	for _, m := range markers {
 		rest, found := strings.CutSuffix(cmd, " "+m)

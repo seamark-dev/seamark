@@ -501,8 +501,9 @@ func DiscardSession(top, identityRoot, nativeSessionID string) (removed int, err
 			continue
 		}
 
-		// No hook, MCP tool, or console view calls DiscardSession, so the
-		// record names the CLI as its caller.
+		// No code of this build calls DiscardSession; only its tests do.
+		// The record names CallerCLI, the caller of a removal that a person
+		// starts.
 		ok, err := discardPending(top, path, p, CallerCLI, DiscardSessionDeleted)
 		removed, errs = removed+ok, append(errs, err)
 	}

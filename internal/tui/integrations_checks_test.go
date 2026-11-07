@@ -19,8 +19,8 @@ import (
 )
 
 // The tests of the read-only "Lesson checks" section of the Integrations
-// detail (contract K10, AC-34), and of the frames that a repository
-// without lesson checks keeps (P4.10 Preserve).
+// detail, and of the frames that a repository without lesson checks
+// keeps.
 
 // lessonDetailText returns the detail of the inspection of client on one
 // line, rendered wide enough that no phrase wraps.
@@ -226,7 +226,7 @@ func TestTUILessonChecksUnreadableDocument(t *testing.T) {
 
 func TestTUIOverviewUnchangedWithoutLessonChecks(t *testing.T) {
 	// The lesson-check capabilities stay out of the configured list, so
-	// no inspection synthesizes an Overview item for them (contract K10).
+	// no inspection synthesizes an Overview item for them.
 	for _, c := range []integration.Capability{
 		integration.CapabilityLessonVerify, integration.CapabilityLessonGuard, integration.CapabilityLessonExploration,
 	} {

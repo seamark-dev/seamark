@@ -144,10 +144,10 @@ type pinDraft struct {
 	// defines, for the Check row.
 	checks   bool
 	checkIDs []string
-	// baseMode and baseCheck are the raw lesson-check keys of the entry
-	// (contract K1); "" means that the key is absent. mode and check are
-	// the drafted values. A linked pin takes a mode edit too, as lessons
-	// --set-mode does, so no link locks these rows.
+	// baseMode and baseCheck are the raw lesson-check keys of the entry;
+	// "" means that the key is absent. mode and check are the drafted
+	// values. A linked pin takes a mode edit too, as lessons --set-mode
+	// does, so no link locks these rows.
 	baseMode, baseCheck string
 	mode                lessoncheck.Mode
 	check               string
@@ -202,10 +202,10 @@ func pinRefusedRune(r rune) bool {
 }
 
 // pinRuleLocked reports a pin whose rule the form keeps read-only: a
-// linked pin whose relationship the authoring keys know (contracts §4.2).
-// Its note, mode, check, and regions stay editable, because the scope
-// preview writes the regions to the entry and to the row together. load
-// locks the rule, and follow drops its edit.
+// linked pin whose relationship the authoring keys know. Its note,
+// mode, check, and regions stay editable, because the scope preview
+// writes the regions to the entry and to the row together. load locks
+// the rule, and follow drops its edit.
 func pinRuleLocked(pin *maintain.Pin, known bool) bool {
 	return known && pinLinked(pin)
 }
@@ -354,8 +354,7 @@ func pinDraftMode(raw string) lessoncheck.Mode {
 // setChecks decides whether the form shows the Mode and Check rows. An
 // edit shows them when Pins shows its lesson-check parts, or when the
 // draft already holds a mode or check change, so no typed change goes
-// away unseen. A new pin is advisory (contract K1, writer row "Manual
-// create"), so its form never shows them.
+// away unseen. A new pin is advisory, so its form never shows them.
 func (d *pinDraft) setChecks(show bool, ids []string) {
 	d.checks = d.op == maintain.AuthorEdit && (show || d.checksEdited())
 	d.checkIDs = ids
