@@ -682,7 +682,15 @@ def sanitize_jsonl(src, dst, fn, s):
 
 
 def observed_metas(record):
-    """Return the meta files of the observed hook payloads in time order."""
+    """Return the meta files of the observed hook payloads in time order.
+
+    On macOS the observer clock counts whole microseconds, so two hooks
+    that start together can have the same start_ns. The payload file name
+    breaks such a tie, and the guard_identities step of
+    scripts/native-record.sh uses the same order. Thus both give a payload
+    the same file number, and the directory listing order never changes
+    the copy.
+    """
     observed = record.get("observed")
     if not observed or not os.path.isdir(observed):
         return []
@@ -696,7 +704,7 @@ def observed_metas(record):
             meta["file"] = name[: -len(".meta.json")] + ".json"
             metas.append(meta)
 
-    metas.sort(key=lambda m: m["start_ns"])
+    metas.sort(key=lambda m: (m["start_ns"], m["file"]))
 
     return metas
 

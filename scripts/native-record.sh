@@ -1979,7 +1979,7 @@ PY
 # mismatch refuses collection; no alternate identity or hash is tried.
 guard_identities() {
     python3 -I - "$OUT/record.json" <<'PY'
-import glob, hashlib, json, os, sqlite3, subprocess, sys
+import collections, glob, hashlib, json, os, sqlite3, subprocess, sys
 from pathlib import Path
 
 with open(sys.argv[1], encoding="utf-8") as f:
@@ -2006,9 +2006,19 @@ for path in glob.glob(os.path.join(observed, "*.meta.json")):
         meta = json.load(f)
     meta["file"] = os.path.basename(path)[:-len(".meta.json")] + ".json"
     metas.append(meta)
-metas.sort(key=lambda m: m["start_ns"])
-if len({m["start_ns"] for m in metas}) != len(metas):
-    sys.exit("guard identity metadata requires distinct observer timestamps")
+
+# On macOS the observer clock counts whole microseconds, so two hooks that
+# start together can tie, for example PostToolUse and SubagentStart of a
+# background Agent launch. The payload file name breaks a tie, as in
+# observed_metas of the sanitizer, so both steps number the payloads alike.
+# The file number of a PreToolUse payload is its identity, but inside a
+# tie it follows the file name and not the real hook order. So a tie that
+# holds a PreToolUse payload refuses the record. A tie of other events
+# changes no PreToolUse number.
+metas.sort(key=lambda m: (m["start_ns"], m["file"]))
+starts = collections.Counter(m["start_ns"] for m in metas)
+if any(m["event"] == "PreToolUse" and starts[m["start_ns"]] > 1 for m in metas):
+    sys.exit("guard identity metadata requires a PreToolUse payload with an observer timestamp of its own")
 
 def compose(parts):
     return "".join("%d:%s" % (len(p.encode("utf-8")), p) for p in parts)
