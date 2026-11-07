@@ -69,7 +69,7 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # counter and the stats section that reads it, because both write or read
 # a local log beside the audit logs.
 # Nothing here calls a model or the network.
-# Later milestones append test-name prefixes and packages here.
+# A new lesson-check surface adds its test-name prefix and package here.
 LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/... ./internal/mcpusage/...
 LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline|LessonsDelivery|MCPUsage|LessonsStats)'
 

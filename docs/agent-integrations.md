@@ -273,10 +273,11 @@ recordings above:
 | Model boundary | Unverified | Unverified | Unverified | Unverified |
 
 No reviewed native timing recording upgrades these pending identities or
-boundaries. Own-call advice remains `same-call-only`; a command/MCP
-preparation remains receiver-unknown. The delivery report reads every
-observation window as incomplete. A guard's requested deny is not proof
-of prevention; current reports retain `prevented: 0`. See
+boundaries. Own-call advice arrives in the same call as the edit that it
+names, so it is no evidence of guidance before construction. A
+command/MCP preparation names no receiver. The delivery report reads
+every observation window as incomplete. A guard's requested deny is not
+proof of prevention; current reports retain `prevented: 0`. See
 [lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
 
 ### Disable and downgrade safely

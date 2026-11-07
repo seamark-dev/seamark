@@ -879,7 +879,9 @@ records in `.seamark/lesson-check-audit.jsonl`. `--pin` selects one pin
 by its pin-ref and lists its version; versions are never pooled. A
 missing, ambiguous or duplicated reference fails instead of selecting
 another pin. An absent, unreadable or over-limit audit is report data,
-not a zero count. The report never writes and never calls a model.
+not a zero count. The report writes no durable state and never calls a
+model; SQLite can still create empty WAL/SHM sidecars when it opens the
+index read-only.
 
 A record shows what Seamark emitted or left out. It does not show what a
 model saw, or that the pin came before the agent built its call.
