@@ -710,14 +710,22 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
     fi
 }
 
-# record_claude_timing runs the eight Claude Code timing cases. Each case
-# starts a new session, except new-model-step and compact-reset.
-# new-model-step resumes the session of prior-result, so its edit comes
-# one turn after the read. compact-reset resumes the session of
-# new-model-step and compacts it. That context then holds an exploration
-# injection and an edit injection, so the reset record shows that both
-# kinds of delivery state start a new generation. The reader subagent has
-# only the Read tool.
+# record_claude_timing runs the nine Claude Code timing cases. Each case
+# starts a new session, except new-model-step, compact-reset, and
+# after-compact. Each of these three resumes the session of the run before
+# it. new-model-step resumes the session of prior-result, so its edit
+# comes one turn after the read. compact-reset compacts the session of
+# new-model-step. That context then holds an exploration injection and an
+# edit injection, so the reset record shows that both kinds of delivery
+# state start a new generation. after-compact reads and edits the same
+# file again in the compacted session. Without the reset, both hooks
+# suppress that advice as a repeat. The reader subagent has only the Read
+# tool.
+#
+# after-compact reads before it edits. The Read triggers the exploration
+# hook. It also gives the Edit a read of the file, whatever files the
+# compaction restored, because Claude Code refuses an Edit of an unread
+# file before any hook.
 #
 # The /compact instruction keeps the summary short and free of paths,
 # because the summary goes into hook payloads and transcripts. Claude Code
@@ -747,6 +755,11 @@ Then reply with the single word: done"
 Then reply with the single word: done"
 
     timing_claude compact-reset resume "/compact Keep the summary to one short sentence and name no file path."
+
+    timing_claude after-compact resume "$steps
+1. Use the Read tool to read the file timing/prior.txt.
+2. Use the Edit tool to replace the line beta with the line gamma in timing/prior.txt.
+Then reply with the single word: done"
 
     timing_claude read-then-edit new "$steps
 1. Use the Read tool to read the file timing/intra.txt.

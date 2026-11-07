@@ -58,6 +58,7 @@ const (
 	timingFailedRead            = "failed-read"
 	timingSubagentRead          = "subagent-read"
 	timingCompactReset          = "compact-reset"
+	timingAfterCompact          = "after-compact"
 	timingPriorPreparation      = "prior-preparation"
 	timingPatchAfterPreparation = "patch-after-preparation"
 	timingMultiFilePatch        = "multi-file-patch"
@@ -608,7 +609,7 @@ func assertCodexLane(t *testing.T, name, lane string, meta EventMeta) {
 }
 
 func TestNativeRecordClaudeTimingRecording(t *testing.T) {
-	r := loadTimingRecording(t, ClaudeID, timingPriorResult, timingNewModelStep, timingCompactReset,
+	r := loadTimingRecording(t, ClaudeID, timingPriorResult, timingNewModelStep, timingCompactReset, timingAfterCompact,
 		timingReadThenEdit, timingSameCall, timingBatchAndProgram, timingFailedRead, timingSubagentRead)
 
 	t.Run("a prior result, then a new model step", func(t *testing.T) {
@@ -800,6 +801,61 @@ func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 
 		assert.NoError(t, compactReset(r.audit(t)))
 	})
+
+	t.Run("advice returns after the compaction", func(t *testing.T) {
+		name := timingAfterCompact
+		events := r.events[r.runs[name]]
+
+		// Claude Code answers some calls before any hook, for example an
+		// Edit whose old text is not in the file. The replay cannot tell
+		// that answer from a model that made no call, so it names both.
+		for _, step := range []struct{ event, tool string }{
+			{claudeEventPostTool, claudeReadTool}, {claudeEventPreToolUse, claudeToolEdit},
+		} {
+			require.True(t, slices.ContainsFunc(events, func(e timingEvent) bool {
+				return e.hook.Event == step.event && e.tool() == step.tool
+			}), "case %s: no %s %s payload: the model made no call, or Claude Code answered the call before any hook "+
+				"(an Edit whose text beta is not in the file, or a Read stub before the hooks); record the case again",
+				name, step.event, step.tool)
+		}
+
+		steps := r.sequence(t, name, claudeEventSessionStart, "UserPromptSubmit", "PostToolUse:Read", "PreToolUse:Edit")
+		t.Logf("case %s: %s has the source %q", name, steps[0].hook.File, nativeString(steps[0].raw, "source"))
+
+		// A second compaction writes a second reset record, so the advice
+		// after it no longer shows the effect of the first reset.
+		for _, e := range events {
+			assert.NotContains(t, []string{claudeEventPreCompact, claudeEventPostCompact}, e.hook.Event,
+				"%s: the run compacts again", e.hook.File)
+		}
+
+		post := r.sequence(t, timingCompactReset, claudeEventPostCompact)[0]
+		reset, err := claudeResets{}.DecodeReset(post.payload)
+		require.NoError(t, err, post.hook.File)
+
+		edit := claudeTimingEdit(t, r.sequence(t, timingNewModelStep, "UserPromptSubmit", "PreToolUse:Edit")[1])
+		assertClaudeRoot(t, timingNewModelStep, edit.EventMeta)
+
+		read := claudeTimingExplore(t, steps[2])
+		assert.True(t, read.Read)
+		assert.Equal(t, "timing/prior.txt", r.rel(read.CWD, read.Paths[0]))
+		assertClaudeRoot(t, name, read.EventMeta)
+		assert.Equal(t, reset.SessionID, read.SessionID, "the run continues the compacted session")
+		assert.Equal(t, edit.SessionID, read.SessionID, "the compacted session holds the earlier edit")
+		assert.Equal(t, edit.Context.ID, read.Context.ID, "the compacted context reads the file again")
+		assert.NotEqual(t, reset.Turn, read.Turn, "the read belongs to a later turn than the compaction")
+		r.claudeCall(t, steps[2], read.EventMeta)
+
+		again := claudeTimingEdit(t, steps[3])
+		assert.Equal(t, []string{"timing/prior.txt"}, r.rels(again))
+		assertClaudeRoot(t, name, again.EventMeta)
+		assert.Equal(t, read.SessionID, again.SessionID)
+		assert.Equal(t, read.Context.ID, again.Context.ID, "one receiver reads the file and edits it")
+		assert.Equal(t, read.Turn, again.Turn, "one prompt: the read and the edit share the turn")
+		r.claudeCall(t, steps[3], again.EventMeta)
+
+		assert.NoError(t, adviceAfterReset(r.audit(t)))
+	})
 }
 
 // priorTurn reports whether the audit records hold the input of the
@@ -833,22 +889,9 @@ func priorTurn(records []timingAudit) bool {
 // record of that kind. The last record counts, because a later case can
 // add advice to the context on both sides of the reset.
 func compactReset(records []timingAudit) error {
-	at := -1
-
-	for i, a := range records {
-		if a.Delivery != timingDeliveryReset {
-			continue
-		}
-
-		if at >= 0 {
-			return errors.New("the recording holds more than one reset record")
-		}
-
-		at = i
-	}
-
-	if at < 0 {
-		return errors.New("the recording holds no reset record")
+	at, err := resetRecord(records)
+	if err != nil {
+		return err
 	}
 
 	reset := records[at]
@@ -892,6 +935,107 @@ func compactReset(records []timingAudit) error {
 		return fmt.Errorf("the reset edit generation %d is not above %d", reset.ContextGeneration, edit.ContextGeneration)
 	case reset.ExploreGeneration <= explore.ExploreGeneration:
 		return fmt.Errorf("the reset exploration generation %d is not above %d", reset.ExploreGeneration, explore.ExploreGeneration)
+	}
+
+	return nil
+}
+
+// resetRecord returns the position of the one reset record in the audit
+// records. compactReset and adviceAfterReset both find the reset record
+// here, so the two rules always read the same record.
+func resetRecord(records []timingAudit) (int, error) {
+	at := -1
+
+	for i, a := range records {
+		if a.Delivery != timingDeliveryReset {
+			continue
+		}
+
+		if at >= 0 {
+			return -1, errors.New("the recording holds more than one reset record")
+		}
+
+		at = i
+	}
+
+	if at < 0 {
+		return -1, errors.New("the recording holds no reset record")
+	}
+
+	return at, nil
+}
+
+// adviceAfterReset returns nil when the audit records, in file order,
+// show that advice reaches the compacted root context again after the
+// reset. The reset starts a new generation of both kinds of delivery
+// state. So the next read and the next edit of a file whose advice the
+// context got before the reset get that advice again. Only the records
+// after the reset that name its session, its context, and the root lane
+// count. The first exploration record and the first edit record among
+// them must be injections in the generation of the reset, with a call,
+// in one turn after the reset. A suppressed repeat or an evaluation there
+// is a finding about the reset. A new recording cannot change it, because
+// the model does not control the delivery state.
+func adviceAfterReset(records []timingAudit) error {
+	at, err := resetRecord(records)
+	if err != nil {
+		return err
+	}
+
+	reset := records[at]
+
+	var after []timingAudit
+
+	for _, a := range records[at+1:] {
+		if a.Lane == LaneRoot && a.SessionSHA == reset.SessionSHA && a.ContextSHA == reset.ContextSHA {
+			after = append(after, a)
+		}
+	}
+
+	if len(after) == 0 {
+		return errors.New("no record of the reset context comes after the reset")
+	}
+
+	first := func(match func(timingAudit) bool) (timingAudit, bool) {
+		i := slices.IndexFunc(after, match)
+		if i < 0 {
+			return timingAudit{}, false
+		}
+
+		return after[i], true
+	}
+
+	explore, found := first(func(a timingAudit) bool { return a.Surface == "explore" })
+	if !found {
+		return errors.New("no exploration record of the reset context comes after the reset")
+	}
+
+	edit, found := first(func(a timingAudit) bool { return a.Surface == "" && a.Delivery != timingDeliveryReset })
+	if !found {
+		return errors.New("no edit record of the reset context comes after the reset")
+	}
+
+	const finding = "the reset did not give the advice back to the compacted context"
+
+	switch {
+	case explore.Delivery != timingDeliveryInjected:
+		return fmt.Errorf("%s: the first exploration record after the reset reads %q", finding, explore.Delivery)
+	case edit.Delivery != timingDeliveryInjected:
+		return fmt.Errorf("%s: the first edit record after the reset reads %q", finding, edit.Delivery)
+	case explore.ExploreGeneration != reset.ExploreGeneration:
+		return fmt.Errorf("the exploration injection after the reset has the generation %d, not %d",
+			explore.ExploreGeneration, reset.ExploreGeneration)
+	case edit.ContextGeneration != reset.ContextGeneration:
+		return fmt.Errorf("the edit injection after the reset has the generation %d, not %d",
+			edit.ContextGeneration, reset.ContextGeneration)
+	case explore.Read == nil || !*explore.Read:
+		return errors.New("the exploration injection after the reset reports no successful read")
+	case explore.MatchSHA == "" || edit.MatchSHA == "":
+		return errors.New("an injection after the reset names no call")
+	case explore.TurnSHA == "" || explore.TurnSHA == reset.TurnSHA || edit.TurnSHA == reset.TurnSHA:
+		return errors.New("an injection after the reset names no turn, or the turn of the reset")
+	case explore.TurnSHA != edit.TurnSHA:
+		return errors.New("the read and the edit after the reset belong to two turns, not to one prompt")
 	}
 
 	return nil
@@ -1198,6 +1342,85 @@ func TestCompactResetReadsTheResetRecord(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Error(t, compactReset(tc.change(compactRecords())))
+		})
+	}
+}
+
+// afterResetRecords gives the audit records of the expected compaction,
+// then the records of the read and the edit after it: an exploration
+// injection and an edit injection of the reset context, in one later
+// turn and in the generation of the reset.
+func afterResetRecords() []timingAudit {
+	yes := true
+
+	return append(compactRecords(),
+		timingAudit{Surface: "explore", Delivery: timingDeliveryInjected, SessionSHA: "s", ContextSHA: "c", TurnSHA: "t4",
+			MatchSHA: "m4", Lane: LaneRoot, Resettable: &yes, RecordEvaluations: true, Read: &yes, ExploreGeneration: 2},
+		timingAudit{Delivery: timingDeliveryInjected, SessionSHA: "s", ContextSHA: "c", TurnSHA: "t4", MatchSHA: "m5",
+			Lane: LaneRoot, Resettable: &yes, RecordEvaluations: true, ContextGeneration: 2},
+	)
+}
+
+// TestAdviceAfterResetReadsTheReturnOfAdvice checks the rule of the case
+// after the compaction on synthetic records. They give no native proof.
+// Only the first record of each kind after the reset counts, so a later
+// repeat or an earlier record of another context changes nothing. Each
+// other change to the expected records must give an error.
+func TestAdviceAfterResetReadsTheReturnOfAdvice(t *testing.T) {
+	require.NoError(t, adviceAfterReset(afterResetRecords()))
+
+	repeat := afterResetRecords()
+	repeat = append(repeat, timingAudit{Delivery: "suppressed-repeat", SessionSHA: "s", ContextSHA: "c", TurnSHA: "t5",
+		MatchSHA: "m6", Lane: LaneRoot, ContextGeneration: 2})
+	assert.NoError(t, adviceAfterReset(repeat), "a repeat after the first edit injection does not count")
+
+	other := afterResetRecords()
+	other = slices.Insert(other, 3, timingAudit{Surface: "explore", Delivery: timingDeliveryInjected, SessionSHA: "s",
+		ContextSHA: "c2", TurnSHA: "t4", MatchSHA: "m7", Lane: LaneRoot, ExploreGeneration: 1})
+	assert.NoError(t, adviceAfterReset(other), "a record of another context does not count")
+
+	const finding = "the reset did not give the advice back to the compacted context"
+
+	for _, tc := range []struct {
+		name   string
+		change func([]timingAudit) []timingAudit
+		want   string
+	}{
+		{name: "no record after the reset", change: func(r []timingAudit) []timingAudit { return r[:3] }},
+		{name: "only records of another context after the reset", change: func(r []timingAudit) []timingAudit {
+			r[3].ContextSHA, r[4].ContextSHA = "c2", "c2"
+			return r
+		}},
+		{name: "the exploration record reads evaluation", change: func(r []timingAudit) []timingAudit {
+			r[3].Delivery = "evaluation"
+			return r
+		}, want: finding},
+		{name: "no exploration record", change: func(r []timingAudit) []timingAudit { return slices.Delete(r, 3, 4) }},
+		{name: "no edit record", change: func(r []timingAudit) []timingAudit { return r[:4] }},
+		{name: "the edit reads suppressed-repeat", change: func(r []timingAudit) []timingAudit {
+			r[4].Delivery = "suppressed-repeat"
+			return r
+		}, want: finding},
+		{name: "an edit generation of 1", change: func(r []timingAudit) []timingAudit { r[4].ContextGeneration = 1; return r }},
+		{name: "an exploration generation of 1", change: func(r []timingAudit) []timingAudit {
+			r[3].ExploreGeneration = 1
+			return r
+		}},
+		{name: "the exploration turn of the reset", change: func(r []timingAudit) []timingAudit { r[3].TurnSHA = "t3"; return r }},
+		{name: "the edit turn of the reset", change: func(r []timingAudit) []timingAudit { r[4].TurnSHA = "t3"; return r }},
+		{name: "the two records in two turns", change: func(r []timingAudit) []timingAudit { r[4].TurnSHA = "t5"; return r }},
+		{name: "a failed read", change: func(r []timingAudit) []timingAudit {
+			no := false
+			r[3].Read = &no
+			return r
+		}},
+		{name: "an edit without a match digest", change: func(r []timingAudit) []timingAudit { r[4].MatchSHA = ""; return r }},
+		{name: "two reset records", change: func(r []timingAudit) []timingAudit { return append(r, r[2]) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := adviceAfterReset(tc.change(afterResetRecords()))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
 }

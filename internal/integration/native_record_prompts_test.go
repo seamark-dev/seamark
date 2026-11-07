@@ -232,7 +232,10 @@ func runClaudeTiming(t *testing.T, env ...string) (string, error) {
 // Claude Code timing cases. compact-reset resumes the session right after
 // new-model-step, so the compaction resets a context that holds both kinds
 // of advice. Its prompt is /compact with the instruction that the replay
-// expects in PreCompact. The earlier cases keep their order.
+// expects in PreCompact. after-compact resumes the compacted session right
+// after compact-reset. It reads the file before it edits it, because the
+// replay expects an exploration record and an edit record after the reset.
+// The earlier cases keep their order.
 func TestNativeRecordClaudeTimingCompactsAfterTheEdit(t *testing.T) {
 	requireTools(t, "sh", "head")
 
@@ -249,11 +252,16 @@ func TestNativeRecordClaudeTimingCompactsAfterTheEdit(t *testing.T) {
 
 	assert.Equal(t, []string{
 		timingPriorResult + " new", timingNewModelStep + " resume", timingCompactReset + " resume",
-		timingReadThenEdit + " new", timingSameCall + " new", timingBatchAndProgram + " new",
-		timingFailedRead + " new", timingSubagentRead + " new",
+		timingAfterCompact + " resume", timingReadThenEdit + " new", timingSameCall + " new",
+		timingBatchAndProgram + " new", timingFailedRead + " new", timingSubagentRead + " new",
 	}, runs)
 
 	assert.Contains(t, got, "run "+timingCompactReset+" resume /compact "+timingCompactInstructions+"\n")
+
+	prompt := scriptPrompt(t, scriptFunction(t, nativeRecordScript(t), "record_claude_timing"),
+		`timing_claude `+timingAfterCompact+` resume "$steps`)
+	assert.Contains(t, prompt, "\n1. Use the Read tool to read the file timing/prior.txt.\n"+
+		"2. Use the Edit tool to replace the line beta with the line gamma in timing/prior.txt.\n")
 }
 
 // TestNativeRecordClaudeTimingRefusesDisabledCompaction proves that the
