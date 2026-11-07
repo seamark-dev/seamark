@@ -25,9 +25,10 @@ import (
 
 // TestMatchingTreatmentFiringsReadsAuditV2 is the M6 test of the P0
 // review (A11, contract L3 "Legacy readers of v2 records"). A trial
-// enables no capture and installs no exploration. Its log thus holds
-// v2 records of the edit hook and the preparation surfaces only, and
-// the fingerprinted reader must accept them without an error.
+// runs with the recording switch off and installs no exploration. Its
+// log thus holds v2 records of the edit hook and the preparation
+// surfaces only, and the fingerprinted reader must accept them without
+// an error.
 func TestMatchingTreatmentFiringsReadsAuditV2(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, writeLessons(dir, schemaSyncLessonYAML))
@@ -47,8 +48,8 @@ func TestMatchingTreatmentFiringsReadsAuditV2(t *testing.T) {
 
 	resettable := true
 
-	// edit is a hook event of the treatment client with capture opt-in
-	// off, the only state a trial has.
+	// edit is a hook event of the treatment client with the recording
+	// switch off, the only state a trial has.
 	edit := func(file, match string, records []reviews.EventRecord, emission string,
 		delivery reviews.PinDelivery,
 	) reviews.AuditEvent {
@@ -105,7 +106,7 @@ func TestMatchingTreatmentFiringsReadsAuditV2(t *testing.T) {
 
 	for _, f := range firings {
 		require.Equal(t, reviews.AuditSchemaVersion, f.SchemaVersion, "every record is v2")
-		require.False(t, f.CaptureOptIn, "a trial has no capture opt-in")
+		require.False(t, f.CaptureOptIn, "a trial runs with the recording switch off")
 	}
 
 	intensity, err := matchingTreatmentFirings(dir, pin)
@@ -118,14 +119,14 @@ func TestMatchingTreatmentFiringsReadsAuditV2(t *testing.T) {
 
 	// The records above come from RecordEvent. The production writers
 	// must give the reader the same kinds when a trial runs them.
-	t.Run("the hook, reset, and check writers with capture opt-in off", writersFeedTheReader)
+	t.Run("the hook, reset, and check writers with the recording switch off", writersFeedTheReader)
 }
 
 // writersFeedTheReader runs the edit hook, the reset hook, and the check
-// advisory of this release with capture opt-in off, as a trial does, and
-// feeds their log to the fingerprinted reader. A failed reply, an edit
-// without a match, and a reset then write nothing that the reader
-// refuses.
+// advisory of this release with the recording switch off, as a trial
+// does, and feeds their log to the fingerprinted reader. A failed reply,
+// an edit without a match, and a reset then write nothing that the
+// reader refuses.
 func writersFeedTheReader(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, writeLessons(dir, "hook_delivery: once-per-context\n"+schemaSyncLessonYAML))

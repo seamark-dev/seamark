@@ -14,7 +14,7 @@ import (
 // countsV2Events are the v2 events of one day and the day before: an
 // edit-hook injection, an exploration injection, and a check record.
 // When withNewKinds is true, the zero-match evaluation and the reset of
-// a capture opt-in writer follow the injection.
+// a writer with the recording switch on follow the injection.
 func countsV2Events(root string, now time.Time, withNewKinds bool) []reviews.AuditEvent {
 	lesson := []model.Lesson{{Region: "api", Symptom: "first-pin — a"}}
 	resettable := true

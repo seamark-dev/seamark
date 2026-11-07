@@ -138,7 +138,7 @@ func TestDeliverWritesTheV2WriteRules(t *testing.T) {
 	assert.Equal(t, integration.LaneRoot, first.Lane)
 	require.NotNil(t, first.ContextResettable)
 	assert.True(t, *first.ContextResettable)
-	assert.False(t, first.CaptureOptIn, "the request has no capture opt-in")
+	assert.False(t, first.CaptureOptIn, "the recording switch is off")
 	assert.Equal(t, []reviews.FiringPin{pinOf(cfg, cfg.Pin[0], reviews.PinInjected, "")}, first.Pins,
 		"the mined lesson is in fired only")
 
@@ -277,7 +277,7 @@ func TestDeliverRecordsTheOwnInjectionOfAnAction(t *testing.T) {
 	assert.NotEqual(t, records[1].TurnSHA, records[2].TurnSHA)
 }
 
-func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
+func TestDeliverWritesNewRecordKindsOnlyUnderTheRecordingSwitch(t *testing.T) {
 	failed := errors.New("stdout closed")
 
 	cases := []struct {
@@ -344,7 +344,7 @@ func TestDeliverWritesNewRecordKindsOnlyUnderCaptureOptIn(t *testing.T) {
 
 				if !optIn {
 					assert.NoFileExists(t, reviews.AuditLogPath(root),
-						"without capture opt-in the log gets no evaluation record")
+						"with the recording switch off the log gets no evaluation record")
 
 					continue
 				}
@@ -764,7 +764,7 @@ func TestDeliverNamesHeldBackPinsWithTheirCause(t *testing.T) {
 		symptoms(records[0].Fired), "held-back pins stay out of the fired list")
 }
 
-func TestResetWritesAResetRecordUnderCaptureOptIn(t *testing.T) {
+func TestResetWritesAResetRecordUnderTheRecordingSwitch(t *testing.T) {
 	root := workspace(t)
 	st := lessonStore(t, root)
 	cfg := writeConfig(t, root, "hook_delivery: once-per-context\n")

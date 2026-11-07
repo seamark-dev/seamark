@@ -51,8 +51,8 @@ type Request struct {
 	ConfigErr error
 	// RecordEvaluations is true when the hook runs with the recording
 	// switch on. Only then does the firing log get the evaluation records
-	// of an event that emitted nothing (contract L3). The CLI reads the
-	// switch, because this package reads no environment.
+	// of an event that emitted nothing. The CLI reads the switch, because
+	// this package reads no environment.
 	RecordEvaluations bool
 	// EventID is the event_id of the records. Empty means a new random
 	// ID. Tests set it to get fixed records.
@@ -157,10 +157,10 @@ func (e *EmitError) Unwrap() error { return e.Err }
 // plain error when the lesson lookup fails or ctx ends. In both cases
 // Deliver marks no lesson delivered and records no injection.
 //
-// The firing log gets one event of record version 2 (contract L3). An
-// event that emitted nothing gets an evaluation record only when
-// req.RecordEvaluations is true, so without capture opt-in the log gets
-// the record kinds of the version 1 writer only.
+// The firing log gets one event of record version 2. An event that
+// emitted nothing gets an evaluation record only when
+// req.RecordEvaluations is true. So with the recording switch off, the
+// log gets only the record kinds of the version 1 writer.
 func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outcome, error) {
 	out := Outcome{Status: StatusSilent, Suppression: SuppressionOff}
 
@@ -549,7 +549,8 @@ func evaluationRecord() []reviews.EventRecord {
 
 // record appends the records of one edit event to the firing log. It
 // is best effort: the result only sets AuditFailed. An evaluation needs
-// capture opt-in, so without it record writes nothing for one.
+// the recording switch, so with the switch off record writes nothing
+// for one.
 func (o *Outcome) record(req Request, cfg *reviews.Config, records []reviews.EventRecord,
 	pins []reviews.FiringPin, emission, evaluation string,
 ) {

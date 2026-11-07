@@ -26,10 +26,10 @@ const AuditSchemaVersion = 2
 const (
 	// DeliveryEvaluation records an evaluation that emitted nothing: no
 	// match, no usable path, a selection error, or a failed emission.
-	// Only a writer that sees capture opt-in writes it (spec L257).
+	// Only a hook that runs with the recording switch writes it.
 	DeliveryEvaluation DeliveryStatus = "evaluation"
 	// DeliveryReset records a context reset with the new generations.
-	// Only a writer that sees capture opt-in writes it (spec L185).
+	// Only a hook that runs with the recording switch writes it.
 	DeliveryReset DeliveryStatus = "reset"
 )
 

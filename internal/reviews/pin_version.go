@@ -12,9 +12,9 @@ import (
 )
 
 // This file holds the pin version, the pin-ref, the guidance digest, and
-// the exported identity digests (contract K2). They live in reviews, not
-// in lessoncheck: the audit writer, distill, archive, delivery, and the
-// delivery report already import reviews and cannot import lessoncheck.
+// the exported identity digests. They live in reviews, not in
+// lessoncheck, because lessoncheck imports reviews. The audit writer,
+// distill, delivery, and the delivery report read them from here.
 
 // PinVersionScheme labels the version composition. A change of the parts
 // below is a new label and therefore a new version for every pin.
@@ -31,18 +31,14 @@ const GuidanceDigestScheme = "guidance/1"
 const pinIdentityLabel = "pin"
 
 // MinPinRef is the shortest pin-ref prefix that ResolvePinRef accepts.
-// It equals archive.minPlanRef, so both kinds of reference read alike.
 const MinPinRef = 8
 
-// ShownPinRef is the shortest pin-ref that ShortPinRef prints. It equals
-// the shown length of a live plan key.
+// ShownPinRef is the shortest pin-ref that ShortPinRef prints.
 const ShownPinRef = 12
 
 // compose joins the parts with a length prefix on each part. A part can
 // hold any byte, and the lengths keep two different part lists apart.
-// The bytes equal capture.compose and the loop of contextDigest. reviews
-// keeps its own copy because the capture package pulls sqlite into the
-// hook paths.
+// The bytes equal the loop of contextDigest.
 func compose(parts ...string) string {
 	var b strings.Builder
 

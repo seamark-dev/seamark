@@ -41,7 +41,7 @@ type ExploreRequest struct {
 	ConfigErr error
 	// RecordEvaluations is true when the hook runs with the recording
 	// switch on. Only then does the firing log get the evaluation record
-	// of a read that emitted nothing (contract L3).
+	// of a read that emitted nothing.
 	RecordEvaluations bool
 	// EventID returns the event_id of the record. Nil means a new random
 	// ID. Tests set it to get fixed records.
@@ -317,8 +317,8 @@ type exploreEvent struct {
 
 // record appends the one record of an exploration event to the firing
 // log. It is best effort: the result only sets AuditFailed. An
-// evaluation needs capture opt-in, so without it record writes nothing
-// for one (contract L3, explore rows).
+// evaluation needs the recording switch, so with the switch off record
+// writes nothing for one.
 func (e exploreEvent) record(records []reviews.EventRecord, pins []reviews.FiringPin, emission, evaluation string) {
 	req := e.req
 	if records[0].Status == reviews.DeliveryEvaluation && !req.RecordEvaluations {

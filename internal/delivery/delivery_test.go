@@ -881,7 +881,8 @@ func TestDeliverRestoresOverflowEligibility(t *testing.T) {
 
 		broken := errors.New("stdout closed")
 
-		// A failed reply is an evaluation record, so it needs capture opt-in.
+		// A failed reply is an evaluation record, so it needs the recording
+		// switch.
 		req := claudeRequest(root, cfg, claudeEvent(root, "session-1", "", "m", "p", "api/handler.go"))
 		req.RecordEvaluations = true
 

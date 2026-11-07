@@ -420,7 +420,7 @@ func TestExploreNeverSuppressesWithoutAResettableContext(t *testing.T) {
 	})
 }
 
-func TestExploreRecordsEvaluationsOnlyUnderCaptureOptIn(t *testing.T) {
+func TestExploreRecordsEvaluationsOnlyUnderTheRecordingSwitch(t *testing.T) {
 	failed := errors.New("stdout closed")
 
 	type setup struct {
@@ -512,7 +512,7 @@ func TestExploreRecordsEvaluationsOnlyUnderCaptureOptIn(t *testing.T) {
 
 				records := firings(t, root)
 				if !optIn {
-					assert.Empty(t, records, "without capture opt-in, nothing emitted means no record")
+					assert.Empty(t, records, "with the recording switch off, nothing emitted means no record")
 					continue
 				}
 
