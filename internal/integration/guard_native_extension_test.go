@@ -321,8 +321,10 @@ func (r guardRecording) failureRecords(x guardExtension, pre timingEvent) error 
 }
 
 // guardNoMultiEdit is the reply word of a model that has no MultiEdit
-// tool.
-const guardNoMultiEdit = "no-multiedit"
+// tool. It is one plain word, because the haiku subagent misspelled the
+// earlier word no-multiedit as no-multedit in two recordings. The check
+// stays exact, so a misspelled reply still asks for a new recording.
+const guardNoMultiEdit = "absent"
 
 // guardReplyWord matches a reply that the script keeps: one word.
 var guardReplyWord = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
@@ -342,8 +344,9 @@ func replyWord(s string) string {
 // noMultiEditTool returns nil when a MultiEdit case without a MultiEdit
 // payload shows a client without the tool. No write ran: no payload of a
 // guarded tool, no line of the indirection entry, and no change to the
-// fixture. Also, the model that held the tool list replied no-multiedit.
-// In a child case that model is the subagent, not the parent.
+// fixture. Also, the model that held the tool list replied the word
+// guardNoMultiEdit. In a child case that model is the subagent, not the
+// parent.
 func (r guardRecording) noMultiEditTool(x guardExtension) error {
 	c := r.cases[x.name]
 
@@ -622,7 +625,13 @@ func TestNoMultiEditToolReadsTheModelThatHeldTheTools(t *testing.T) {
 		{"the child has no tool and the parent rewords its reply", "subagent-multiedit-violation", "",
 			childMultiEditPayloads(guardNoMultiEdit), nil, false, true},
 		{"the child reply gives its word without spaces, capitals, or a period", "slow-deny-subagent-multiedit", "",
-			childMultiEditPayloads(" No-MultiEdit. "), nil, false, true},
+			childMultiEditPayloads(" Absent. "), nil, false, true},
+		{"the child replied the plain word", "subagent-multiedit-violation", "",
+			childMultiEditPayloads("absent"), nil, false, true},
+		{"the child replied the earlier word", "subagent-multiedit-violation", "",
+			childMultiEditPayloads("no-multiedit"), nil, false, false},
+		{"the child misspelled the earlier word, as haiku did twice", "subagent-multiedit-violation", "",
+			childMultiEditPayloads("no-multedit"), nil, false, false},
 		{"the parent relays the word that the child did not reply", "subagent-multiedit-violation", guardNoMultiEdit,
 			childMultiEditPayloads("done"), nil, false, false},
 		{"the child replied a sentence", "subagent-multiedit-violation", guardNoMultiEdit,
@@ -638,6 +647,8 @@ func TestNoMultiEditToolReadsTheModelThatHeldTheTools(t *testing.T) {
 		{"a root case reads the reply of the parent", "slow-deny-multiedit", guardNoMultiEdit,
 			root, nil, false, true},
 		{"a root case with another reply", "slow-deny-multiedit", "done",
+			root, nil, false, false},
+		{"a root case with the earlier word", "slow-deny-multiedit", "no-multiedit",
 			root, nil, false, false},
 		{"a root case that changed the fixture", "slow-deny-multiedit", guardNoMultiEdit,
 			root, nil, true, false},
@@ -664,10 +675,10 @@ func TestNoMultiEditToolReadsTheModelThatHeldTheTools(t *testing.T) {
 }
 
 // TestGuardExtensionSkipsAChildWithoutMultiEdit replays the child
-// MultiEdit cases of a client without the tool. The subagent replies
-// no-multiedit, and the parent gives no one-word reply, as the one
-// child guard run of Claude Code 2.1.314 did. Each case must skip with
-// its reason and not ask for a new recording.
+// MultiEdit cases of a client without the tool. The subagent replies the
+// word guardNoMultiEdit, and the parent gives no one-word reply, as the
+// one child guard run of Claude Code 2.1.314 did. Each case must skip
+// with its reason and not ask for a new recording.
 func TestGuardExtensionSkipsAChildWithoutMultiEdit(t *testing.T) {
 	for _, name := range []string{"subagent-multiedit-violation", "slow-deny-subagent-multiedit"} {
 		x := guardExtensionRow(t, ClaudeID, name)

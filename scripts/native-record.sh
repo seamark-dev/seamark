@@ -1532,7 +1532,7 @@ if os.path.isfile(log):
         lines = [line.strip() for line in f][log_from:]
 
 # The reply is a corroboration only. A single word stays, for example
-# done, blocked, no-multiedit, or a check id. Other text does not.
+# done, blocked, absent, or a check id. Other text does not.
 with open(os.path.join(out, "reply-%d.txt" % run), encoding="utf-8") as f:
     reply = f.read().strip().strip(".").lower()
 
@@ -1655,7 +1655,7 @@ $GUARD_STOP"
     guard_run enforce multiedit-violation "$GUARD_STEPS
 1. Use the Read tool to read the file notes/multi.txt.
 2. Use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
-If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: no-multiedit.
+If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: absent.
 $GUARD_STOP"
 
     guard_run enforce subagent-violation "$GUARD_STEPS
@@ -1705,7 +1705,7 @@ $GUARD_STOP"
     # agent list of their first recordings. The editor reads before it
     # edits, because Edit and MultiEdit need a read of the file first.
     agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]},'
-    agents=$agents'"editor":{"description":"Reads the one file it is given, then makes the one edit it is given.","prompt":"Use the Read tool once on the file that you are given. Then make the edit that you are given with exactly the tool that you are given, once. If you do not have that tool, use no other tool and reply with the single word no-multiedit. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Read","Edit","MultiEdit"]},'
+    agents=$agents'"editor":{"description":"Reads the one file it is given, then makes the one edit it is given.","prompt":"Use the Read tool once on the file that you are given. Then make the edit that you are given with exactly the tool that you are given, once. If you do not have that tool, use no other tool and reply with the single word absent. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Read","Edit","MultiEdit"]},'
     agents=$agents'"reporter":{"description":"Creates the one file it is given, then reports the post-edit message.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. Do not retry it. Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.","model":"'"$model"'","tools":["Write"]}}'
 
     guard_run enforce subagent-edit-violation "$GUARD_STEPS
@@ -1732,7 +1732,7 @@ $GUARD_STOP"
     guard_run slow-deny slow-deny-multiedit "$GUARD_STEPS
 1. Use the Read tool to read the file notes/multi.txt.
 2. Use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
-If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: no-multiedit.
+If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: absent.
 $GUARD_STOP"
 
     guard_run slow-deny slow-deny-subagent-write "$GUARD_STEPS

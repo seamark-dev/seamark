@@ -791,8 +791,9 @@ func TestNativeRecordClaudeGuardRecording(t *testing.T) {
 	t.Run("a MultiEdit with one violating step writes nothing", func(t *testing.T) {
 		name := guardMultiEditViolation
 		if !r.has(name, "PreToolUse", claudeToolMultiEdit) {
-			require.Equal(t, "no-multiedit", r.cases[name].Reply,
-				"no MultiEdit payload and no no-multiedit reply: the model did not follow the prompt, so record the case again")
+			require.Equal(t, guardNoMultiEdit, r.cases[name].Reply,
+				"no MultiEdit payload and no %s reply: the model did not follow the prompt, so record the case again",
+				guardNoMultiEdit)
 			t.Skipf("Claude Code %s offered no MultiEdit tool; the MultiEdit path keeps no native evidence",
 				r.manifest.ClientVersion)
 		}

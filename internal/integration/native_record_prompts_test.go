@@ -165,6 +165,44 @@ func TestNativeRecordClaudeChildPromptsSetTheLaunchShape(t *testing.T) {
 	}
 }
 
+// TestNativeRecordClaudeMultiEditPromptsNameTheReplyWord proves that each
+// Claude Code prompt asks a model without a MultiEdit tool for the word
+// that the replay checks. The replay compares the word exactly, so another
+// word in one prompt fails its MultiEdit cases after a paid recording. The
+// two root prompts ask the parent. The editor agent prompt asks the
+// subagent of the two child cases, because the subagent holds the tool list.
+func TestNativeRecordClaudeMultiEditPromptsNameTheReplyWord(t *testing.T) {
+	body := scriptFunction(t, nativeRecordScript(t), "record_claude_guard")
+
+	for _, opener := range []string{
+		`guard_run enforce multiedit-violation "$GUARD_STEPS`,
+		`guard_run slow-deny slow-deny-multiedit "$GUARD_STEPS`,
+	} {
+		t.Run(opener, func(t *testing.T) {
+			assert.Contains(t, scriptPrompt(t, body, opener),
+				"\nIf you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: "+guardNoMultiEdit+".\n")
+		})
+	}
+
+	assert.Contains(t, scriptLine(t, body, `    agents=$agents'"editor":`),
+		`, once. If you do not have that tool, use no other tool and reply with the single word `+guardNoMultiEdit+`. `,
+		"the editor agent prompt asks the subagent for the word")
+
+	// Each instruction for a missing tool names the same word. So a new
+	// prompt with another word fails too.
+	ask := regexp.MustCompile(`reply with the single word:? ` + regexp.QuoteMeta(guardNoMultiEdit) + `\.`)
+	asks := 0
+
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, "no MultiEdit tool") || strings.Contains(line, "do not have that tool") {
+			asks++
+			assert.Regexp(t, ask, line)
+		}
+	}
+
+	assert.Equal(t, 3, asks, "the two root prompts and the editor agent prompt")
+}
+
 // runClaudeTiming runs record_claude_timing of the script with a stand-in
 // timing_claude that prints the case, the session mode, and the first
 // prompt line of each run. So the test starts no client. It returns the
