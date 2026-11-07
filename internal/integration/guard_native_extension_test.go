@@ -3,7 +3,9 @@ package integration
 // The extension cases of the native guard scenario. They come after the
 // thirteen first cases of each client in scripts/native-record.sh:
 // child denies, a child post-edit reply, an in-budget slow deny per tool
-// and lane, and for Claude Code a write that fails during its execution.
+// and lane, and for Claude Code a write that fails during its execution
+// and a foreground in-budget slow deny of the Write child. That last case
+// gives the Write child an in-budget slow deny in both launch shapes.
 // The table below gives the expected outcome of each case, so a later
 // recording replays offline against it. A recording from before the
 // extension holds none of these cases, and its replay skips them as
@@ -28,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
 // guardPhaseSlowDeny is the phase of the in-budget slow cases. The
@@ -61,6 +64,12 @@ const (
 // execution, in the read-only directory that guard_fixture makes.
 const guardExecutionFailure = "execution-failure"
 
+// guardSlowDenyChildForeground is the case whose Write child gets the
+// in-budget slow deny in the foreground launch shape. The parent waits
+// for the child inside the Agent call, so the in-budget wait of the child
+// Write ends before that call returns.
+const guardSlowDenyChildForeground = "slow-deny-subagent-write-foreground"
+
 // guardExtension is one row of the scenario table of the extension. The
 // shape is the launch shape that the prompt of a Claude Code child case
 // sets. It is empty for a root case and for each Codex case.
@@ -87,6 +96,8 @@ var (
 		{"slow-deny-subagent-edit", guardPhaseSlowDeny, claudeToolEdit, LaneChild, "sentinel/edit.txt", guardOutcomeSlowDeny, launchBackground},
 		{"slow-deny-subagent-multiedit", guardPhaseSlowDeny, claudeToolMultiEdit, LaneChild, "notes/multi.txt", guardOutcomeSlowDeny, launchBackground},
 		{guardExecutionFailure, "post-only", claudeToolWrite, LaneRoot, "sentinel/locked/new.txt", guardOutcomeFailure, ""},
+		{guardSlowDenyChildForeground, guardPhaseSlowDeny, claudeToolWrite, LaneChild, "sentinel/slow-child-foreground.txt",
+			guardOutcomeSlowDeny, launchForeground},
 	}
 	codexGuardExtensions = []guardExtension{
 		{"subagent-check-only", "check-pins", codexApplyPatch, LaneChild, "sentinel/child-checked.txt", guardOutcomeReply, ""},
@@ -1089,4 +1100,113 @@ func TestGuardScenarioFixtureOfTheFailureCase(t *testing.T) {
 	run("guard_reset\n")
 	assert.NoDirExists(t, locked, "the reset removes the directory and its file")
 	assert.Empty(t, git("status", "--porcelain", "--untracked-files=all"))
+}
+
+// foregroundSlowDenyPayloads gives the payloads of the foreground slow-deny
+// child case. In the foreground order the parent waits for the agent. So
+// SubagentStop comes before the Agent call result, and that result reads
+// completed. In the background order the result reads async_launched and
+// comes before the child call. The task notification of the agent then
+// comes as a later prompt. Each order holds one denied child Write and no
+// PostToolUse Write.
+func foregroundSlowDenyPayloads(background bool) []map[string]any {
+	const session, agent, workspace = "session-a", "agent-1", "/workspace/native"
+
+	prompt := map[string]any{"hook_event_name": "UserPromptSubmit", "session_id": session}
+	launch := map[string]any{"hook_event_name": claudeEventPreToolUse, "session_id": session, "tool_name": claudeToolAgent,
+		"tool_use_id": "toolu_agent", "tool_input": map[string]any{"subagent_type": "writer", "run_in_background": false,
+			"prompt": "create the file"}}
+	start := map[string]any{"hook_event_name": "SubagentStart", "session_id": session, "agent_id": agent, "agent_type": "writer"}
+	write := map[string]any{"hook_event_name": claudeEventPreToolUse, "session_id": session, "agent_id": agent,
+		"cwd": workspace, "tool_name": claudeToolWrite, "tool_use_id": "toolu_write",
+		"tool_input": map[string]any{"file_path": workspace + "/sentinel/slow-child-foreground.txt", "content": "child\n"}}
+	stop := map[string]any{"hook_event_name": "SubagentStop", "session_id": session, "agent_id": agent,
+		"last_assistant_message": "blocked"}
+	result := map[string]any{"hook_event_name": claudeEventPostTool, "session_id": session, "tool_name": claudeToolAgent,
+		"tool_use_id": "toolu_agent", "tool_response": map[string]any{"status": agentStatusCompleted, "agentId": agent}}
+	end := map[string]any{"hook_event_name": "Stop", "session_id": session}
+
+	if background {
+		result["tool_response"] = map[string]any{"status": agentStatusAsyncLaunched, "agentId": agent}
+
+		return []map[string]any{prompt, launch, start, result, write, end, stop, maps.Clone(prompt), maps.Clone(end)}
+	}
+
+	return []map[string]any{prompt, launch, start, write, stop, result, end}
+}
+
+// foregroundSlowDenyRecording builds a synthetic Claude Code recording of
+// the foreground slow-deny child case in run 1 from the payloads. The
+// identity row and the deny record of the child Write use the digests
+// that synthRecording uses. The indirection entry logged one deny, the
+// fixture stays unchanged, and the debug log shows the pre-write command
+// with exit status 2.
+func foregroundSlowDenyRecording(t *testing.T, payloads []map[string]any) (guardRecording, guardExtension) {
+	t.Helper()
+
+	x := guardExtensionRow(t, ClaudeID, guardSlowDenyChildForeground)
+	state := guardState{Files: map[string]string{"sentinel/edit.txt": "a"}}
+
+	r := guardRecording{
+		timingRecording: timingRecording{runs: map[string]int{x.name: 1}, events: map[int][]timingEvent{}},
+		cases: map[string]guardCase{x.name: {Run: 1, Case: x.name, Phase: x.phase, Before: state, After: state,
+			Audit: [2]int{0, 1}, PreWrite: []string{guardSlowDenyLine}}},
+	}
+	r.manifest.Client, r.manifest.ClientVersion = ClaudeID, "synthetic"
+	r.manifest.Placeholders.Workspace = "/workspace/native"
+	r.events[1] = syntheticEvents(t, 1, payloads)
+
+	i := slices.IndexFunc(r.events[1], func(e timingEvent) bool {
+		return e.hook.Event == claudeEventPreToolUse && e.tool() == claudeToolWrite
+	})
+	require.GreaterOrEqual(t, i, 0, "the payloads hold the child Write")
+
+	write := r.events[1][i]
+	session, agent := nativeString(write.raw, "session_id"), nativeString(write.raw, "agent_id")
+	receiver := ReceivingContextOf(ClaudeID, session, agent)
+	require.NotNil(t, receiver)
+
+	id := guardIdentity{
+		File: write.hook.File, Run: 1, Case: x.name, Client: ClaudeID, Tool: claudeToolWrite, Lane: receiver.Lane,
+		SessionSHA: reviews.SessionDigest(synthRoot, session),
+		MatchSHA:   reviews.MatchDigest(synthRoot, session, nativeString(write.raw, "tool_use_id")),
+		ContextSHA: reviews.ContextDigest(synthRoot, ClaudeID, receiver.ID),
+	}
+	r.identities = []guardIdentity{id}
+	r.audit = []lessoncheck.AuditRecord{{
+		Kind: lessoncheck.AuditGuard, Client: ClaudeID, Tool: claudeToolWrite,
+		SessionSHA: id.SessionSHA, MatchSHA: id.MatchSHA, ContextSHA: id.ContextSHA,
+		Guard: &lessoncheck.GuardDecision{Decision: lessoncheck.GuardDeny, Cause: lessoncheck.GuardCauseViolation,
+			ReplyWritten: true, Protocol: lessoncheck.GuardProtocolExit2},
+	}}
+
+	status := 2
+	r.hooks = []guardHookResult{{Run: 1, Hook: "pre-write", Event: claudeEventPreToolUse, Tool: claudeToolWrite,
+		Status: &status}}
+
+	return r, x
+}
+
+// TestGuardExtensionReplaysAForegroundSlowDeny replays the foreground
+// slow-deny child case on synthetic recordings. They give no native
+// proof. The foreground order passes the whole replay of the case. The
+// background order of the same request is a finding about the client, so
+// its message does not ask for a new recording.
+func TestGuardExtensionReplaysAForegroundSlowDeny(t *testing.T) {
+	r, x := foregroundSlowDenyRecording(t, foregroundSlowDenyPayloads(false))
+
+	var replay *testing.T
+
+	t.Run("the foreground order passes the replay", func(t *testing.T) {
+		replay = t
+		r.replayExtensionCase(t, ClaudeID, x)
+	})
+
+	assert.False(t, replay.Skipped(), "the replay checks the slow deny and does not skip")
+
+	background, x := foregroundSlowDenyRecording(t, foregroundSlowDenyPayloads(true))
+	err := background.launchShape(x.name, x.shape)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ran a foreground launch as background")
+	assert.NotContains(t, err.Error(), "record the case again")
 }

@@ -1638,12 +1638,12 @@ GUARD_REPORT='Then reply with one line: the check id that a seamark post-edit me
 # replay reads the reply of the child from its SubagentStop payload.
 GUARD_RELAY='Do not use any tool yourself. Then reply with the single word that the subagent replied.'
 
-# record_claude_guard runs the twenty-three Claude Code guard cases, each
+# record_claude_guard runs the twenty-four Claude Code guard cases, each
 # in a new session. The writer subagent has only the Write tool. The
 # phases that change the hook document run last among the first thirteen
-# cases. The ten later cases add child denies, a child post-edit reply,
-# the in-budget slow deny of each tool and lane, and a write that fails
-# during its execution.
+# cases. The eleven later cases add child denies, a child post-edit reply,
+# the in-budget slow deny of each tool and lane, a write that fails during
+# its execution, and a foreground in-budget child slow deny.
 #
 # Each child prompt sets run_in_background of the Agent call. Claude Code
 # 2.1.314 starts an agent in the background when the field is not set, and
@@ -1651,7 +1651,8 @@ GUARD_RELAY='Do not use any tool yourself. Then reply with the single word that 
 # Write and the Edit child a deny in each shape: a foreground deny in
 # subagent-violation and subagent-edit-violation, and a background deny
 # after the in-budget wait in slow-deny-subagent-write and
-# slow-deny-subagent-edit.
+# slow-deny-subagent-edit. slow-deny-subagent-write-foreground gives the
+# Write child the foreground deny after the in-budget wait too.
 record_claude_guard() {
     model=${NATIVE_RECORD_CLAUDE_MODEL:-haiku}
     agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]}}'
@@ -1769,6 +1770,14 @@ $GUARD_RELAY"
 1. Use the Write tool once to create the new file sentinel/locked/new.txt with the single line: locked
 The directory sentinel/locked already exists. Do not read it and do not create it. If the call fails, do not retry it and do not try another way.
 $GUARD_REPORT"
+
+    # The case comes last, so the earlier cases keep the run numbers of
+    # their reviewed recordings. It costs one more phase change. Its own
+    # path tells its payloads and hook results apart from
+    # slow-deny-subagent-write without the run number.
+    guard_run slow-deny slow-deny-subagent-write-foreground "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"writer\" and run_in_background set to false, and ask it to create the new file sentinel/slow-child-foreground.txt with the single line: child
+$GUARD_RELAY"
 
     guard_restore
 }

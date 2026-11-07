@@ -120,6 +120,8 @@ var claudeChildPrompts = []claudeChildPrompt{
 	{"slow-deny-subagent-multiedit", "record_claude_guard", `guard_run slow-deny slow-deny-subagent-multiedit "$GUARD_STEPS`,
 		launchBackground},
 	{"subagent-read", "record_claude_timing", `timing_claude subagent-read new "$steps`, launchBackground},
+	{guardSlowDenyChildForeground, "record_claude_guard",
+		`guard_run slow-deny ` + guardSlowDenyChildForeground + ` "$GUARD_STEPS`, launchForeground},
 }
 
 // TestNativeRecordClaudeChildPromptsSetTheLaunchShape proves that each
