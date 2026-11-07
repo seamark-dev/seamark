@@ -136,7 +136,7 @@ type Totals struct {
 
 // PinReading is the reading of one pin version.
 type PinReading struct {
-	PinRef      string             `json:"pin_ref"` // Config.ShortPinRef; "" for a historical identity no longer configured
+	PinRef      string             `json:"pin_ref"` // Config.ShortPinRef of the config entry that the reading comes from
 	PinIdentity string             `json:"pin_identity"`
 	PinVersion  string             `json:"pin_version"`
 	Entry       int                `json:"entry,omitempty"`

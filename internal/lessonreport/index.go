@@ -242,10 +242,10 @@ func (idx *index) deliveryCounts(p pinVersion) DeliveryCounts {
 	// The v1 hook wrote the rendered symptom, "rule — note", into Fired.
 	// So the lookup renders the configured entry the way every surface
 	// does (reviews.PinIdentity), note included. A v1 record carries no
-	// version, so only a current reading shows the count. A historical
-	// version has no config entry and reads 0 by rule, not as a measured
-	// zero. Duplicate entries of one identity each show the count, as they
-	// show every other count.
+	// version, so only a current reading shows the count. Every reading in
+	// this build comes from a config entry, because the historical section
+	// is a fixed empty field. Duplicate entries of one identity each show
+	// the count, as they show every other count.
 	if p.configured != nil {
 		out.LegacyIdentityRecords = idx.legacy[reviews.PinIdentity(*p.configured)].Matches
 	}
