@@ -746,9 +746,9 @@ func codexTimingEdit(t *testing.T, e timingEvent) EditEvent {
 
 // codexCalls collects the tool-call IDs of every rollout of the
 // recording: the call_id of a tool-call response item and the ID of a
-// completed item. The hook tool_use_id of a shell call equals the ID of
-// its completed item (TestCaptureNativeCodexHookToolResults), and the
-// recording shows which form an apply_patch call takes.
+// completed item. The set holds both forms, because the hook
+// tool_use_id of a shell call can name its completed item. The recording
+// shows which form an apply_patch call takes.
 func (r timingRecording) codexCalls(t *testing.T) map[string]bool {
 	t.Helper()
 

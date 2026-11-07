@@ -74,11 +74,11 @@ type lessonHookInspector interface {
 // InspectLessonHooks returns only what LessonCapability reads for each
 // client, in registry order. A report from this result and a report
 // from Inspect are byte-identical. Preparation runs for each planned
-// change, and Inspect can start Git processes for a finding that the
-// report does not read. Nothing is written and no client binary runs.
+// change, so the narrow read skips the documents that the report does
+// not read. Nothing is written and no client binary runs.
 //
 // The result holds no findings and no entry for skills, registration,
-// grants, or capture, so only LessonCapability can use it.
+// or grants, so only LessonCapability can use it.
 func (r *Registry) InspectLessonHooks(root string) []Inspection {
 	out := make([]Inspection, 0, len(r.ordered))
 

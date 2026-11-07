@@ -345,10 +345,10 @@ func TestCodexMatcherFollowsTheDocumentedRules(t *testing.T) {
 		"an expression searches":       {"sh$", "Bash", true},
 		"an expression keeps the case": {"^bash$", "Bash", false},
 
-		// The capture probe tool "*" has no aliases.
-		"probe with only separators": {"|", "*", false},
-		"probe with an expression":   {".*", "*", true},
-		"probe with an alias name":   {"Edit", "*", false},
+		// The tool name "*" has no row, so it has no alias.
+		"star with only separators": {"|", "*", false},
+		"star with an expression":   {".*", "*", true},
+		"star with an alias name":   {"Edit", "*", false},
 	} {
 		assert.Equal(t, tc.want, CodexMatcher(tc.matcher, tc.tool), name)
 	}

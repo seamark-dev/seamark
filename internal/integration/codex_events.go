@@ -1,9 +1,9 @@
 package integration
 
-// The Codex hook event names that the capture hook decodes. The
-// completion decoder reads PostToolUse too, so the names are not in the
-// capture decoder. codex_hooks.go declares PostCompact, because the reset
-// decoder reads it too.
+// The Codex hook event names. The list keeps one identifier for each
+// native name. The completion decoder reads PostToolUse, and no decoder
+// of this build reads the others. codex_hooks.go declares PostCompact
+// next to the reset decoder, which reads it.
 const (
 	codexSessionStart     = "SessionStart"
 	codexUserPromptSubmit = "UserPromptSubmit"

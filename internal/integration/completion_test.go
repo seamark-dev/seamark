@@ -109,7 +109,7 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 	addPatch := "*** Begin Patch\n*** Add File: notes.txt\n+note\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-x\n+y\n*** End Patch\n"
 
 	t.Run("codex", func(t *testing.T) {
-		// The synthetic capture fixture of an apply_patch success.
+		// The synthetic fixture of an apply_patch success.
 		c, err := codexCompletions{}.DecodeCompletion(codexFixture(t, "post_tool_use.json"))
 		require.NoError(t, err)
 		assert.Equal(t, lessoncheck.Completion{
@@ -140,7 +140,7 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 			payload []byte
 			want    error
 		}{
-			// The synthetic capture fixture of a failed shell command.
+			// The synthetic fixture of a failed shell command.
 			{"a Bash failure", codexFixture(t, "post_tool_use_nonzero_exit.json"), ErrNotApplicable},
 			{"PreToolUse", codexEvent("PreToolUse", "apply_patch", nil, addPatch), ErrNotApplicable},
 			{"no tool_name", codexEvent("PostToolUse", "", nil, addPatch), ErrMalformedEvent},
@@ -197,7 +197,7 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 		}
 	})
 
-	t.Run("every capture outcome converts to a tool outcome", func(t *testing.T) {
+	t.Run("every Outcome converts to a tool outcome", func(t *testing.T) {
 		assert.Equal(t, lessoncheck.ToolUnknown, toolOutcomeOf(OutcomeNone))
 
 		for _, o := range []Outcome{OutcomeSucceeded, OutcomeFailed, OutcomeInterrupted, OutcomeDenied, OutcomeUnknown} {

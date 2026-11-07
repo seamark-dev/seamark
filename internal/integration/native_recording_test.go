@@ -1,8 +1,7 @@
 package integration
 
 // This file holds the types and helpers that read the manifest of a
-// native recording. The guard and timing tests read the manifest too, so
-// these helpers are not in the capture recording checks.
+// native recording for the guard and timing replays.
 
 // nativeManifest is the manifest.json of one recording. The sanitizer
 // (scripts/native-record-sanitize.py) writes it.

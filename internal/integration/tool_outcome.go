@@ -8,8 +8,8 @@ import (
 )
 
 // This file holds the outcome of a tool attempt and the rules that map
-// native client results to it. The completion decoders read the outcome
-// too, so this file keeps it apart from the capture files.
+// native client results to it. The completion decoders of both clients
+// read the outcome.
 
 // Outcome is the observed outcome of a tool attempt. The empty value
 // means that the observation is no tool result.
@@ -34,8 +34,8 @@ func (o Outcome) Valid() bool {
 
 // claudeFailureOutcome maps a PostToolUseFailure event to an outcome.
 // is_interrupt marks an abort that reached Claude Code. Any other
-// failure is a failed result. Capture and the completion decoder share
-// this rule, so both read one event as one outcome.
+// failure is a failed result. The Claude completion decoder applies this
+// rule to each failure event.
 func claudeFailureOutcome(interrupted bool) Outcome {
 	if interrupted {
 		return OutcomeInterrupted
@@ -59,8 +59,7 @@ func codexOutcome(response json.RawMessage) Outcome {
 
 // codexExitOutcome maps an exit status to an outcome. Exit code 0 gives
 // success. Every other code gives failure. Without an exit status the
-// outcome is unknown. The hook decoder and the rollout decoder share
-// this rule, so both channels give one outcome for one result.
+// outcome is unknown. The Codex completion decoder applies this rule.
 func codexExitOutcome(code int64, ok bool) Outcome {
 	switch {
 	case !ok:

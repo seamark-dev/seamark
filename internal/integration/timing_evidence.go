@@ -18,11 +18,12 @@ import (
 //     neither.
 //
 // Claude Code sends all three on the tool events of the session and of
-// a subagent (native capture recording, Claude Code 2.1.300). The Codex
-// child lane is unsupported for the call and the lane, because no native
-// run verifies a nested subagent or the child identity of a Codex hook
-// (see ReceivingContextOf). context-reset is not here, because the reset
-// evidence of the inspection gives it.
+// a subagent (native recording, Claude Code 2.1.300; payloads in
+// testdata/claude/native). The Codex child lane is unsupported for the
+// call and the lane, because no native run verifies a nested subagent or
+// the child identity of a Codex hook (see ReceivingContextOf).
+// context-reset is not here, because the reset evidence of the
+// inspection gives it.
 var payloadIdentities = map[string]map[lessoncheck.PathContext][]lessoncheck.AttributionItem{
 	ClaudeID: {
 		lessoncheck.ContextRoot: {
@@ -78,7 +79,7 @@ func TimingEvidence(clientID string, item lessoncheck.AttributionItem, context l
 
 	return VerificationEvidence{
 		Level:   VerificationPending,
-		Surface: "gate-3 timing recording, " + string(item) + " in the " + string(context) + " context",
+		Surface: "native timing recording, " + string(item) + " in the " + string(context) + " context",
 	}
 }
 

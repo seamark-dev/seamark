@@ -621,8 +621,8 @@ func (s *Server) changeSet(st *store.Store, files []string) (toolOutput, error) 
 	//
 	// The badges of each check come from the capability report of the
 	// workspace, so preparation computes no badge. Every change_set call
-	// runs this read, so the narrow reading avoids the Git processes of
-	// Inspect.
+	// runs this read, so the narrow reading reads only the hook
+	// documents.
 	capability := integration.LessonCapability(integration.Builtin().InspectLessonHooks(s.root), s.root,
 		integration.SelfIdentity(s.version))
 

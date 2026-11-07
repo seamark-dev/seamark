@@ -8,8 +8,7 @@ import (
 )
 
 // This file holds the generic setup test helpers that the lesson, Claude,
-// and Codex setup tests share. They hold no capture logic, so they are
-// not in the capture setup tests.
+// and Codex setup tests share.
 
 // applyHooks installs the lesson and gate hooks of one client, as init
 // does.
