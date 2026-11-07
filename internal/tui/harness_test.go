@@ -69,8 +69,8 @@ type fakeServices struct {
 	stats        lessonstats.Snapshot
 	agentsOnPath []string
 
-	// delivery answers the delivery reading; nil keeps capture unavailable
-	// and lists no pins, so existing scenes need no delivery fixture.
+	// delivery answers the delivery reading; nil gives the fixed fields and
+	// lists no pins, so existing scenes need no delivery fixture.
 	delivery func(lessonreport.Request) (lessonreport.Report, error)
 
 	planSetup       func([]integration.ClientSetup) (*services.SetupPreview, error)

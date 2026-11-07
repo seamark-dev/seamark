@@ -16,7 +16,7 @@ func TestSetupPreviewNamesTheRemovedBackgroundKey(t *testing.T) {
 	// The setup wizard runs no narrator, so the removal of a background
 	// key must reach the user through the findings of the plan. The
 	// wizard asks no gate mode, so the run keeps the installed one.
-	ws := archiveWorkspace(t)
+	ws := committedWorkspace(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(ws.Root, ".claude"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(ws.Root, ".claude", "settings.json"), []byte(
 		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+

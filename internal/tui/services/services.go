@@ -92,7 +92,7 @@ type Reader interface {
 	// Stats reads the lesson delivery statistics.
 	Stats() lessonstats.Snapshot
 	// Delivery builds the delivery/1 reading. It opens sources read-only,
-	// assembles nothing, and calls no model. Source failures are report
+	// writes nothing, and calls no model. Source failures are report
 	// data; only a pin reference that cannot select one identity fails.
 	Delivery(req lessonreport.Request) (lessonreport.Report, error)
 	// Sample runs the lesson selection of one surface for explicit

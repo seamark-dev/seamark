@@ -140,9 +140,9 @@ func deliverySources(t *testing.T, ws workspace.Workspace, identityRoot string) 
 	return cfg
 }
 
-// assertNoArchiveRead checks the fixed archive and capture states. The
-// report reads no capture archive, so no workspace changes them.
-func assertNoArchiveRead(t *testing.T, report lessonreport.Report) {
+// assertFixedFields checks the as_of.archive and capture states. They
+// are fixed fields of the report, so no workspace changes them.
+func assertFixedFields(t *testing.T, report lessonreport.Report) {
 	t.Helper()
 	assert.Equal(t, lessonreport.StateAbsent, report.AsOf.Archive.State)
 	assert.Equal(t, lessonreport.ArchiveNotReadError, report.AsOf.Archive.Error)
@@ -178,7 +178,7 @@ func TestDeliveryReadsWithoutWriting(t *testing.T) {
 		assert.Equal(t, 1, got.Checks.Operations["verify"])
 		assert.Equal(t, 1, got.Totals.EvaluationRecords)
 		assert.Zero(t, got.Checks.GuardAttempts.Prevented)
-		assertNoArchiveRead(t, got)
+		assertFixedFields(t, got)
 
 		want, err := lessonreport.Gather(context.Background(), lessonreport.Request{
 			Root: ws.Root, SeamarkVersion: "v9.8.7", PinRef: req.PinRef,
@@ -240,7 +240,7 @@ func testDeliveryWithoutLedger(t *testing.T) {
 				ID: 999, Rule: "close-db-handles", Region: "api", Status: model.ProposalApplied,
 			}}})
 			require.NoError(t, err)
-			assertNoArchiveRead(t, got)
+			assertFixedFields(t, got)
 			assert.Equal(t, lessonreport.StateRead, got.AsOf.Audit.State)
 			assert.Equal(t, lessonreport.StateRead, got.AsOf.CheckAudit.State)
 			assert.Equal(t, lessonreport.ConfigOK, got.AsOf.Config.State)
@@ -255,7 +255,7 @@ func testDeliveryWithoutLedger(t *testing.T) {
 func testDeliveryMovedRoot(t *testing.T) {
 	indexed, linked := maintWorkspace(t, false)
 	require.NoError(t, deliverySQL(t, indexed.DBPath, "PRAGMA journal_mode = DELETE").Close())
-	moved := archiveWorkspace(t)
+	moved := committedWorkspace(t)
 	moved.DBPath = indexed.DBPath
 	servicestest.Write(t, moved, ".seamark/lessons.yaml", maintPins)
 	deliverySources(t, moved, indexed.Root)
@@ -270,7 +270,7 @@ func testDeliveryMovedRoot(t *testing.T) {
 	assert.Equal(t, "close-db-handles", got.Pins[0].Rule)
 	assert.Equal(t, lessonreport.StateRead, got.AsOf.Audit.State)
 	assert.Equal(t, 1, got.Totals.EvaluationRecords, "the firing log of the moved checkout is read")
-	assertNoArchiveRead(t, got)
+	assertFixedFields(t, got)
 
 	want, err := lessonreport.Gather(context.Background(), lessonreport.Request{
 		Root: moved.Root, SeamarkVersion: "test", Applied: []model.Proposal{linked},
@@ -287,12 +287,12 @@ func testDeliveryMovedRoot(t *testing.T) {
 // and without Seamark files. Every source reads absent, and the read
 // creates no directory.
 func testDeliveryPlainWorkspace(t *testing.T) {
-	ws := archiveWorkspace(t)
+	ws := committedWorkspace(t)
 	agent := noProvider(t)
 	before := deliveryTree(t, ws.Root)
 	got, err := engNew(ws, Deps{Invoke: agent}).Delivery(lessonreport.Request{})
 	require.NoError(t, err)
-	assertNoArchiveRead(t, got)
+	assertFixedFields(t, got)
 	assert.Equal(t, lessonreport.StateAbsent, got.AsOf.Audit.State)
 	assert.Equal(t, lessonreport.StateAbsent, got.AsOf.CheckAudit.State)
 	assert.Equal(t, lessonreport.StateAbsent, got.AsOf.Config.State)
@@ -304,7 +304,7 @@ func testDeliveryPlainWorkspace(t *testing.T) {
 }
 
 func testDeliverySelectionErrors(t *testing.T) {
-	ws := archiveWorkspace(t)
+	ws := committedWorkspace(t)
 	servicestest.Write(t, ws, ".seamark/lessons.yaml", maintPins)
 	agent := noProvider(t)
 	e := engNew(ws, Deps{Invoke: agent})

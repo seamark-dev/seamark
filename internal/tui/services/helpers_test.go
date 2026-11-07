@@ -12,11 +12,9 @@ import (
 )
 
 // This file holds test helpers that tests of several services share.
-// They hold no capture logic, so they are not in the capture service
-// tests.
 
-// archiveWorkspace is a committed Git workspace without an index.
-func archiveWorkspace(t *testing.T) workspace.Workspace {
+// committedWorkspace is a committed Git workspace without an index.
+func committedWorkspace(t *testing.T) workspace.Workspace {
 	t.Helper()
 
 	root := t.TempDir()
