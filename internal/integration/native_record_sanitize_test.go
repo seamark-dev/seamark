@@ -490,9 +490,10 @@ func TestNativeRecordSanitizeReplacesClaudeIDs(t *testing.T) {
 }
 
 // TestNativeRecordSanitizeRefusesAnUnmappedID proves the residual check.
-// A UUID that no place of the map names refuses the copy. The message
-// names the file and the kind, but never the value, also when the value
-// is part of a file name.
+// A UUID that no place of the map names refuses the copy. So do a
+// background value and an agent file name that the pass did not map. The
+// message names the file and the kind, but never the value, also when the
+// value is part of a file name.
 func TestNativeRecordSanitizeRefusesAnUnmappedID(t *testing.T) {
 	requireTools(t, "python3")
 
@@ -526,6 +527,86 @@ func TestNativeRecordSanitizeRefusesAnUnmappedID(t *testing.T) {
 		got, err := f.sanitize(t, f.out)
 		require.Error(t, err)
 		assert.Contains(t, got, "notes-<id>.jsonl: holds an unmapped UUID ID")
+		assert.NotContains(t, got, unmapped)
+	})
+
+	// A background task ID has no text pattern, so only the place check
+	// refuses a value that the pass did not map. The pass maps no value
+	// shorter than 8 characters. It also maps no tag or path value that has
+	// neither the agent shape nor the task shape.
+	for _, tc := range []struct {
+		name, file, shown, value, payload string
+	}{
+		{
+			"a task-id tag value with no known shape", "p1", "hooks/001-UserPromptSubmit.json", "q7k2m9p4w1x",
+			`{"session_id":"{S1}","prompt_id":"{P1}","hook_event_name":"UserPromptSubmit","prompt":"<task-id>{V}</task-id>"}`,
+		},
+		{
+			"a short task output file value", "p3", "hooks/003-PostToolUse.json", "b7k2m9",
+			`{"session_id":"{S1}","prompt_id":"{P1}","hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"{T3}",` +
+				`"tool_response":{"outputFile":"/private/tmp/claude-501/{SLUG}/{S1}/tasks/{V}.output"}}`,
+		},
+		{
+			"a short background task list value", "p5", "hooks/005-Stop.json", "b7k2m9",
+			`{"session_id":"{S1}","hook_event_name":"Stop","background_tasks":[{"id":"{V}","type":"local_bash"},` +
+				`{"id":"{A1}","type":"subagent"}]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newSanitizeFixture(t)
+			payload := strings.ReplaceAll(tc.payload, "{V}", tc.value)
+			writeLines(t, filepath.Join(f.root, "observed", tc.file+".json"), sanitizeReplacer(f.root).Replace(payload))
+
+			got, err := f.sanitize(t, f.out)
+			require.Error(t, err)
+			assert.Contains(t, got, tc.shown+": holds an unmapped task ID")
+			assert.NotContains(t, got, tc.value)
+		})
+	}
+
+	// The parent directory of this subagent file is no session UUID. So the
+	// file lies outside the session layout, and its name maps no agent ID.
+	t.Run("an agent ID only in a subagent file name", func(t *testing.T) {
+		const agent = "a7c3e9b1"
+
+		f := newSanitizeFixture(t)
+		record := readJSON(t, f.record)
+
+		project := filepath.Join(f.root, "operator-q7", ".claude", "projects", claudeProjectSlug(filepath.Join(f.root, "repo")))
+		file := filepath.Join(project, "detached", "subagents", "agent-"+agent+".jsonl")
+		writeLines(t, file, `{"type":"user","message":{"role":"user","content":"go"}}`)
+
+		transcripts, _ := record["transcripts"].([]any)
+		record["transcripts"] = append(transcripts, file)
+		f = writeSanitizeRecord(t, f.root, record)
+
+		got, err := f.sanitize(t, f.out)
+		require.Error(t, err)
+		assert.Contains(t, got, "projects/-workspace-native/detached/subagents/agent-<id>.jsonl: holds an unmapped agent ID",
+			"the message hides the agent ID and keeps the subagents directory name")
+		assert.NotContains(t, got, agent)
+	})
+
+	// A name part with the task shape is no hit, because the task shape has
+	// no text pattern. The message hides it all the same, because the shape
+	// alone cannot tell a task ID from a plain name. One name has the agent
+	// file prefix, because the message reads the part after that prefix.
+	t.Run("a task-shaped part of an output file name", func(t *testing.T) {
+		const task = "bq7x2m9k4"
+
+		f := newSanitizeFixture(t)
+		record := readJSON(t, f.record)
+
+		extra := filepath.Join(f.root, "extras", "notes.jsonl")
+		writeLines(t, extra, `{"note":"see run `+unmapped+` again"}`)
+		record["extras"] = map[string]string{"tasks/" + task + ".jsonl": extra, "agent-" + task + ".jsonl": extra}
+		f = writeSanitizeRecord(t, f.root, record)
+
+		got, err := f.sanitize(t, f.out)
+		require.Error(t, err)
+		assert.Contains(t, got, "tasks/<id>.jsonl: holds an unmapped UUID ID")
+		assert.Contains(t, got, "agent-<id>.jsonl: holds an unmapped UUID ID")
+		assert.NotContains(t, got, task)
 		assert.NotContains(t, got, unmapped)
 	})
 }
