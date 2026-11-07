@@ -13,8 +13,8 @@ import (
 // verifyGrants are the only Bash rules for lessons --verify. The plain
 // rule has no wildcard, so it matches only the bare command. The two
 // wildcard forms reach --hook only together with --json or --file, and
-// the post-edit hook entry refuses those forms before dispatch (plan
-// step P4.5). A broad "--verify*" rule would also grant the hook entry.
+// the post-edit hook entry refuses those forms before dispatch. A broad
+// "--verify*" rule would also grant the hook entry.
 var verifyGrants = []string{
 	"Bash(seamark lessons --verify)",
 	"Bash(seamark lessons --verify --json*)",
@@ -71,13 +71,13 @@ func workflowStep(workflow string, n int) string {
 	return ""
 }
 
-// TestPlanAndReviewSkillsRequirePreparation pins the contract L1 guidance
-// obligations to the shipped skills. Preparation comes before the
+// TestPlanAndReviewSkillsRequirePreparation pins the preparation
+// guidance to the shipped skills. Preparation comes before the
 // construction of any change, one file and a new path included. The
 // result informs a later construction step, never a patch built in the
-// same generated program, and it authorizes no write (AC-25). The review
-// skill verifies the working tree before completion and prepares a
-// repair before it constructs it.
+// same generated program, and it authorizes no write. The review skill
+// verifies the working tree before completion and prepares a repair
+// before it constructs it.
 func TestPlanAndReviewSkillsRequirePreparation(t *testing.T) {
 	// The shared grant: TestAllowedToolsIsOneNarrowGrant checks only the
 	// rule shape and the blanket rule, so the exact verify forms are

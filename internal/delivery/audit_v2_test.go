@@ -18,7 +18,7 @@ import (
 )
 
 // The tests in this file hold the write rules of firing record version
-// 2 for the edit hook and the reset hook (contract L3, surface "").
+// 2 for the edit hook and the reset hook.
 
 // Fixed event IDs keep the records of one test apart without a clock.
 const (
@@ -215,9 +215,9 @@ func TestDeliverWritesTheV2WriteRules(t *testing.T) {
 }
 
 func TestDeliverRecordsTheOwnInjectionOfAnAction(t *testing.T) {
-	// AC-9, emission side: each action gets its own injection record,
-	// joined by the digest of its tool use and its turn. The digests hash
-	// over the identity root, also when it differs from the root.
+	// Each action gets its own injection record, joined by the digest of
+	// its tool use and its turn. The digests hash over the identity root,
+	// also when it differs from the root.
 	root := workspace(t)
 	st := lessonStore(t, root)
 	cfg := pinnedConfig(reviews.HookDeliveryAlways)

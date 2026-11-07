@@ -61,9 +61,9 @@ func countsV2Events(root string, now time.Time, withNewKinds bool) []reviews.Aud
 }
 
 // TestDailyCountsSkipEvaluationAndResetRecords feeds a v2 log to
-// DailyCounts (contract L3, Legacy readers of v2 records). Evaluation
-// and reset records are not deliveries, so they change no day count.
-// An exploration injection is a delivery but not a hook delivery.
+// DailyCounts. Evaluation and reset records are not deliveries, so they
+// change no day count. An exploration injection is a delivery but not a
+// hook delivery.
 func TestDailyCountsSkipEvaluationAndResetRecords(t *testing.T) {
 	now := time.Date(2026, 10, 21, 15, 0, 0, 0, time.UTC)
 

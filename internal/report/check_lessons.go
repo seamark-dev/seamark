@@ -5,19 +5,19 @@ import (
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 )
 
-// This file holds the check-lessons/1 envelope of `check --lessons
-// --json` (contract K5). The type lives in report and not in cli,
+// This file holds the check-lessons/1 envelope of
+// `check --lessons --json`. The type lives in report and not in cli,
 // because the MCP server imports report and gate but not cli, and both
-// build the envelope (ruling P1-c). report holds the type only: it runs
-// no check and decides no exit code. lessoncheck.Combine decides the
-// combined state and the exit code.
+// build the envelope. report holds the type only: it runs no check and
+// decides no exit code. lessoncheck.Combine decides the combined state
+// and the exit code.
 
 // CheckLessonsSchema is the format name of the envelope.
 const CheckLessonsSchema = "check-lessons/1"
 
 // The closed list of policy inputs. A policy input names the source of
 // the diff that the policy read. The lesson checks always read the
-// working tree, whatever the source (§5 row 25).
+// working tree, whatever the source.
 const (
 	// PolicyInputStdinDiff is a diff that the caller gave to the command.
 	PolicyInputStdinDiff = "stdin-diff"

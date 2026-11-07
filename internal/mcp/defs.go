@@ -32,9 +32,9 @@ var toolDefs = []map[string]any{
 		}, []string{"query"}),
 	},
 	{
-		// The preparation clause states the contract L1 guidance obligation
-		// in the words of the preparation notice. So all surfaces give one
-		// meaning to "prepare" and "construct".
+		// The preparation clause states the preparation guidance in the
+		// words of the preparation notice. So all surfaces give one meaning
+		// to "prepare" and "construct".
 		"name": "change_set",
 		"description": "Pre-edit blast radius for planned files: what history says changes " +
 			"together with them, who calls their symbols, which effects they can reach. " +
@@ -58,7 +58,7 @@ var toolDefs = []map[string]any{
 				"type":        "string",
 				"description": "unified diff; optional",
 			},
-			// The option name, its type, and the text are frozen (contract K5).
+			// The option name, its type, and the text are fixed.
 			"lesson_checks": map[string]any{
 				"type":        "boolean",
 				"description": "also verify the working tree against executable lesson checks (lesson-verification/1); default false",
@@ -135,7 +135,7 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 	case statusURI:
 		render = func(st *store.Store) (string, error) {
 			// The lesson checks block identifies each hook binary against
-			// this server binary and its version (contract K10).
+			// this server binary and its version.
 			health, err := status.GatherAs(st, s.root, integration.SelfIdentity(s.version))
 			if err != nil {
 				return "", err
@@ -176,7 +176,7 @@ var promptDefs = []map[string]any{
 //
 // The change_set rule covers one file and a new path too. A pin can
 // cover one file, and the edit hook reminds only after the edit call is
-// built. Contract L1 lists these guidance obligations.
+// built.
 const serverInstructions = "Seamark answers questions that need history, co-change, lessons, or " +
 	"effect reach. Call change_set with the planned files before you construct any change, " +
 	"also for one file or a new path, and again when the file set grows: it prepares the pins " +

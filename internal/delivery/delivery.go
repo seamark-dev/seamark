@@ -29,9 +29,9 @@ type Request struct {
 	// suppression state use it.
 	Root string
 	// IdentityRoot is the root of the firing log: every identity digest
-	// hashes over it, and the records go under it (contract K2, identity
-	// root). Empty means Root. The CLI passes cli.hookIdentityRoot, so the
-	// edit and reset records of one receiver carry one digest.
+	// hashes over it, and the records go under it. Empty means Root. The
+	// CLI passes cli.hookIdentityRoot, so the edit and reset records of
+	// one receiver carry one digest.
 	IdentityRoot string
 	// ClientID is the resolved registry ID of the client. It comes from
 	// the CLI selection and never from the hook payload, so a payload
@@ -397,9 +397,8 @@ type ResetRequest struct {
 // no-op until once-per-context delivery has been used.
 //
 // The reset starts a new generation in the edit hook state and in the
-// exploration state (contract L2, Behavior 7). The two resets are
-// independent: a failure of one never stops the other, and neither
-// creates its file.
+// exploration state. The two resets are independent: a failure of one
+// never stops the other, and neither creates its file.
 //
 // With req.RecordEvaluations, the firing log gets one reset record for
 // every reset of a named context, also when no state exists yet. A
@@ -428,9 +427,9 @@ func Reset(req ResetRequest) error {
 	return exploreErr
 }
 
-// recordReset appends the reset record of a context (contract L3). A
-// generation is zero when its state was not reset, and the record then
-// has no key for it.
+// recordReset appends the reset record of a context. A generation is
+// zero when its state was not reset, and the record then has no key for
+// it.
 func recordReset(req ResetRequest, generation, exploreGeneration uint64) {
 	receiving := req.Event.Context
 	resettable := receiving.Resettable
@@ -521,8 +520,8 @@ func pinLessons(pins []reviews.SurfacedPin) []model.Lesson {
 	return lessons
 }
 
-// The emission values of a firing record (contract L3). The list is
-// closed; preparation adds "returned".
+// The emission values of a firing record. The list is closed;
+// preparation adds "returned".
 const (
 	emissionEmitted   = "emitted"
 	emissionNotNeeded = "not-needed"

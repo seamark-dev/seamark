@@ -20,18 +20,21 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// The tests in this file hold preparation (contract L1): the selection,
-// the exact pin versions, the checks list, the omissions, the firing
-// record, and the two text forms.
+// The tests in this file hold preparation: the selection, the exact pin
+// versions, the checks list, the omissions, the firing record, and the
+// two text forms.
 
 // preparedAt is the fixed preparation time of the tests.
 var preparedAt = time.Date(2026, 10, 21, 10, 15, 2, 0, time.UTC)
 
-// prepareEventID is the event ID of the contract example.
+// prepareEventID is the fixed event ID of the test preparations. The
+// reference document of TestPreparationJSONMatchesTheReferenceDocument
+// carries it.
 const prepareEventID = "53cdb75d6777b20e3d59e77cecd39b31"
 
-// prepareExampleConfig is the configuration of the L1 example: the
-// enforced pin of the spec example and one advisory pin.
+// prepareExampleConfig is the .seamark/lessons.yaml that the reference
+// preparation reads: one enforce pin with the frozen-assets check and
+// one advisory pin.
 const prepareExampleConfig = `lesson_checks_version: 1
 checks:
   frozen-assets:
@@ -289,7 +292,7 @@ pin:
 
 	encoded, err := json.Marshal(p.Checks)
 	require.NoError(t, err)
-	assert.NotContains(t, string(encoded), "enforcement", "milestone P4 fills enforcement")
+	assert.NotContains(t, string(encoded), "enforcement", "without a capability report no check has an enforcement field")
 
 	t.Run("a directory above a check scope gets the pin and its check", func(t *testing.T) {
 		p := mustPrepare(t, st, prepareRequest(root, cfg, "internal"))
@@ -297,7 +300,7 @@ pin:
 		require.Len(t, p.Pins, 1)
 		assert.Equal(t, "parser-todo", p.Pins[0].Rule, "the pin region rule works in both directions")
 		assert.Equal(t, []CheckSummary{summary(4, "check", true, "internal")}, p.Checks,
-			"the checks list uses the pin region rule (P3 fix round, ruling B)")
+			"the checks list uses the pin region rule")
 		assert.Equal(t, []ScopePath{{Path: "internal", State: "directory", Pins: 1, Checks: 1}}, p.Request.Paths)
 	})
 
@@ -318,11 +321,11 @@ pin:
 	})
 }
 
-// TestPrepareListsTheCheckOfEveryListedPin holds ruling B of the P3
-// review: a listed pin with a check mode also gets its check summary,
-// whatever the granularity of the requested path. A directory above the
-// scope of an enforce pin gets the pin by the pin region rule, so the
-// checks list and the check count of the path use that rule too.
+// TestPrepareListsTheCheckOfEveryListedPin proves that a listed pin
+// with a check mode also gets its check summary, whatever the
+// granularity of the requested path. A directory above the scope of an
+// enforce pin gets the pin by the pin region rule, so the checks list
+// and the check count of the path use that rule too.
 func TestPrepareListsTheCheckOfEveryListedPin(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceFile(t, root, "internal/parse/strict.go")
@@ -902,10 +905,9 @@ func TestPrepareRecordsAReturnedEventWithoutReceiverIdentity(t *testing.T) {
 	})
 }
 
-// TestPrepareHandsItsRecordToTheCaller holds ruling A of the P3 review:
-// Prepare appends no firing record itself. The caller writes the record
-// after the rest of its answer succeeded, so a failed answer leaves no
-// returned record.
+// TestPrepareHandsItsRecordToTheCaller proves that Prepare appends no
+// firing record itself. The caller writes the record after the rest of
+// its answer succeeded, so a failed answer leaves no returned record.
 func TestPrepareHandsItsRecordToTheCaller(t *testing.T) {
 	root := workspace(t)
 	st := lessonStore(t, root)
@@ -948,7 +950,12 @@ func TestPrepareHandsItsRecordToTheCaller(t *testing.T) {
 	})
 }
 
-func TestPreparationJSONMatchesTheContractExample(t *testing.T) {
+// TestPreparationJSONMatchesTheReferenceDocument proves the
+// lesson-preparation/1 document of one fixed preparation and its two
+// text forms. The preparation reads prepareExampleConfig as
+// .seamark/lessons.yaml with a fixed time and event ID. So the reference
+// document want can fix the value of every field.
+func TestPreparationJSONMatchesTheReferenceDocument(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceFile(t, root, "generated/a.txt")
 
@@ -960,10 +967,10 @@ func TestPreparationJSONMatchesTheContractExample(t *testing.T) {
 	got, err := json.Marshal(p)
 	require.NoError(t, err)
 
-	// The contract example, with two changes. Describe owns the predicate
-	// wording (milestone P1). The example lists the pins in entry order,
-	// while the type and Behavior 3 say delivery order (Selection.Pins):
-	// the deeper region internal/parse ranks first.
+	// want is the reference document. Describe owns the predicate
+	// wording, so want takes the predicate from Describe and not from a
+	// fixed text. want lists the pins in delivery order, as Selection.Pins
+	// holds them: the deeper region internal/parse ranks before entry 1.
 	predicate, err := lessoncheck.Describe(cfg.Checks["frozen-assets"])
 	require.NoError(t, err)
 

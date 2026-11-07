@@ -21,20 +21,19 @@ const (
 	historyPath     = "/internal/history"
 )
 
-// evaluatingCalls are the lessoncheck functions that read a snapshot or
-// run a checker. Evaluate, Verify, and ReadWorkingTree exist now. The
-// other names are the K4, K5, and K8 functions of milestone P4: the list
-// names them now, so the test still holds when they land.
+// evaluatingCalls are the lessoncheck functions that read a snapshot,
+// project or observe an edit, decide a guard, or run a checker.
 var evaluatingCalls = []string{
 	"Evaluate", "Verify", "ReadWorkingTree", "Revalidate", "ProjectOperation", "ObserveAfter", "DecideGuard",
 }
 
-// TestAdvisorySurfacesNeverEvaluateChecks holds BRIEF rule 15 for the
-// advisory surfaces of this package: the edit hook (delivery.go),
-// preparation (prepare.go), and exploration (explore.go). No file of the
-// package calls a checker, a snapshot reader, or history.RunGit. The
-// walk reads every file of the package, so a new file of an advisory
-// surface is covered without a change here.
+// TestAdvisorySurfacesNeverEvaluateChecks proves that the advisory
+// surfaces of this package evaluate no check: the edit hook
+// (delivery.go), preparation (prepare.go), and exploration
+// (explore.go). No file of the package calls a checker, a snapshot
+// reader, or history.RunGit. The walk reads every file of the package,
+// so a new file of an advisory surface is covered without a change
+// here.
 func TestAdvisorySurfacesNeverEvaluateChecks(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	require.NoError(t, err)

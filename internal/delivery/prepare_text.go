@@ -10,9 +10,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/report"
 )
 
-// This file holds the one text renderer of a preparation (contract L1).
-// The CLI prints the full form. MCP change_set appends the supplement
-// form after its own text, which already lists the lesson text, so the
+// This file holds the one text renderer of a preparation. The CLI
+// prints the full form. MCP change_set appends the supplement form
+// after its own text, which already lists the lesson text, so the
 // supplement never repeats a pin note or a mined symptom.
 
 // The text forms of RenderPreparation. The list is closed.

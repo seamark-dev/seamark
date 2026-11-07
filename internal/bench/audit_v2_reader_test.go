@@ -23,12 +23,11 @@ import (
 // (fingerprint.go, workflow_fingerprint.go). A change here therefore
 // moves no experiment fingerprint, and committed results stay pooled.
 
-// TestMatchingTreatmentFiringsReadsAuditV2 is the M6 test of the P0
-// review (A11, contract L3 "Legacy readers of v2 records"). A trial
-// runs with the recording switch off and installs no exploration. Its
-// log thus holds v2 records of the edit hook and the preparation
-// surfaces only, and the fingerprinted reader must accept them without
-// an error.
+// TestMatchingTreatmentFiringsReadsAuditV2 proves that the bench reader
+// of the firing log accepts audit v2 records. A trial runs with the
+// recording switch off and installs no exploration. Its log thus holds
+// v2 records of the edit hook and the preparation surfaces only, and
+// the fingerprinted reader must accept them without an error.
 func TestMatchingTreatmentFiringsReadsAuditV2(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, writeLessons(dir, schemaSyncLessonYAML))

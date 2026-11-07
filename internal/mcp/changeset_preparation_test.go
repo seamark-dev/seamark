@@ -23,10 +23,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// The tests of the change_set preparation part (plan steps P3.1 and
-// P3.8; contract L1, "change_set extension"). Milestone P3 adds a
+// The tests of the change_set preparation part. Preparation adds a
 // second content part and structuredContent to change_set. The first
-// content part must keep the text of the P2 head byte for byte.
+// content part must keep its earlier text byte for byte.
 
 // prepFixtureLessons pins two lessons on internal/parse/ under a
 // change budget of one. So the lesson block shows one pin and the
@@ -46,7 +45,7 @@ pin:
 const prepFixtureNoPins = "change_budget: 1\n"
 
 // changeSetPrepFixture builds a repository whose change_set text holds
-// every part that milestone P3 must keep: the not-in-index line, the
+// every part that the preparation must keep: the not-in-index line, the
 // co-change lines, the defines, caller, and effect lines, a companion
 // with its functions and its last fix, and the pinned lesson block.
 // Fixed identities and dates keep every commit ID stable, because the
@@ -122,8 +121,8 @@ func changeSetPrepFixture(t *testing.T) string {
 }
 
 // toolParts is a tools/call result with every content part. toolText
-// requires exactly one part, and milestone P3.8 adds a second part to
-// change_set. So the preparation tests decode the parts themselves.
+// requires exactly one part, and change_set has a second part. So the
+// preparation tests decode the parts themselves.
 type toolParts struct {
 	Content []struct {
 		Type string `json:"type"`
@@ -161,9 +160,9 @@ func changeSetCall(t *testing.T, id int, files ...string) string {
 	return `{"jsonrpc":"2.0","id":` + strconv.Itoa(id) + `,"method":"tools/call","params":` + string(params) + `}`
 }
 
-// prepProtocolBranches are the three ways a session starts. Milestone
-// P3.8 adds structuredContent only for 2025-06-18 or later, and the
-// first content part must not depend on that choice. A session without
+// prepProtocolBranches are the three ways a session starts. change_set
+// adds structuredContent only for 2025-06-18 or later, and the first
+// content part must not depend on that choice. A session without
 // initialize negotiates no version at all.
 var prepProtocolBranches = []struct {
 	name       string
@@ -214,16 +213,17 @@ func serveChangeSetCases(t *testing.T, root string, cases []prepTextCase) {
 }
 
 // TestChangeSetPreparationKeepsText freezes content[0] of the MCP
-// change_set tool as the P2 head e263ece returns it (plan step P3.1;
-// contract L1, "change_set extension"). The cases are an indexed file,
-// a new path, a pinned region, a new path in a pinned region, the "./"
-// and absolute spellings, and a configuration without pins. Each case
-// runs under the three protocol branches. Milestone P3.8 adds content[1]
-// and structuredContent, and it must not edit these goldens.
+// change_set tool as it was before the preparation part existed. The
+// cases are an indexed file, a new path, a pinned region, a new path in
+// a pinned region, the "./" and absolute spellings, and a configuration
+// without pins. Each case runs under the three protocol branches.
+// content[1] and structuredContent came later, and they must not change
+// these goldens.
 func TestChangeSetPreparationKeepsText(t *testing.T) {
-	// The goldens come from e263ece. The pinned text holds two blank
-	// lines before the lesson block, because the file block ends with
-	// one and the lesson block starts with one. The bytes stay as they are.
+	// The goldens hold the text from before the preparation part. The
+	// pinned text holds two blank lines before the lesson block, because
+	// the file block ends with one and the lesson block starts with one.
+	// The bytes stay as they are.
 	const (
 		indexedText = `store.go
   usually changes with  load.go                                         3/5 commits, lift 1.7
@@ -382,11 +382,10 @@ pin:
 `
 
 // TestChangeSetPreparationAddsSupplementAndStructuredContent proves the
-// second content part and structuredContent of change_set (plan step
-// P3.8; contract L1, "change_set extension"). The second part is the
-// supplement form of the same preparation and never repeats a pin note.
-// structuredContent follows the negotiated protocol version only. No
-// tool declares an outputSchema.
+// second content part and structuredContent of change_set. The second
+// part is the supplement form of the same preparation and never repeats
+// a pin note. structuredContent follows the negotiated protocol version
+// only. No tool declares an outputSchema.
 func TestChangeSetPreparationAddsSupplementAndStructuredContent(t *testing.T) {
 	root := changeSetPrepFixture(t)
 
@@ -750,8 +749,8 @@ func failPreparation(t *testing.T, err error) *[]delivery.PrepareRequest {
 	return &requests
 }
 
-// TestChangeSetPreparationSurvivesAPrepareFailure proves the failure row
-// of the change_set extension (contract L1) and its fallback record (L3).
+// TestChangeSetPreparationSurvivesAPrepareFailure proves the failure
+// path of the change_set preparation and its fallback record.
 // content[0] keeps its bytes, the second part names the sanitized error,
 // and no structuredContent follows. A call with lessons writes one
 // record with evaluation failed and no pins. A call without lessons
@@ -824,11 +823,11 @@ func TestChangeSetPreparationSurvivesAPrepareFailure(t *testing.T) {
 	assert.Empty(t, rec.ScopeSHA)
 }
 
-// TestChangeSetPreparationRecordsNothingWhenTheTextFails holds ruling A
-// of the P3 review (mutation report, mutant 12). The preparation
-// succeeds with a selection, and then the change_set text fails on a
-// store read. The call returns the error, so no answer reaches the
-// caller, and the firing log gets no returned record for it.
+// TestChangeSetPreparationRecordsNothingWhenTheTextFails proves that a
+// failed change_set text leaves no record. The preparation succeeds
+// with a selection, and then the change_set text fails on a store read.
+// The call returns the error, so no answer reaches the caller, and the
+// firing log gets no returned record for it.
 func TestChangeSetPreparationRecordsNothingWhenTheTextFails(t *testing.T) {
 	root := changeSetPrepFixture(t)
 
@@ -878,11 +877,11 @@ func TestChangeSetPreparationRecordsNothingWhenTheTextFails(t *testing.T) {
 }
 
 // TestChangeSetPreparationRecordsOneEventPerCall proves the audit order
-// of the change_set extension (contract L1): the record of the
-// preparation is the one record of a call with lessons, and the text
-// writes no legacy record (Record false). A repeat is a new event. A
-// call without lessons writes nothing. The record names no receiver,
-// and no call touches a delivery state (A13, AC-26).
+// of the change_set preparation: the record of the preparation is the
+// one record of a call with lessons, and the text writes no legacy
+// record (Record false). A repeat is a new event. A call without
+// lessons writes nothing. The record names no receiver, and no call
+// touches a delivery state.
 func TestChangeSetPreparationRecordsOneEventPerCall(t *testing.T) {
 	root := changeSetPrepFixture(t)
 	abs := filepath.Join(root, "store.go")
@@ -932,7 +931,7 @@ func TestChangeSetPreparationRecordsOneEventPerCall(t *testing.T) {
 	assert.Equal(t, []string{"internal/parse/fresh.go", "store.go", "docs/new.md"}, firings[2].Files)
 
 	// The text and the preparation select one lesson set for paths inside
-	// the workspace, whatever their spelling (contract L1).
+	// the workspace, whatever their spelling.
 	mixed := decodeToolParts(t, resps["4"])
 	p := structuredPreparation(t, mixed)
 	require.Len(t, p.Pins, 1)
@@ -963,9 +962,10 @@ func TestChangeSetPreparationRecordsOneEventPerCall(t *testing.T) {
 	}
 }
 
-// TestChangeSetPreparationNeverInvokes proves AC-1 for change_set: a
-// call with pins and checks, a new path, a path without pins, and a
-// rejected path start no agent, no model CLI, and no network client.
+// TestChangeSetPreparationNeverInvokes proves that change_set calls no
+// model: a call with pins and checks, a new path, a path without pins,
+// and a rejected path start no agent, no model CLI, and no network
+// client.
 func TestChangeSetPreparationNeverInvokes(t *testing.T) {
 	root, sentinel := lessonChecksFixture(t, "warn")
 	outside := filepath.Join(t.TempDir(), "outside.go")
@@ -998,14 +998,14 @@ func TestChangeSetPreparationNeverInvokes(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestChangeSetPreparationGuidance pins the contract L1 guidance
-// obligations to the three surfaces a client reads: the instructions of
-// initialize, the change_set description of tools/list, and the onboard
-// prompt. Each surface says on its own that preparation comes before the
+// TestChangeSetPreparationGuidance pins the preparation guidance to the
+// three surfaces a client reads: the instructions of initialize, the
+// change_set description of tools/list, and the onboard prompt. Each
+// surface says on its own that preparation comes before the
 // construction of any change, one file and a new path included, that a
 // later step constructs the change, and that preparation authorizes no
-// write (AC-25). Each surface is read through the protocol, so a client
-// sees what the test sees.
+// write. Each surface is read through the protocol, so a client sees
+// what the test sees.
 func TestChangeSetPreparationGuidance(t *testing.T) {
 	root := writeFixture(t)
 
