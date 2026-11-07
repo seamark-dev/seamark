@@ -53,6 +53,15 @@ const (
 // path does not exist.
 const sanitizeRepo = "/private/tmp/claude-501/native-20261108-release/claude-timing/repo"
 
+// sanitizeMixedRepo is a scratch repository path with upper-case letters.
+// A recording without NATIVE_RECORD_OUT puts the repository below
+// mktemp -d, which has this layout on macOS. The folder name and the
+// mktemp suffix are made up.
+const sanitizeMixedRepo = "/private/var/folders/q7/w8kz9xm52d1f0000gn/T/tmp.AbC123XyZw/repo"
+
+// The scratch names of sanitizeMixedRepo, as the record step denies them.
+var sanitizeMixedNames = []any{"tmp.AbC123XyZw", "w8kz9xm52d1f0000gn"}
+
 // sanitizeRecord returns the made-up record UUID number i. The values
 // fall as i grows, so a number that follows their sort order fails.
 func sanitizeRecord(i int) string {
@@ -114,8 +123,9 @@ type sanitizeFixture struct {
 	root, record, out, idMap string
 }
 
-// sanitizeReplacer fills the tokens of the fixture text.
-func sanitizeReplacer(root string) *strings.Replacer {
+// sanitizeReplacer fills the tokens of the fixture text. The repo token
+// becomes the given repository path.
+func sanitizeReplacer(root, repo string) *strings.Replacer {
 	pairs := []string{
 		"{S1}", sanitizeSession, "{S2}", sanitizeSession2, "{P1}", sanitizePrompt,
 		"{A1}", sanitizeAgentHook, "{A2}", sanitizeAgentLine, "{A3}", sanitizeAgentFile,
@@ -123,7 +133,7 @@ func sanitizeReplacer(root string) *strings.Replacer {
 		"{M1}", sanitizeMessage, "{M2}", sanitizeMessage2,
 		"{R0}", sanitizeDroppedReq, "{R1}", sanitizeRequest, "{R2}", sanitizeRequest2,
 		"{RUN}", sanitizeRun, "{B1}", sanitizeTask,
-		"{REPO}", sanitizeRepo, "{HOME}", filepath.Join(root, "operator-q7"), "{SLUG}", claudeProjectSlug(sanitizeRepo),
+		"{REPO}", repo, "{HOME}", filepath.Join(root, "operator-q7"), "{SLUG}", claudeProjectSlug(repo),
 	}
 
 	for i := 1; i <= sanitizeRecords; i++ {
@@ -153,23 +163,31 @@ func writeLines(t *testing.T, file string, lines ...string) {
 	require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")+"\n"), 0o600))
 }
 
-// newSanitizeFixture writes the synthetic Claude Code recording. The
-// home directory has a name of its own, because the sanitizer denies the
-// home name as a user name.
+// newSanitizeFixture writes the synthetic Claude Code recording of
+// sanitizeRepo.
 func newSanitizeFixture(t *testing.T) sanitizeFixture {
 	t.Helper()
 
+	return newSanitizeFixtureAt(t, sanitizeRepo)
+}
+
+// newSanitizeFixtureAt writes the synthetic Claude Code recording of the
+// given repository path. The home directory has a name of its own,
+// because the sanitizer denies the home name as a user name.
+func newSanitizeFixtureAt(t *testing.T, repo string) sanitizeFixture {
+	t.Helper()
+
 	root := t.TempDir()
-	fill := sanitizeReplacer(root).Replace
+	fill := sanitizeReplacer(root, repo).Replace
 	home := filepath.Join(root, "operator-q7")
-	project := filepath.Join(home, ".claude", "projects", claudeProjectSlug(sanitizeRepo))
+	project := filepath.Join(home, ".claude", "projects", claudeProjectSlug(repo))
 	observed := filepath.Join(root, "observed")
 
 	for i, h := range sanitizeHooks {
 		name := fmt.Sprintf("p%d", i+1)
 		writeLines(t, filepath.Join(observed, name+".json"), fill(h.payload))
 
-		meta := fmt.Sprintf(`{"event":%q,"start_ns":%d,"process_cwd":%q}`, h.event, 1000+i, sanitizeRepo)
+		meta := fmt.Sprintf(`{"event":%q,"start_ns":%d,"process_cwd":%q}`, h.event, 1000+i, repo)
 		writeLines(t, filepath.Join(observed, name+".meta.json"), meta)
 	}
 
@@ -208,8 +226,8 @@ func newSanitizeFixture(t *testing.T) sanitizeFixture {
 		`"attachment":{"type":"hook_success","toolUseID":"{T1}","content":"seamark post-edit lesson checks after this Write call"}}`))
 
 	record := map[string]any{
-		"client": ClaudeID, "client_version": "2.1.314", "repo": sanitizeRepo, "home": home,
-		"seamark": filepath.Join(root, "bin", "seamark"), "instrumentation": sanitizeRepo + "/.native-instrumentation",
+		"client": ClaudeID, "client_version": "2.1.314", "repo": repo, "home": home,
+		"seamark": filepath.Join(root, "bin", "seamark"), "instrumentation": repo + "/.native-instrumentation",
 		"observed": observed, "runs": []int{1000}, "transcripts": transcripts,
 		"extras": map[string]string{"guard-context.jsonl": extra},
 	}
@@ -512,7 +530,7 @@ func TestNativeRecordSanitizeRefusesAnUnmappedID(t *testing.T) {
 	t.Run("a UUID inside a longer string", func(t *testing.T) {
 		f := newSanitizeFixture(t)
 		payload := filepath.Join(f.root, "observed", "p1.json")
-		writeLines(t, payload, sanitizeReplacer(f.root).Replace(
+		writeLines(t, payload, sanitizeReplacer(f.root, sanitizeRepo).Replace(
 			`{"session_id":"{S1}","prompt_id":"{P1}","hook_event_name":"UserPromptSubmit","prompt":"see run `+unmapped+` again"}`))
 
 		got, err := f.sanitize(t, f.out)
@@ -603,7 +621,7 @@ func TestNativeRecordSanitizeRefusesAnUnmappedID(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newSanitizeFixture(t)
 			payload := strings.ReplaceAll(tc.payload, "{V}", tc.value)
-			writeLines(t, filepath.Join(f.root, "observed", tc.file+".json"), sanitizeReplacer(f.root).Replace(payload))
+			writeLines(t, filepath.Join(f.root, "observed", tc.file+".json"), sanitizeReplacer(f.root, sanitizeRepo).Replace(payload))
 
 			got, err := f.sanitize(t, f.out)
 			require.Error(t, err)
@@ -789,19 +807,23 @@ func newScratchFixture(t *testing.T, deny []any, summary func(home string) strin
 
 // addDenyPayload adds one hook payload after the payloads of the sanitizer
 // fixture, so the copy holds it as hooks/006-<event>.json. It also gives
-// the record a deny list.
+// the record a deny list. The process directory of the payload is the
+// repository path of the record, as in the other payloads.
 func addDenyPayload(t *testing.T, f sanitizeFixture, deny []any, payload map[string]any) sanitizeFixture {
 	t.Helper()
 
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
+	record := readJSON(t, f.record)
+	repo, _ := record["repo"].(string)
+	require.NotEmpty(t, repo)
+
 	observed := filepath.Join(f.root, "observed")
 	writeLines(t, filepath.Join(observed, "p6.json"), string(data))
 	writeLines(t, filepath.Join(observed, "p6.meta.json"),
-		fmt.Sprintf(`{"event":%q,"start_ns":1005,"process_cwd":%q}`, payload["hook_event_name"], sanitizeRepo))
+		fmt.Sprintf(`{"event":%q,"start_ns":1005,"process_cwd":%q}`, payload["hook_event_name"], repo))
 
-	record := readJSON(t, f.record)
 	record["deny"] = deny
 
 	return writeSanitizeRecord(t, f.root, record)
@@ -885,8 +907,10 @@ func TestNativeRecordSanitizeReplacesTheScratchNames(t *testing.T) {
 // /private prefix, in another case, or as the project directory name of
 // such a form refuses the copy. The task-root rule and the scratch rule
 // must not change that form first, because a changed machine path passes
-// the deny check. A scratch name alone is no repository path, so it still
-// becomes the placeholder.
+// the deny check. A recorded path with upper-case letters also refuses
+// the copy, because the check compares case-folded forms with case-folded
+// text. A scratch name alone is no repository path, so it still becomes
+// the placeholder.
 func TestNativeRecordSanitizeRefusesAnUnmatchedRepoPath(t *testing.T) {
 	requireTools(t, "python3")
 
@@ -921,6 +945,23 @@ func TestNativeRecordSanitizeRefusesAnUnmatchedRepoPath(t *testing.T) {
 			assert.NotContains(t, strings.ToLower(got), "claude-timing", "the message names no form of the path")
 		})
 	}
+
+	// The fixture of sanitizeRepo has no upper-case letter in its path. So
+	// only this case shows that the forms are case-folded like the text.
+	// Without the folding, the scratch rule replaces the mktemp suffix, and
+	// the changed path passes the check.
+	t.Run("a refusal for a recorded path with upper-case letters", func(t *testing.T) {
+		mixedBare := strings.TrimPrefix(sanitizeMixedRepo, "/private")
+		f := addDenyPayload(t, newSanitizeFixtureAt(t, sanitizeMixedRepo), sanitizeMixedNames, map[string]any{
+			"session_id": sanitizeSession, "hook_event_name": "PreToolUse", "tool_name": "Write",
+			"tool_input": map[string]any{"file_path": mixedBare + "/notes/b.txt", "content": "b"},
+		})
+
+		got, err := f.sanitize(t, f.out)
+		require.Error(t, err)
+		assert.Contains(t, got, "hooks/006-PreToolUse.json: holds a form of the repository path that no path pair replaces")
+		assert.NotContains(t, strings.ToLower(got), "abc123xyzw", "the message names no form of the path")
+	})
 
 	t.Run("a placeholder for a scratch name alone in tool output", func(t *testing.T) {
 		f := addDenyPayload(t, newSanitizeFixture(t), sanitizeScratchNames, map[string]any{
