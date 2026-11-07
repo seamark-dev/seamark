@@ -10,6 +10,19 @@ import (
 	"github.com/seamark-dev/seamark/internal/render"
 )
 
+// textUnits are the rows of the unit table that the text report prints.
+// The text prints counts only in these units. The other rows describe
+// fixed fields, which the text leaves out, so the text leaves out their
+// rows too. The JSON document keeps every row.
+var textUnits = map[string]bool{
+	"records":            true,
+	"events":             true,
+	"delivered sessions": true,
+	"check operations":   true,
+	"pin evaluations":    true,
+	"guard attempts":     true,
+}
+
 // RenderText prints the overview or the expansion of the selected
 // identity, one version at a time. It presents existing readings and
 // suggestions. It never infers delivery, timing, or efficacy from counts.
@@ -38,7 +51,9 @@ func RenderText(w io.Writer, report Report) error {
 
 	p.line("Units:")
 	for _, key := range slices.Sorted(maps.Keys(report.Units)) {
-		p.line("  %s: %s", key, report.Units[key])
+		if textUnits[key] {
+			p.line("  %s: %s", key, report.Units[key])
+		}
 	}
 
 	p.line("Current pins:")

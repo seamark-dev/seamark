@@ -61,6 +61,19 @@ func TestRenderTextOverview(t *testing.T) {
 
 	assert.Equal(t, 2, r.Pins[0].Observation.Incomplete, "the JSON keeps the observation that the text leaves out")
 
+	// The unit block lists only the units that the text counts in. The
+	// JSON keeps every row of the unit table.
+	for key := range textUnits {
+		assert.Contains(t, out, "\n  "+key+": "+r.Units[key]+"\n")
+	}
+
+	for _, key := range []string{"sessions", "occurrences", "incidents", "actions", "feedback items"} {
+		assert.NotContains(t, out, "\n  "+key+": ", "the text leaves out the unit of a fixed field")
+		assert.Contains(t, r.Units, key, "the JSON keeps the unit")
+	}
+
+	assert.Len(t, r.Units, len(textUnits)+5)
+
 	assert.Equal(t, wire, encode(t, r), "rendering must never change the JSON")
 	assert.Equal(t, out, rendered(t, mustBuild(t, in, "")), "the same inputs give the same text")
 }
