@@ -1,15 +1,18 @@
 package integration
 
-// Tests of the agent prompts of scripts/native-record.sh. They read the
-// script text only, so they need no model and no client CLI. Codex in
-// code mode lists the agent tools with the multi_agent_v1__ prefix. A
-// prompt with the short name makes the model call a tool that does not
-// exist, and no worker starts. These tests keep every prompt on the full
-// names, because a failed spawn costs a paid recording run. Each Claude
-// Code child prompt sets the launch shape of its Agent call, because the
-// replay asserts that shape.
+// Tests of the agent prompts and the case order of
+// scripts/native-record.sh. They read the script text, or they run its
+// functions with a stand-in for the client, so they need no model and no
+// client CLI. Codex in code mode lists the agent tools with the
+// multi_agent_v1__ prefix. A prompt with the short name makes the model
+// call a tool that does not exist, and no worker starts. These tests keep
+// every prompt on the full names, because a failed spawn costs a paid
+// recording run. Each Claude Code child prompt sets the launch shape of
+// its Agent call, because the replay asserts that shape.
 
 import (
+	"os"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -160,4 +163,73 @@ func TestNativeRecordClaudeChildPromptsSetTheLaunchShape(t *testing.T) {
 			assert.Equal(t, claudeChildPrompts[i].shape, x.shape, "the table and the prompt of %s set one shape", x.name)
 		}
 	}
+}
+
+// runClaudeTiming runs record_claude_timing of the script with a stand-in
+// timing_claude that prints the case, the session mode, and the first
+// prompt line of each run. So the test starts no client. It returns the
+// output and the exit error.
+func runClaudeTiming(t *testing.T, env ...string) (string, error) {
+	t.Helper()
+
+	script := nativeRecordScript(t)
+
+	var defs strings.Builder
+	defs.WriteString("OK=0\nFAILED=0\nBLOCKED=0\nSUMMARIZED=\nMODE=record\nCLIENT=claude\n")
+	defs.WriteString(scriptLine(t, script, "blocked()"))
+	defs.WriteString(scriptFunction(t, script, "summary"))
+	defs.WriteString("timing_claude() { printf 'run %s %s %s\\n' \"$1\" \"$2\" \"$(printf '%s\\n' \"$3\" | head -1)\"; }\n")
+	defs.WriteString(scriptFunction(t, script, "record_claude_timing"))
+
+	cmd := exec.Command("sh", "-eu", "-c", defs.String()+"record_claude_timing\n")
+	cmd.Env = append(os.Environ(), "BIN=/opt/seamark/bin/seamark", "DISABLE_COMPACT=")
+	cmd.Env = append(cmd.Env, env...)
+
+	got, err := cmd.CombinedOutput()
+
+	return string(got), err
+}
+
+// TestNativeRecordClaudeTimingCompactsAfterTheEdit proves the order of the
+// Claude Code timing cases. compact-reset resumes the session right after
+// new-model-step, so the compaction resets a context that holds both kinds
+// of advice. Its prompt is /compact with the instruction that the replay
+// expects in PreCompact. The earlier cases keep their order.
+func TestNativeRecordClaudeTimingCompactsAfterTheEdit(t *testing.T) {
+	requireTools(t, "sh", "head")
+
+	got, err := runClaudeTiming(t)
+	require.NoError(t, err, got)
+
+	var runs []string
+
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		fields := strings.Fields(line)
+		require.GreaterOrEqual(t, len(fields), 3, line)
+		runs = append(runs, fields[1]+" "+fields[2])
+	}
+
+	assert.Equal(t, []string{
+		timingPriorResult + " new", timingNewModelStep + " resume", timingCompactReset + " resume",
+		timingReadThenEdit + " new", timingSameCall + " new", timingBatchAndProgram + " new",
+		timingFailedRead + " new", timingSubagentRead + " new",
+	}, runs)
+
+	assert.Contains(t, got, "run "+timingCompactReset+" resume /compact "+timingCompactInstructions+"\n")
+}
+
+// TestNativeRecordClaudeTimingRefusesDisabledCompaction proves that the
+// Claude Code timing scenario stops before its first run when
+// DISABLE_COMPACT is set. Claude Code then refuses /compact, so the paid
+// runs before the compaction case would give no reset evidence.
+func TestNativeRecordClaudeTimingRefusesDisabledCompaction(t *testing.T) {
+	requireTools(t, "sh", "head")
+
+	got, err := runClaudeTiming(t, "DISABLE_COMPACT=1")
+
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit, got)
+	assert.Equal(t, 3, exit.ExitCode(), "a missing precondition is blocked")
+	assert.Contains(t, got, "DISABLE_COMPACT")
+	assert.NotContains(t, got, "run ", "no client starts")
 }

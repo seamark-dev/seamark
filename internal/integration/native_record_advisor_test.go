@@ -378,11 +378,10 @@ func TestNativeRecordClaudeRunsGoThroughClaudePrint(t *testing.T) {
 		"the timing and guard scenarios call claude_print")
 }
 
-// TestNativeRecordListsAdvisorState runs the record.json step of
-// the script. It proves that advisor.jsonl becomes an extra of the
-// sanitized copy when a Claude run wrote it, and only then.
-func TestNativeRecordListsAdvisorState(t *testing.T) {
-	requireTools(t, "python3")
+// recordStep returns the Python program of the record.json step of the
+// script, the heredoc that collects the transcripts and the extras.
+func recordStep(t *testing.T) string {
+	t.Helper()
 
 	script := nativeRecordScript(t)
 
@@ -395,7 +394,16 @@ func TestNativeRecordListsAdvisorState(t *testing.T) {
 	end := strings.Index(script[start:], "\nPY\n")
 	require.GreaterOrEqual(t, end, 0)
 
-	step := script[heredoc+len("<<'PY'\n") : start+end+1]
+	return script[heredoc+len("<<'PY'\n") : start+end+1]
+}
+
+// TestNativeRecordListsAdvisorState runs the record.json step of
+// the script. It proves that advisor.jsonl becomes an extra of the
+// sanitized copy when a Claude run wrote it, and only then.
+func TestNativeRecordListsAdvisorState(t *testing.T) {
+	requireTools(t, "python3")
+
+	step := recordStep(t)
 
 	for _, written := range []bool{true, false} {
 		root := t.TempDir()

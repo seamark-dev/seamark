@@ -314,6 +314,17 @@ record = {
 if os.path.isfile(os.path.join(out, "advisor.jsonl")):
     record["extras"]["advisor.jsonl"] = os.path.join(out, "advisor.jsonl")
 
+# A compaction summary can name a shortened path of the scratch
+# repository, which the path pairs of the sanitizer do not match. So the
+# distinctive names of the scratch directories go on the deny list, and
+# such a path refuses the copy. A distinctive name has 8 or more
+# characters and a digit or a hyphen. Thus a common word such as projects
+# never refuses a copy, and a name of the home path stays out too.
+if client == "claude":
+    own = set(home.split(os.sep))
+    names = (set(os.path.dirname(repo).split(os.sep)) | set(out.split(os.sep))) - own
+    record["deny"] = sorted(n for n in names if len(n) >= 8 and any(c.isdigit() or c == "-" for c in n))
+
 with open(os.path.join(out, "record.json"), "w") as f:
     json.dump(record, f, indent=1)
 PY
@@ -698,11 +709,29 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
     fi
 }
 
-# record_claude_timing runs the seven Claude Code timing cases. Each case
-# starts a new session, except new-model-step: it resumes the session of
-# prior-result, so its edit comes one turn after the read. The reader
-# subagent has only the Read tool.
+# record_claude_timing runs the eight Claude Code timing cases. Each case
+# starts a new session, except new-model-step and compact-reset.
+# new-model-step resumes the session of prior-result, so its edit comes
+# one turn after the read. compact-reset resumes the session of
+# new-model-step and compacts it. That context then holds an exploration
+# injection and an edit injection, so the reset record shows that both
+# kinds of delivery state start a new generation. The reader subagent has
+# only the Read tool.
+#
+# The /compact instruction keeps the summary short and free of paths,
+# because the summary goes into hook payloads and transcripts. Claude Code
+# builds the PreCompact payload from the typed text, and the observer
+# prints nothing on PreCompact, so the summary instruction stays equal to
+# that text.
 record_claude_timing() {
+    # Claude Code turns /compact off when DISABLE_COMPACT is set. The
+    # compaction case would then give no reset record, and the runs before
+    # it would cost money for nothing. So the scenario stops before run 1.
+    if [ -n "${DISABLE_COMPACT:-}" ]; then
+        blocked "DISABLE_COMPACT is set, so /compact cannot run; unset it to record the Claude timing scenario"
+        summary
+    fi
+
     model=${NATIVE_RECORD_CLAUDE_MODEL:-haiku}
     agents='{"reader":{"description":"Reads the one file it is given and reports its first line.","prompt":"Use the Read tool exactly once on the file that you are given, and reply with its first line only.","model":"'"$model"'","tools":["Read"]}}'
     steps='Do exactly these steps in order, and do not add steps.'
@@ -715,6 +744,8 @@ Then reply with the single word: done"
 1. Before any tool call, write one line: the code word of the seamark review lesson that you got for timing/prior.txt, or the word none.
 2. Use the Edit tool to replace the line alpha with the line beta in timing/prior.txt.
 Then reply with the single word: done"
+
+    timing_claude compact-reset resume "/compact Keep the summary to one short sentence and name no file path."
 
     timing_claude read-then-edit new "$steps
 1. Use the Read tool to read the file timing/intra.txt.

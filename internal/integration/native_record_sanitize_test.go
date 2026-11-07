@@ -592,3 +592,49 @@ func TestNativeRecordSanitizeKeepsCodexIDs(t *testing.T) {
 		"sessions/2026/11/07/rollout-2026-11-07T10-00-00-" + thread + ".jsonl",
 	}, manifest["transcripts"], "the transcripts keep the order of record.json")
 }
+
+// TestNativeRecordDeniesTheScratchNames runs the record.json step of the
+// script. A Claude Code record denies the distinctive names of the
+// scratch directories, so a shortened scratch path in a compaction
+// summary refuses the copy. A common word and a name of the home path stay
+// out. A Codex record keeps its old form without a deny list.
+func TestNativeRecordDeniesTheScratchNames(t *testing.T) {
+	requireTools(t, "python3")
+
+	step := recordStep(t)
+
+	for _, client := range []string{ClaudeID, CodexID} {
+		t.Run(client, func(t *testing.T) {
+			root := t.TempDir()
+			home := filepath.Join(root, "operator-q7")
+			out := filepath.Join(root, "projects", "native-20261108-release", "claude-timing")
+			observed := filepath.Join(root, "observed")
+
+			for _, dir := range []string{home, out, observed} {
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+			}
+
+			require.NoError(t, os.WriteFile(filepath.Join(out, "runs.txt"), []byte("100\n"), 0o600))
+
+			cmd := exec.Command("python3", "-I", "-", client, "2.1.314 (Claude Code)", filepath.Join(out, "repo"),
+				filepath.Join(root, "seamark"), filepath.Join(root, "instr"), observed, out, "")
+			cmd.Stdin = strings.NewReader(step)
+			cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CONFIG_DIR="+filepath.Join(home, ".claude"),
+				"CODEX_HOME="+filepath.Join(home, ".codex"))
+
+			got, err := cmd.CombinedOutput()
+			require.NoError(t, err, string(got))
+
+			record := readJSON(t, filepath.Join(out, "record.json"))
+
+			if client == CodexID {
+				assert.NotContains(t, record, "deny")
+
+				return
+			}
+
+			assert.Equal(t, []any{"claude-timing", "native-20261108-release"}, record["deny"],
+				"the scratch names with a digit or a hyphen; not projects, and no part of the home path")
+		})
+	}
+}
