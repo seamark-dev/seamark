@@ -323,8 +323,16 @@ PY
         guard)  guard_extras ;;
     esac
 
-    if python3 -I "$SCRIPTS/native-record-sanitize.py" "$OUT/record.json" "$OUT/sanitized"; then
+    # The ID pass of a Claude Code recording writes its map from real to
+    # synthetic IDs beside the raw recording. The map holds the real IDs,
+    # so it stays outside the sanitized copy. The reviewer reads it to
+    # check that the pass changed only IDs.
+    id_map=
+    [ "$CLIENT" != claude ] || id_map=$OUT/id-map.json
+
+    if python3 -I "$SCRIPTS/native-record-sanitize.py" ${id_map:+--id-map "$id_map"} "$OUT/record.json" "$OUT/sanitized"; then
         ok "sanitized copy in $OUT/sanitized; compare it with $DATA before you replace the evidence"
+        [ -z "$id_map" ] || note "the ID map is $id_map; it holds the real IDs, so it never goes into testdata"
     else
         fail "the sanitizer refused the recording; nothing in $OUT/sanitized is safe to commit"
     fi
