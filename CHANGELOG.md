@@ -26,10 +26,10 @@ model-boundary delivery.
   is still incomplete and is required before release.
 - **Lesson delivery reading.** `lessons --delivery [--pin <ref>]`
   (`delivery/1` JSON) reads the delivery records of each pin version
-  from the audit logs, with separate check and guard counts. This build
-  reads no capture archive: the text leaves out the sections that need
-  one, and the JSON keeps those fields with fixed values. Current native
-  evidence keeps prevention at zero.
+  from the audit logs, with separate check and guard counts. The text
+  shows what the audit logs give. The JSON keeps the full `delivery/1`
+  field set, and the fields without a source in this build hold fixed
+  values. Current native evidence keeps prevention at zero.
 - **Selection reading.** `lessons --delivery` shows requested and
   effective budgets and splits held-back records by surface and cause. A
   hook record now reads `over-total`, not `over-pin-cap`, when
@@ -128,10 +128,10 @@ model-boundary delivery.
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
 An older binary then refuses the upgraded database and a bundle of
-version 4 — the versioning contract. That covers a build of schema 7 and
-state version 3 as well as v0.8.0, which has schema 6 and state version
-2. The installed hooks move with the binary. A new binary still reads
-every older bundle, and a row of such a bundle records no scope choice.
+version 4 — the versioning contract. That covers v0.8.0, which has
+schema 6 and state version 2. The installed hooks move with the binary.
+A new binary still reads every older bundle, and a row of such a bundle
+records no scope choice.
 An export of the new binary is no way back, so make a backup before you
 replace the binary: a copy of `.seamark/index.db` with any `-wal` and
 `-shm` file, or `seamark state export` run by the older binary. Decisions
