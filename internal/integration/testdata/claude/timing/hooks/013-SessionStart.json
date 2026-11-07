@@ -1,0 +1,11 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "SessionStart",
+  "source": "resume",
+  "seconds_since_last_response": 1,
+  "context_tokens": 19242,
+  "prompt_cache_likely_expired": false,
+  "estimated_cache_write_usd": 0.0038
+}

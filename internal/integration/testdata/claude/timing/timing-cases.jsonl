@@ -1,0 +1,9 @@
+{"run":1,"case":"prior-result"}
+{"run":2,"case":"new-model-step"}
+{"run":3,"case":"compact-reset"}
+{"run":4,"case":"after-compact"}
+{"run":5,"case":"read-then-edit"}
+{"run":6,"case":"same-call"}
+{"run":7,"case":"batch-and-program"}
+{"run":8,"case":"failed-read"}
+{"run":9,"case":"subagent-read"}

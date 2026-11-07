@@ -1,0 +1,78 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000015",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000015.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000015",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Edit notes/multi.txt with MultiEdit",
+    "prompt": "Read the file notes/multi.txt, then use the MultiEdit tool exactly once on notes/multi.txt with two edits, in this order: (1) replace the line `alpha` with the line `beta`; (2) replace the line `gamma` with the line `GATE5-MARKER`. Make no other changes. After the edit, reply with the single word that you reply with, and nothing else.",
+    "subagent_type": "editor",
+    "run_in_background": false
+  },
+  "tool_response": {
+    "status": "completed",
+    "prompt": "Read the file notes/multi.txt, then use the MultiEdit tool exactly once on notes/multi.txt with two edits, in this order: (1) replace the line `alpha` with the line `beta`; (2) replace the line `gamma` with the line `GATE5-MARKER`. Make no other changes. After the edit, reply with the single word that you reply with, and nothing else.",
+    "agentId": "a0000000000000003",
+    "agentType": "editor",
+    "toolsUsed": [
+      "Read"
+    ],
+    "harnessNoteCount": 1,
+    "harnessTailCount": 0,
+    "harnessSectionHash": "b89ea0e3d77b4b35",
+    "content": [
+      {
+        "type": "text",
+        "text": "<tools-used-before-summary>Read</tools-used-before-summary>\n"
+      },
+      {
+        "type": "text",
+        "text": "absent"
+      }
+    ],
+    "resolvedModel": "claude-haiku-5-5",
+    "totalDurationMs": 3068,
+    "totalTokens": 3024,
+    "totalToolUseCount": 1,
+    "usage": {
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 474,
+      "cache_read_input_tokens": 2544,
+      "output_tokens": 4,
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 474
+      },
+      "inference_geo": "global",
+      "iterations": [],
+      "speed": "standard",
+      "fallback_credit": null
+    },
+    "toolStats": {
+      "readCount": 1,
+      "searchCount": 0,
+      "bashCount": 0,
+      "editFileCount": 0,
+      "linesAdded": 0,
+      "linesRemoved": 0,
+      "otherToolCount": 0
+    },
+    "canContinueAgent": true
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000019",
+  "duration_ms": 3068
+}

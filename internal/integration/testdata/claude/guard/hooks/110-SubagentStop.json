@@ -1,0 +1,26 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000016",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000016.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000016",
+  "permission_mode": "default",
+  "agent_id": "a0000000000000004",
+  "agent_type": "reporter",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000016/subagents/agent-a0000000000000004.jsonl",
+  "last_assistant_message": "frozen-sentinel",
+  "background_tasks": [
+    {
+      "id": "a0000000000000004",
+      "type": "subagent",
+      "status": "running",
+      "description": "Create sentinel child-checked file",
+      "agent_type": "reporter"
+    }
+  ],
+  "session_crons": []
+}

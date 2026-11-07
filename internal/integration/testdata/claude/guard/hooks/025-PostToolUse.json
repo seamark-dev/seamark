@@ -1,0 +1,78 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000004",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000004",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Create sentinel/child.txt",
+    "prompt": "Create the new file sentinel/child.txt with exactly one line of content: child",
+    "subagent_type": "writer",
+    "run_in_background": false
+  },
+  "tool_response": {
+    "status": "completed",
+    "prompt": "Create the new file sentinel/child.txt with exactly one line of content: child",
+    "agentId": "a0000000000000001",
+    "agentType": "writer",
+    "toolsUsed": [
+      "Write"
+    ],
+    "harnessNoteCount": 1,
+    "harnessTailCount": 0,
+    "harnessSectionHash": "a6546b334528e689",
+    "content": [
+      {
+        "type": "text",
+        "text": "<tools-used-before-summary>Write</tools-used-before-summary>\n"
+      },
+      {
+        "type": "text",
+        "text": "blocked"
+      }
+    ],
+    "resolvedModel": "claude-haiku-5-5",
+    "totalDurationMs": 2916,
+    "totalTokens": 2133,
+    "totalToolUseCount": 1,
+    "usage": {
+      "output_tokens_details": {
+        "thinking_tokens": 86
+      },
+      "input_tokens": 2,
+      "cache_creation_input_tokens": 456,
+      "cache_read_input_tokens": 1584,
+      "output_tokens": 91,
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 456
+      },
+      "inference_geo": "global",
+      "iterations": [],
+      "speed": "standard",
+      "fallback_credit": null
+    },
+    "toolStats": {
+      "readCount": 0,
+      "searchCount": 0,
+      "bashCount": 0,
+      "editFileCount": 1,
+      "linesAdded": 2,
+      "linesRemoved": 0,
+      "otherToolCount": 0
+    },
+    "canContinueAgent": true
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000005",
+  "duration_ms": 2917
+}

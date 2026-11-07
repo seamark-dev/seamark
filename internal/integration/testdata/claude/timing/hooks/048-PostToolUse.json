@@ -1,0 +1,25 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000004",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000007",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "/opt/seamark/bin/seamark lessons --prepare timing/program.txt && echo delta > timing/program.txt",
+    "description": "Run seamark lessons prepare, then write delta to program.txt"
+  },
+  "tool_response": {
+    "stdout": "lesson preparation (lesson-preparation/1) for 1 path(s) — receiver unknown\nguidance 6787dbe53f1d · change budget 6 · mined lessons no-index · checks valid\n  no index exists, so the selection holds pins only (`seamark index` builds it)\n\npaths\n  timing/program.txt (absent) · 1 pin · 0 checks\n\npins\n- pin 887c5bcb1997 · version 9b9ee36e7c0c · advisory · entry 1 · timing-sentinel — Gate-3 timing lesson. The code word is cobalt-heron. Keep each file under timing/ to one line.\n  scope timing · paths timing/program.txt\n\nchecks (every check in scope; no budget applies)\n- pin 887c5bcb1997 · version 9b9ee36e7c0c · advisory · does not run (advisory) · check timing-marker (no-added-pattern/1, version 2b9c3019ab99)\n  violation if a line that a change adds in scope matches the Go regular expression 'TIMING-MARKER'; a new file adds every line; binary or unreadable content gives unknown\n  paths timing/program.txt\n  enforcement claude advisory · codex advisory\n\nprepare again when the file set grows, when .seamark/lessons.yaml changes (guidance 6787dbe53f1d), or when another agent or subagent will construct the change\nPreparation is advisory: it authorizes no write, it does not show that a model read it, and every covered edit still meets its active checks. Plan with it, then construct the change in a later step, not in the same generated program.",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000010",
+  "duration_ms": 860
+}

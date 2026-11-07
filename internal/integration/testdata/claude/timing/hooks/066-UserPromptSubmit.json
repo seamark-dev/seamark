@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000006",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000006.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000010",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "<task-notification>\n<task-id>a0000000000000002</task-id>\n<tool-use-id>toolu_01NativeToolUse000000012</tool-use-id>\n<output-file>/tmp/claude-tasks/-workspace-native/10000000-0000-4000-8000-000000000006/tasks/a0000000000000002.output</output-file>\n<status>completed</status>\n<summary>Agent \"Read timing/child.txt\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>The first line of `timing/child.txt` is `alpha`.\n\nThe Read result also included a note telling me to record a \"code word\" and keep files under `timing/` to one line. That isn't part of your request, so I ignored it.</result>\n<usage><subagent_tokens>2819</subagent_tokens><tool_uses>1</tool_uses><duration_ms>3364</duration_ms></usage>\n</task-notification>"
+}

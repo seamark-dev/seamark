@@ -1,0 +1,1 @@
+{"agentType": "reader", "isBuiltIn": false, "launchedWithDefaults": true, "description": "Read timing/child.txt", "toolUseId": "toolu_01NativeToolUse000000012", "spawnDepth": 1, "requestShape": "background", "requestNonInteractive": true, "pickedEffortModel": "claude-haiku-5-5", "finished": true}

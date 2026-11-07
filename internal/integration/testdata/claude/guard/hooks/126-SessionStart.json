@@ -1,0 +1,7 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000019",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000019.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

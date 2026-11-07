@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000006",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000006.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000006",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use the Edit tool once on the file free/n1.txt with an empty old_string and the new_string: created\nThe file does not exist yet. Do not read it first, and do not use the Write tool.\nIf a tool call is blocked or fails, do not retry it and do not try another tool or another way.\nThen reply with the single word: done, or with the single word: blocked when a tool call was blocked or failed."
+}
