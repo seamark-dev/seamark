@@ -533,9 +533,9 @@ func (a *analysis) rewriteLines(p *planned) error {
 //
 // inserts holds the places for a new key, from the key extents as in the
 // planner. A new key goes after the note key, else after the last region
-// key, else after the rule key (contract K6). A new check may also go
-// after the mode key. This rule restates checkKeyAnchor, so a wrong place
-// fails here, although check 4 compares values without order.
+// key, else after the rule key. A new check may also go after the mode
+// key. This rule restates checkKeyAnchor, so a wrong place fails here,
+// although check 4 compares values without order.
 func (a *analysis) checkKeyLines(p *planned) (lines, inserts map[int]bool) {
 	ch, m := p.change, mapping(p.item.node)
 	lines, inserts = map[int]bool{}, map[int]bool{}

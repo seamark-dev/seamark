@@ -1,7 +1,7 @@
 package settings
 
-// Tests of the lesson-check keys in the settings editor of lessons.yaml
-// (contract K1, writer rule and writer table).
+// Tests of the lesson-check keys in the settings editor of
+// lessons.yaml.
 
 import (
 	"testing"
@@ -14,7 +14,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// invalidChecksLessons is the invalid config of contract K1 with one
+// invalidChecksLessons is an invalid check configuration with one
 // delivery key. A hand edit wrote it, and two errors are in it.
 const invalidChecksLessons = `threshold: 3
 lesson_checks_version: 1
@@ -33,7 +33,8 @@ pin:
     check: no-todos
 `
 
-// validChecksLessons is the spec example with one delivery key.
+// validChecksLessons is the example check configuration with one
+// delivery key.
 const validChecksLessons = `threshold: 3
 lesson_checks_version: 1
 checks:
@@ -54,9 +55,9 @@ pin:
 // runs the strict check tier on its candidate. It writes lessons.yaml
 // without pinfile.Prepare, so verifyLessons refuses with the reason of
 // pinfile.CandidateRefusal. The settings edit does not touch the check
-// keys, so the error comes from an earlier hand edit (§5 row 5). The
-// refusal comes from the plan, so no save can write, and the file stays
-// byte for byte. A valid config with checks still plans.
+// keys, so the error comes from an earlier hand edit. The refusal comes
+// from the plan, so no save can write, and the file stays byte for
+// byte. A valid config with checks still plans.
 func TestSettingsSaveRefusesInvalidChecks(t *testing.T) {
 	refusals := []struct {
 		name, body string
@@ -106,11 +107,11 @@ func TestSettingsSaveRefusesInvalidChecks(t *testing.T) {
 	})
 }
 
-// TestSettingsSaveKeepsChecks proves the K1 writer row "Settings
-// editor". A delivery or mute edit changes only its own top-level key.
-// The lesson_checks_version key, the checks map, and the pin text stay
-// byte for byte, so every pin keeps its mode and its check. The saved
-// file passes the strict check tier.
+// TestSettingsSaveKeepsChecks covers the settings editor. A delivery or
+// mute edit changes only its own top-level key. The
+// lesson_checks_version key, the checks map, and the pin text stay byte
+// for byte, so every pin keeps its mode and its check. The saved file
+// passes the strict check tier.
 func TestSettingsSaveKeepsChecks(t *testing.T) {
 	cases := []struct {
 		name  string

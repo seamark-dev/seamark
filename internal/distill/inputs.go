@@ -62,8 +62,7 @@ func NormalizeRegion(root, input string) (string, error) {
 // the path is inside root. The comparison is lexical first. Then only an
 // alias of root itself counts, for example /var/x for /private/var/x.
 // The function never resolves the named path. A deleted path must still
-// compare, and a link below root must stay visible as a link (contracts
-// §1.3 and K4).
+// compare, and a link below root must stay visible as a link.
 func regionInside(root, abs string) (string, bool) {
 	abs = filepath.Clean(abs)
 

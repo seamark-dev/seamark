@@ -57,8 +57,8 @@ func composeDigest(parts ...string) string {
 }
 
 // ComposeDigest is composeDigest for a package that builds a digest of
-// its own label (registry §2.2), such as the scope digest of a
-// preparation. One composer keeps every compose digest byte-equal.
+// its own label, such as the scope digest of a preparation. One
+// composer keeps every compose digest byte-equal.
 func ComposeDigest(parts ...string) string {
 	return composeDigest(parts...)
 }
@@ -87,7 +87,7 @@ func CheckVersion(def CheckDef) string {
 // PinVersion is the hex SHA-256 of compose("pin-version/1", key.Rule,
 // key.Region, note, mode, check). The audit, preparation, verification,
 // and the delivery report carry it. A cosmetic edit of lessons.yaml
-// keeps it, and a change of meaning gives a new one (AC-16).
+// keeps it, and a change of meaning gives a new one.
 //
 // The version stays deterministic for a config that Validate refuses.
 // An unknown mode and an undefined check each get a marked part, because
@@ -316,10 +316,10 @@ func (c *Config) ResolvePinRef(ref string) (int, error) {
 	return matched[0], nil
 }
 
-// normalizePinRef is the one input rule for a pin-ref (contracts §1.2):
-// trim the surrounding spaces, lowercase, then require 8 to 64 lowercase
-// hex characters. It returns the normalized text also when the rule
-// fails, because the malformed message quotes it.
+// normalizePinRef is the one input rule for a pin-ref: trim the
+// surrounding spaces, lowercase, then require 8 to 64 lowercase hex
+// characters. It returns the normalized text also when the rule fails,
+// because the malformed message quotes it.
 func normalizePinRef(ref string) (string, bool) {
 	ref = strings.ToLower(strings.TrimSpace(ref))
 	if len(ref) < MinPinRef || len(ref) > sha256.Size*2 {

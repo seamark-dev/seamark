@@ -41,10 +41,10 @@ func prefixLogLines() []string {
 }
 
 // TestReadAuditPrefixBoundsAndCounts tests the bounded prefix reader of
-// the firing log (contract L3). It covers the absent log, the line
-// classes and their counts, the 1-based line numbers, the partial tail,
-// and the byte bound. It also covers the rule that an I/O error is never
-// an empty log.
+// the firing log. It covers the absent log, the line classes and their
+// counts, the 1-based line numbers, the partial tail, and the byte
+// bound. It also covers the rule that an I/O error is never an empty
+// log.
 func TestReadAuditPrefixBoundsAndCounts(t *testing.T) {
 	t.Run("an absent log is an empty prefix and creates nothing", func(t *testing.T) {
 		root := t.TempDir()

@@ -17,10 +17,10 @@ type AuditLine struct {
 	Firing Firing
 }
 
-// AuditPrefix is the result of ReadAuditPrefix (contract L3). It states
-// what the read found and what it left out. So a report can show the
-// limits of its own reading. Lines holds every complete record of the
-// current schema or an older one. Legacy counts a subset of Lines.
+// AuditPrefix is the result of ReadAuditPrefix. It states what the read
+// found and what it left out. So a report can show the limits of its
+// own reading. Lines holds every complete record of the current schema
+// or an older one. Legacy counts a subset of Lines.
 type AuditPrefix struct {
 	Path string
 	// Bytes is the number of bytes read: the file size at open, cut at

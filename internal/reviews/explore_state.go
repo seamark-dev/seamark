@@ -12,11 +12,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 )
 
-// This file holds the dedupe state of exploration advice (contract L2).
-// It has its own file and its own lock, apart from lessons-hook-state.json.
+// This file holds the dedupe state of exploration advice. It has its
+// own file and its own lock, apart from lessons-hook-state.json.
 // Exploration code never reads or writes the edit hook state: an edit of
-// a pin right after a read must still get its reminder (AC-26). Only the
-// lock helpers of the edit state are shared, because they hold no state.
+// a pin right after a read must still get its reminder. Only the lock
+// helpers of the edit state are shared, because they hold no state.
 
 const (
 	// exploreStateVersion is the one version that this binary reads.
@@ -27,7 +27,7 @@ const (
 	exploreLockFile      = "lessons-explore-state.lock"
 	maxExploreStateBytes = 1 << 20
 	// exploreStateTTL equals deliveryStateTTL in value. It is its own
-	// constant, because the contract freezes it apart from the edit state.
+	// constant, so a change of the edit state TTL never changes it.
 	exploreStateTTL = 24 * time.Hour
 	// exploreResetLockWait bounds the wait of a reset for the exploration
 	// lock. One lock covers every context, so a lease of another root
@@ -48,8 +48,8 @@ const exploreItemScheme = "explore-item/1"
 
 // The closed kinds of an ExploreItem.
 const (
-	// ExploreItemPin is a pin. Its ID is the pin version (K2), so a
-	// change of meaning delivers the pin again.
+	// ExploreItemPin is a pin. Its ID is the pin version, so a change of
+	// meaning delivers the pin again.
 	ExploreItemPin = "pin"
 	// ExploreItemLesson is a mined lesson. Its ID is the ClusterKey,
 	// because a mined lesson has no version.

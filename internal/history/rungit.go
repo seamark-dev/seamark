@@ -13,14 +13,14 @@ import (
 	"time"
 )
 
-// maxGitStderrBytes is max-git-stderr-bytes (contracts K3 output caps).
-// Stderr serves messages only, so the runner keeps the start and discards
-// the rest.
+// maxGitStderrBytes is the output cap max-git-stderr-bytes. Stderr
+// serves messages only, so the runner keeps the start and discards the
+// rest.
 const maxGitStderrBytes = 64 << 10
 
 // gitWaitDelay bounds pipe cleanup after git ends or the context ends,
 // even when a child process of git keeps a pipe open. The guard budget
-// is 5 s (contracts K3), so the delay stays short. Tests can shorten it.
+// is 5 s, so the delay stays short. Tests can shorten it.
 var gitWaitDelay = time.Second
 
 // ErrGitOutputLimit reports that git wrote more stdout than
@@ -60,26 +60,28 @@ type GitOutput struct {
 // RunGit runs git with ctx. It appends GIT_OPTIONAL_LOCKS=0,
 // GIT_TERMINAL_PROMPT=0, and LC_ALL=C to gitEnviron(). The first stops
 // the optional index lock. The second stops a password prompt. The third
-// keeps the git messages in one language for every user, because the K4
-// snapshot shows a status stderr line as a notice. The error is non-nil
-// only when git did not run, ctx ended (ctx.Err()), or stdout passed
-// call.MaxStdout (ErrGitOutputLimit). A non-zero exit of git is not an
-// error, because some exit codes are answers. For example, `rev-parse
-// --verify --quiet` exits 1 in an unborn repository. The caller reads
-// GitOutput.ExitCode.
+// keeps the git messages in one language for every user, because the
+// working-tree snapshot of the lesson checks shows a status stderr line
+// as a notice. The error is non-nil only when git did not run, ctx
+// ended (ctx.Err()), or stdout passed call.MaxStdout
+// (ErrGitOutputLimit). A non-zero exit of git is not an error, because
+// some exit codes are answers. For example,
+// `rev-parse --verify --quiet` exits 1 in an unborn repository. The
+// caller reads GitOutput.ExitCode.
 //
-// RunGit is the one runner of this kind (contracts K4), for these reasons:
+// RunGit is the one runner of this kind, for these reasons:
 //   - gitScan splits lines, drops a trailing "\r", stops after 5 s, and
 //     hides the exit code. NUL records, raw blobs, and the exit code of
 //     an unborn HEAD need all three.
 //   - The other runners live in packages that lesson checks must not
-//     import (index, cli, fixes, learning; BRIEF A1).
+//     import (index, cli, fixes, learning).
 //   - A plain `git status` rewrites the stat cache in .git/index. RunGit
 //     cannot import cli.readOnlyGitEnv, so it sets GIT_OPTIONAL_LOCKS=0
 //     itself.
 //
 // RunGit does not set diff.autoRefreshIndex=false, so a `git diff` through
-// it can still write .git/index. The K4 snapshot runs no `git diff`.
+// it can still write .git/index. The working-tree snapshot runs no
+// `git diff`.
 func RunGit(ctx context.Context, call GitCall) (GitOutput, error) {
 	// runCtx also ends when stdout passes the limit, so that exec kills
 	// git at once instead of after the next write.
@@ -133,7 +135,7 @@ func RunGit(ctx context.Context, call GitCall) (GitOutput, error) {
 //   - LC_ALL, because RunGit sets LC_ALL=C, and one entry per name keeps
 //     the child environment clear.
 //   - LANGUAGE, because gettext can read it before LC_ALL and translate
-//     the git messages (ruling D2).
+//     the git messages.
 func gitEnviron() []string {
 	return slices.DeleteFunc(os.Environ(), func(entry string) bool {
 		return strings.HasPrefix(entry, "GIT_TRACE") || strings.HasPrefix(entry, "LC_ALL=") || strings.HasPrefix(entry, "LANGUAGE=")

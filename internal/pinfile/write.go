@@ -63,18 +63,18 @@ func PrepareAppend(reg *integration.Registry, root string, expect integration.Fi
 // as expect observed it, with the same SHA-256, or be absent as expect
 // observed it.
 //
-// The candidate must also pass the strict check tier (contract K1,
-// writer rule). The check reads the whole candidate, so an error that
-// an earlier hand edit made also refuses the write (§5 row 5). An
-// invalid check configuration must never come from a seamark write.
+// The candidate must also pass the strict check tier. The check reads
+// the whole candidate, so an error that an earlier hand edit made also
+// refuses the write. An invalid check configuration must never come
+// from a seamark write.
 func prepare(reg *integration.Registry, root string, expect integration.FileGuard, after []byte, detail string) (*Prepared, error) {
 	cfg, err := reviews.ParseConfig(after)
 	if err != nil {
 		return nil, fmt.Errorf("%w: the candidate does not load: %w", ErrUnverified, err)
 	}
 
-	// The refusal type keeps the exact contract text. A wrap with %w
-	// would put the text of ErrUnverified in front of it.
+	// The refusal type keeps the exact refusal text. A wrap with %w would
+	// put the text of ErrUnverified in front of it.
 	if reason := CandidateRefusal(cfg); reason != "" {
 		return nil, &refusal{text: "pinfile: " + reason, kind: ErrUnverified}
 	}
@@ -95,7 +95,7 @@ func prepare(reg *integration.Registry, root string, expect integration.FileGuar
 
 // CandidateRefusal returns the reason that a writer refuses the decoded
 // candidate cfg, or "" when cfg passes lessoncheck.Validate. The reason
-// names the first error and the count of the others (contract K1).
+// names the first error and the count of the others.
 //
 // Two writers use it: prepare, and the settings editor, which writes
 // lessons.yaml without prepare. One function gives both the same text.

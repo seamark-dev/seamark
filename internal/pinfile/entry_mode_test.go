@@ -10,11 +10,11 @@ import (
 )
 
 // TestEntryCarriesModeAndCheck proves that the listing reads the
-// lesson-check keys of contract K1. mode and check are reader keys now,
-// so the listing never calls them unknown, and the entry carries their
-// raw text. The pin key ignores both, because the firing identity of a
-// pin must not change (contract K2). The top-level checks and
-// lesson_checks_version keys block no edit.
+// lesson-check keys. mode and check are reader keys now, so the listing
+// never calls them unknown, and the entry carries their raw text. The
+// pin key ignores both, because the firing identity of a pin must not
+// change. The top-level checks and lesson_checks_version keys block no
+// edit.
 func TestEntryCarriesModeAndCheck(t *testing.T) {
 	const body = `lesson_checks_version: 1
 checks:

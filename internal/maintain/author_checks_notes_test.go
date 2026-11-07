@@ -30,12 +30,13 @@ pin:
     check: frozen
 `
 
-// TestPlanAuthorChecksEditsGetTheirOwnReviewNotes covers R-7 of the P4
-// review. A mode-only or check-only edit changes no spelling and no
-// note, so its review must not claim a spelling row in Stats or an
-// 'edited' mark in Pins. A note edit keeps its notes. An edit that moves
-// the pin version says so, because a context then receives the pin again.
-// A check ID with the same definition keeps the version, so it stays quiet.
+// TestPlanAuthorChecksEditsGetTheirOwnReviewNotes covers the review
+// notes of a lesson-check edit. A mode-only or check-only edit changes
+// no spelling and no note, so its review must not claim a spelling row
+// in Stats or an 'edited' mark in Pins. A note edit keeps its notes. An
+// edit that moves the pin version says so, because a context then
+// receives the pin again. A check ID with the same definition keeps the
+// version, so it stays quiet.
 func TestPlanAuthorChecksEditsGetTheirOwnReviewNotes(t *testing.T) {
 	mode := func(ref pinfile.EntryRef) AuthorRequest {
 		return AuthorRequest{Op: AuthorEdit, Ref: ref, Mode: lessoncheck.ModeEnforce, ModeSet: true}

@@ -1,11 +1,11 @@
 package maintain
 
-// Tests of the lesson-check keys in the maintenance writers (contract
-// K1, writer table, AC-27). A retarget, a prune, and a manual edit
-// never set and never clear the mode or the check of a pin,
-// and a manual create writes an advisory pin. Every candidate passes the
-// strict check tier of pinfile.Prepare, so each test also proves that
-// the writer does not refuse a valid file with checks.
+// Tests of the lesson-check keys in the maintenance writers. A
+// retarget, a prune, and a manual edit never set and never clear the
+// mode or the check of a pin, and a manual create writes an advisory
+// pin. Every candidate passes the strict check tier of pinfile.Prepare,
+// so each test also proves that the writer does not refuse a valid file
+// with checks.
 
 import (
 	"errors"
@@ -22,10 +22,10 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// checkWritersLessons holds the check definitions of the spec example
-// and four pins. guard-scripts and two-areas are linked to p1 and p2,
-// so a retarget can move them. ruff-unused-import is linked to p3, and
-// it is the only pin bound to frozen-assets. The hand-written pin has no
+// checkWritersLessons holds the example check definitions and four
+// pins. guard-scripts and two-areas are linked to p1 and p2, so a
+// retarget can move them. ruff-unused-import is linked to p3, and it is
+// the only pin bound to frozen-assets. The hand-written pin has no
 // ledger row. The comment on the mode line must stay after every write.
 const checkWritersLessons = `lesson_checks_version: 1
 checks:
@@ -108,10 +108,10 @@ var checkWritersPins = []string{
 	"hand-written mode=advisory check=no-todo",
 }
 
-// TestRetargetKeepsModeAndCheck proves the K1 writer row "Retarget". A
-// retarget changes only the region keys of each entry. The mode, the
-// check, the comment on the mode line, and the checks map stay byte for
-// byte, also for an executable pin.
+// TestRetargetKeepsModeAndCheck covers the retarget writer. A retarget
+// changes only the region keys of each entry. The mode, the check, the
+// comment on the mode line, and the checks map stay byte for byte, also
+// for an executable pin.
 func TestRetargetKeepsModeAndCheck(t *testing.T) {
 	f := checkWritersFixture(t)
 	require.Equal(t, checkWritersPins, pinChecks(t, checkWritersLessons))
@@ -138,12 +138,11 @@ func TestRetargetKeepsModeAndCheck(t *testing.T) {
 	assert.Equal(t, checkWritersPins, pinChecks(t, f.lessons()))
 }
 
-// TestPruneKeepsChecksMap proves the K1 writer row "Prune". A prune
-// removes only the entry and its provenance comment. The checks map
-// stays byte for byte. This includes the definition that no pin binds
-// after the prune, because the strict tier accepts an unused check. A
-// ledger failure restores the original bytes through pinWriter.Restore
-// (the row "Compensation").
+// TestPruneKeepsChecksMap covers the prune writer. A prune removes only
+// the entry and its provenance comment. The checks map stays byte for
+// byte. This includes the definition that no pin binds after the prune,
+// because the strict tier accepts an unused check. A ledger failure
+// restores the original bytes through pinWriter.Restore.
 func TestPruneKeepsChecksMap(t *testing.T) {
 	pruned := strings.Replace(checkWritersLessons, `  # distilled by claude/v2 from 2 findings (seamark lessons --distill, p3)
   - rule: ruff-unused-import
@@ -229,10 +228,10 @@ func checksAuthorFixture(t *testing.T) *fixture {
 	return f
 }
 
-// TestAuthorCreateIsAdvisory proves the K1 writer row "Manual create"
-// and AC-27. pinfile.RenderPin writes the rule, the regions, and the
-// note only, so a new pin is advisory. The executable pins and the
-// checks map stay byte for byte.
+// TestAuthorCreateIsAdvisory covers the manual create.
+// pinfile.RenderPin writes the rule, the regions, and the note only, so
+// a new pin is advisory. The executable pins and the checks map stay
+// byte for byte.
 func TestAuthorCreateIsAdvisory(t *testing.T) {
 	f := checksAuthorFixture(t)
 
@@ -260,8 +259,8 @@ func TestAuthorCreateIsAdvisory(t *testing.T) {
 	assert.Empty(t, created.Check, "no check key")
 }
 
-// TestAuthorEditKeepsModeAndCheck proves the K1 writer row "Manual
-// edit" of milestone P1. The form sets the rule, the note, or the scope,
+// TestAuthorEditKeepsModeAndCheck covers a manual edit without
+// lesson-check keys. The form sets the rule, the note, or the scope,
 // and the planner routes them to a Rewrite without a mode and a check.
 // So the entry keeps both keys, and the comment on the mode line stays.
 func TestAuthorEditKeepsModeAndCheck(t *testing.T) {
@@ -367,11 +366,11 @@ const (
 		"expression 'TODO\\('; a new file adds every line; binary or unreadable content gives unknown"
 )
 
-// TestRetargetShowsCheckImpact proves the K1 impact of a retarget
-// (writer table, "Retarget"). The plan carries one impact block per
-// executable pin whose regions move, before any write, also while the
-// gate is off. An advisory pin and a prune get no block, so every
-// existing retarget and prune preview keeps its bytes.
+// TestRetargetShowsCheckImpact proves the checker impact of a retarget.
+// The plan carries one impact block per executable pin whose regions
+// move, before any write, also while the gate is off. An advisory pin
+// and a prune get no block, so every existing retarget and prune
+// preview keeps its bytes.
 func TestRetargetShowsCheckImpact(t *testing.T) {
 	t.Run("executable pins", func(t *testing.T) {
 		f := checkWritersFixture(t)
@@ -482,11 +481,11 @@ func editKeys(ref pinfile.EntryRef, mode *lessoncheck.Mode, check *string) Autho
 	return req
 }
 
-// TestAuthorEditSetsMode proves the K1 writer row "Manual edit" of
-// milestone P4 (AC-27). The form sets the mode and the check of one pin.
-// The planner routes them to the Rewrite keys of lessons --set-mode, so
-// only those lines change, and the plan shows the K1 impact block before
-// the save. A linked pin takes a mode edit too, as the command allows.
+// TestAuthorEditSetsMode covers a manual edit of the lesson-check keys.
+// The form sets the mode and the check of one pin. The planner routes
+// them to the Rewrite keys of lessons --set-mode, so only those lines
+// change, and the plan shows the checker impact block before the save.
+// A linked pin takes a mode edit too, as the command allows.
 func TestAuthorEditSetsMode(t *testing.T) {
 	enforce, check, advisory := lessoncheck.ModeEnforce, lessoncheck.ModeCheck, lessoncheck.ModeAdvisory
 	frozen, todo, none := "frozen-assets", "no-todo", ""
@@ -613,8 +612,8 @@ func TestAuthorEditSetsMode(t *testing.T) {
 	})
 }
 
-// TestAuthorEditRefusesEnforceWithoutCheck proves the K1 writer rule for
-// the authoring form: the plan runs the strict check tier on the
+// TestAuthorEditRefusesEnforceWithoutCheck proves the strict check rule
+// for the authoring form: the plan runs the strict check tier on the
 // candidate and blocks a candidate that fails it, before the save. An
 // executable mode without a check, an undefined check, and an error that
 // the file already holds all refuse. Nothing is written.
@@ -700,6 +699,6 @@ func TestAuthorEditRefusesEnforceWithoutCheck(t *testing.T) {
 
 		req.Mode, req.Check = lessoncheck.ModeAdvisory, ""
 		p = f.authorPlan(f.deps(), req)
-		assert.True(t, p.Confirmable, "an advisory create is the K1 row: blocked: %v", blockerLines(p))
+		assert.True(t, p.Confirmable, "an advisory create can be confirmed: blocked: %v", blockerLines(p))
 	})
 }

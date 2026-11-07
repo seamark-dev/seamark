@@ -100,7 +100,7 @@ func TestRunGitReturnsRawBytesAndExitCode(t *testing.T) {
 		unborn, _ := gitRepo(t)
 
 		out, err := RunGit(ctx, GitCall{Dir: unborn, Args: []string{"rev-parse", "--verify", "--quiet", "HEAD^{commit}"}, MaxStdout: testMaxStdout})
-		require.NoError(t, err, "the K4 snapshot reads exit 1 as an unborn HEAD")
+		require.NoError(t, err, "the working-tree snapshot reads exit 1 as an unborn HEAD")
 
 		assert.Equal(t, 1, out.ExitCode)
 		assert.Empty(t, out.Stdout)
@@ -259,7 +259,7 @@ func TestRunGitTakesNoIndexLock(t *testing.T) {
 	commit("init", "a.txt", "pkg/b.go")
 
 	// An mtime that differs from the stat cache makes git re-read the
-	// file. A plain `git status` then rewrites .git/index (inventory §4.2).
+	// file. A plain `git status` then rewrites .git/index.
 	past := time.Now().Add(-2 * time.Hour)
 	require.NoError(t, os.Chtimes(filepath.Join(root, "a.txt"), past, past))
 
@@ -306,9 +306,9 @@ func TestRunGitTakesNoIndexLock(t *testing.T) {
 
 // TestRunGitDropsTraceVariables proves that RunGit hides the GIT_TRACE
 // variables from git. A trace setting writes lines with a time to
-// stderr. The K4 snapshot shows status stderr as a git-stderr notice, so
-// a trace setting of the user's shell would add that notice to every
-// lesson verification.
+// stderr. The working-tree snapshot shows status stderr as a git-stderr
+// notice, so a trace setting of the user's shell would add that notice
+// to every lesson verification.
 func TestRunGitDropsTraceVariables(t *testing.T) {
 	isolateGitConfig(t)
 
@@ -346,10 +346,10 @@ func TestRunGitDropsTraceVariables(t *testing.T) {
 	assert.Contains(t, stderr.String(), "trace", "the same status without RunGit writes trace lines")
 }
 
-// TestRunGitSetsTheCLocale proves that RunGit runs git in the C locale
-// (ruling D2). A git with gettext translates its messages in another
-// locale. The K4 snapshot shows the first status stderr line as a
-// notice, so the same tree must give the same text for every user.
+// TestRunGitSetsTheCLocale proves that RunGit runs git in the C locale.
+// A git with gettext translates its messages in another locale. The
+// working-tree snapshot shows the first status stderr line as a notice,
+// so the same tree must give the same text for every user.
 func TestRunGitSetsTheCLocale(t *testing.T) {
 	isolateGitConfig(t)
 
