@@ -2,10 +2,8 @@ package services
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,33 +62,24 @@ func checksWorkspace(t *testing.T) workspace.Workspace {
 }
 
 // auditRecords returns the records of the lesson-check audit stream.
-// The writer rotates the live log by size and by the age of its oldest
-// record. A rotation moves the earlier records of a test into the
-// rotated generation, so the helper reads both files, oldest first.
 func auditRecords(t *testing.T, ws workspace.Workspace) []lessoncheck.AuditRecord {
 	t.Helper()
 
-	live := filepath.Join(ws.Root, ".seamark", "lesson-check-audit.jsonl")
+	f, err := os.Open(filepath.Join(ws.Root, ".seamark", "lesson-check-audit.jsonl"))
+	require.NoError(t, err)
+
+	defer func() { _ = f.Close() }()
 
 	var out []lessoncheck.AuditRecord
 
-	for _, path := range []string{live + ".1", live} {
-		data, err := os.ReadFile(path)
-		if path != live && errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-
-		require.NoError(t, err)
-
-		sc := bufio.NewScanner(bytes.NewReader(data))
-		for sc.Scan() {
-			var rec lessoncheck.AuditRecord
-			require.NoError(t, json.Unmarshal(sc.Bytes(), &rec))
-			out = append(out, rec)
-		}
-
-		require.NoError(t, sc.Err())
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var rec lessoncheck.AuditRecord
+		require.NoError(t, json.Unmarshal(sc.Bytes(), &rec))
+		out = append(out, rec)
 	}
+
+	require.NoError(t, sc.Err())
 
 	return out
 }
