@@ -17,11 +17,12 @@ import (
 // read, each delivery line prints the unknown text and no count, because a
 // count there would be a zero that no record states.
 //
-// The text shows only what the audit logs give. This build reads no
-// capture archive, so the text leaves out the capture and archive state,
-// the occurrences, the decision timing, the observation windows, the
-// historical versions, the unlinked feedback, and the coverage counts.
-// The JSON document keeps these fields with their fixed values.
+// The text shows only what the audit logs give. It leaves out the fixed
+// fields, such as the capture and archive state, the occurrences, the
+// decision timing, the historical versions, and the unlinked feedback.
+// It also leaves out the observation windows, where every session reads
+// incomplete, and the coverage counts. The JSON document keeps all these
+// fields.
 func RenderText(w io.Writer, report Report) error {
 	p := &textReport{}
 	p.line("Lesson delivery (%s; seamark %s)", report.Schema, report.SeamarkVersion)
@@ -65,7 +66,7 @@ func RenderText(w io.Writer, report Report) error {
 }
 
 // textReport buffers a report so write failures reach the caller. Newlines
-// come only from the renderer, not from configured or captured strings.
+// come only from the renderer, not from configured or recorded strings.
 type textReport struct{ strings.Builder }
 
 func (p *textReport) line(format string, args ...any) {
@@ -162,9 +163,9 @@ func (p *textReport) checks(c CheckReading) {
 		g.ExecutedAfterDeny, g.NoExecutionObserved, g.Prevented, c.InactiveEnforcement)
 }
 
-// expansion lists the versions of the selected pin. The occurrences and
-// the session windows of each version need a capture archive, so the
-// text leaves them out, as it does for the overview.
+// expansion lists the versions of the selected pin. The occurrences are
+// a fixed field and every session window reads incomplete, so the text
+// leaves them out, as it does for the overview.
 func (p *textReport) expansion(exp Expansion) {
 	p.line("Expansion: pin %s (versions are never pooled)", exp.PinRef)
 

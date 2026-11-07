@@ -120,9 +120,9 @@ func assertGatherCalls(t *testing.T, calls map[string]int) {
 	assert.Equal(t, map[string]int{"audit": 1, "checks": 1, "config": 1, "inspect": 1}, calls)
 }
 
-// assertFixedArchive checks the archive and capture states that every
-// report carries, because the report reads no capture archive.
-func assertFixedArchive(t *testing.T, r Report) {
+// assertFixedFields checks the as_of.archive and capture states, two
+// fixed fields that every report carries with the same value.
+func assertFixedFields(t *testing.T, r Report) {
 	t.Helper()
 	assert.Equal(t, ArchiveRead{State: StateAbsent, Error: ArchiveNotReadError}, r.AsOf.Archive)
 	assert.Equal(t, CaptureState{State: CaptureUnavailable, Reason: "no-archive", Message: CaptureUnavailableMessage}, r.Capture)
@@ -140,7 +140,7 @@ func TestGatherReadsEachSourceOnceAndWritesNothing(t *testing.T) {
 		require.NoError(t, err)
 		assertGatherCalls(t, calls)
 		assert.Equal(t, before, gatherTree(t, root))
-		assertFixedArchive(t, r)
+		assertFixedFields(t, r)
 		assert.Equal(t, StateAbsent, r.AsOf.Config.State)
 		assert.Equal(t, StateAbsent, r.AsOf.Audit.State)
 		assert.Equal(t, StateAbsent, r.AsOf.CheckAudit.State)
@@ -162,7 +162,7 @@ func TestGatherReadsEachSourceOnceAndWritesNothing(t *testing.T) {
 		require.NoError(t, err)
 		assertGatherCalls(t, calls)
 		assert.Equal(t, before, gatherTree(t, root))
-		assertFixedArchive(t, r)
+		assertFixedFields(t, r)
 		assert.Equal(t, ConfigOK, r.AsOf.Config.State)
 		assert.Equal(t, StateRead, r.AsOf.Audit.State)
 		assert.Equal(t, StateRead, r.AsOf.CheckAudit.State)
@@ -338,7 +338,7 @@ func testGatherRequestInputs(t *testing.T) {
 	cancel()
 	canceled, err := Gather(ctx, Request{Root: root, Now: func() time.Time { return fixedNow }})
 	require.NoError(t, err)
-	assertFixedArchive(t, canceled)
+	assertFixedFields(t, canceled)
 
 	want, err := Gather(context.Background(), Request{Root: root, Now: func() time.Time { return fixedNow }})
 	require.NoError(t, err)

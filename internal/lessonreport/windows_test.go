@@ -29,9 +29,9 @@ func observe(t *testing.T, in Inputs) (Observation, []SessionWindow) {
 	return o, expanded.Expanded.Sessions
 }
 
-// TestObservationWindows proves the window reading of this build. The
-// report reads no capture archive, so every delivered session reads
-// incomplete with the reason session-not-captured and an unknown timing.
+// TestObservationWindows proves the window reading of this build. Every
+// delivered session reads incomplete with the reason
+// session-not-captured and an unknown timing.
 // The openings still follow the delivery rules of the audit.
 func TestObservationWindows(t *testing.T) {
 	cfg := testConfig("n")
@@ -41,7 +41,7 @@ func TestObservationWindows(t *testing.T) {
 		return v2(event, session, "m-"+event, pin(id, ver, reviews.PinInjected))
 	}
 
-	t.Run("every delivered session is not captured", func(t *testing.T) {
+	t.Run("every delivered session reads incomplete", func(t *testing.T) {
 		first := injected("e1", "s1")
 		first.Lane = "root"
 

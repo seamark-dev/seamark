@@ -24,8 +24,9 @@ type Timing string
 // "mixed".
 type PairTiming string
 
-// Origin is who produced the corrected feedback. The closed list
-// is "human", "user-unverified", and "peer".
+// Origin is the origin value of an occurrence. The closed list is
+// "human", "user-unverified", and "peer". The occurrences are a fixed
+// field, so no reading of this build sets an origin.
 type Origin string
 
 // Code is one reason code. The set is closed. Each file that derives
@@ -58,8 +59,8 @@ type Report struct {
 	// Pins holds one reading per pin entry of the current config, in file
 	// order, one per active pin version.
 	Pins []PinReading `json:"pins"`
-	// Historical holds the versions that only associations name. It has
-	// the shape of Pins. PinRef is empty unless the identity is current.
+	// Historical has the shape of Pins. It is a fixed field, so it is
+	// always empty in this build.
 	Historical []PinReading `json:"historical"`
 	Unlinked   Unlinked     `json:"unlinked"`
 	Coverage   Coverage     `json:"coverage"`
@@ -77,7 +78,7 @@ type AsOf struct {
 	GeneratedAt string      `json:"generated_at"`
 	Audit       SourceRead  `json:"audit"`       // lessons-audit.jsonl
 	CheckAudit  SourceRead  `json:"check_audit"` // lesson-check-audit.jsonl
-	Archive     ArchiveRead `json:"archive"`
+	Archive     ArchiveRead `json:"archive"`     // a fixed field; see archiveRead
 	Config      ConfigRead  `json:"config"`
 }
 
@@ -95,15 +96,15 @@ type SourceRead struct {
 	Error       string `json:"error,omitempty"` // sanitized
 }
 
-// ArchiveRead is the state of the capture archive snapshot.
+// ArchiveRead is the as_of.archive state, a fixed field. This build
+// always gives the state absent and ArchiveNotReadError (archiveRead).
 type ArchiveRead struct {
 	State         string `json:"state"` // closed: "read", "absent", "older-schema", "newer-schema", "busy", "unreadable"
 	SchemaVersion int    `json:"schema_version,omitempty"`
 	SnapshotAt    string `json:"snapshot_at,omitempty"`
 	Error         string `json:"error,omitempty"`
-	// RootEqual states whether the bound root of the archive equals the
-	// identity root of this run. It is nil when the archive was not read.
-	// Joins never substitute another root.
+	// RootEqual is nil when the state is not read, so it is always nil in
+	// this build.
 	RootEqual *bool `json:"root_equal,omitempty"`
 }
 
@@ -114,7 +115,8 @@ type ConfigRead struct {
 	Pins           int    `json:"pins"`
 }
 
-// CaptureState says whether capture evidence was available.
+// CaptureState is the capture field, a fixed field. This build always
+// gives the state unavailable with the reason no-archive (captureState).
 type CaptureState struct {
 	State   string `json:"state"`             // closed: "available", "unavailable"
 	Reason  string `json:"reason,omitempty"`  // closed: "no-archive", "older-schema", "newer-schema", "busy", "unreadable"
@@ -199,7 +201,8 @@ type SelectionEvidence struct {
 	State string `json:"state"` // closed: "read", "unknown"
 }
 
-// OccurrenceCounts are the assessed occurrences of one pin version.
+// OccurrenceCounts are the occurrences of one pin version, a fixed
+// field. Every count is zero and every map is empty in this build.
 type OccurrenceCounts struct {
 	Occurrences     int               `json:"occurrences"`    // occurrence keys (canonical feedback, identity, version)
 	Incidents       int               `json:"incidents"`      // distinct incident digests among them
@@ -209,14 +212,14 @@ type OccurrenceCounts struct {
 	Excluded        int               `json:"excluded"`       // newest review excluded; not in Occurrences
 	ChangedEvidence int               `json:"changed_evidence"`
 	// IndependenceUnresolved means two counted occurrences share a session,
-	// incident, or joined anchor component. It does not read peer overlap
-	// through current episode members or fix edits, because the snapshot
-	// holds neither.
+	// incident, or joined anchor component. It is always false in this
+	// build.
 	IndependenceUnresolved bool `json:"independence_unresolved"`
 }
 
 // Observation is the window partition of the delivered sessions of one
-// pin version.
+// pin version. Every delivered session of this build counts as
+// incomplete, so Linked and NoLinkedCorrection stay zero.
 type Observation struct {
 	Unit               string               `json:"unit"`                 // "delivered sessions"
 	Linked             int                  `json:"linked"`               // a counted occurrence has a located action in the window
@@ -224,7 +227,7 @@ type Observation struct {
 	Incomplete         int                  `json:"incomplete"`           // neither linked nor a qualified negative observation
 	IncompleteByReason map[Code]int         `json:"incomplete_by_reason"` // a session can have several reasons
 	ByTiming           map[Timing]Partition `json:"by_timing"`            // by decision timing
-	Endpoint           string               `json:"endpoint"`             // "captured-session-end"
+	Endpoint           string               `json:"endpoint"`             // always ObservationEndpoint
 	AssessmentAsOf     string               `json:"assessment_as_of,omitempty"`
 }
 
@@ -235,8 +238,8 @@ type Partition struct {
 	Incomplete         int `json:"incomplete"`
 }
 
-// Unlinked reads the captured feedback that no assessed association
-// reaches.
+// Unlinked is the unlinked section, a fixed field. Count is zero and
+// the map and the list are empty in this build.
 type Unlinked struct {
 	Unit      string       `json:"unit"` // "feedback items"
 	Count     int          `json:"count"`
@@ -245,22 +248,24 @@ type Unlinked struct {
 }
 
 // Coverage holds report-level counts, each with its unit in the unit
-// table.
+// table. This build fills UnknownLaneRecords, EventsWithoutPins, and
+// DeniedCallInjections from the audit. The other counts are fixed fields
+// and stay zero.
 type Coverage struct {
-	UnmatchedAuditSessions    int `json:"unmatched_audit_sessions"`   // hook and explore session digests with no archive session
-	UnmatchedArchiveSessions  int `json:"unmatched_archive_sessions"` // archive sessions with no audit record
+	UnmatchedAuditSessions    int `json:"unmatched_audit_sessions"`   // always 0 in this build
+	UnmatchedArchiveSessions  int `json:"unmatched_archive_sessions"` // always 0 in this build
 	UnknownLaneRecords        int `json:"unknown_lane_records"`
 	UnknownTimingActions      int `json:"unknown_timing_actions"`
-	MissingManifests          int `json:"missing_manifests"`      // distinct guidance digests of action records with no frozen manifest
-	IncompleteComparisons     int `json:"incomplete_comparisons"` // live groups whose plan has pins_cut
+	MissingManifests          int `json:"missing_manifests"`      // always 0 in this build
+	IncompleteComparisons     int `json:"incomplete_comparisons"` // always 0 in this build
 	UnsupportedOldAssessments int `json:"unsupported_old_assessments"`
 	MissingActions            int `json:"missing_actions"`             // occurrences without a located action
-	AmbiguousPeers            int `json:"ambiguous_peers"`             // PeerCoverage: unpaired_hook_copies + boundary_unknown + unknown_lane
-	SourceDeletedAssociations int `json:"source_deleted_associations"` // excluded before aggregation
+	AmbiguousPeers            int `json:"ambiguous_peers"`             // always 0 in this build
+	SourceDeletedAssociations int `json:"source_deleted_associations"` // always 0 in this build
 	EventsWithoutPins         int `json:"events_without_pins"`
 	DeniedCallInjections      int `json:"denied_call_injections"` // injected hook records on a call the guard denied (equal match_sha256); kept out of delivered sessions and windows
-	CollapsedCopies           int `json:"collapsed_copies"`       // association keys folded into another by the copy rule
-	RootMismatchSessions      int `json:"root_mismatch_sessions"` // archive sessions whose stored session.root differs from the identity root
+	CollapsedCopies           int `json:"collapsed_copies"`       // always 0 in this build
+	RootMismatchSessions      int `json:"root_mismatch_sessions"` // always 0 in this build
 }
 
 // NextStep is one suggestion with a fixed text. Nothing runs it.
@@ -312,15 +317,17 @@ type Expansion struct {
 	Sessions    []SessionWindow    `json:"sessions"`
 }
 
-// OccurrenceDetail is one assessed occurrence of the expansion.
+// OccurrenceDetail is one occurrence of the expansion. The occurrences
+// are a fixed field, so Expansion.Occurrences is always empty in this
+// build.
 type OccurrenceDetail struct {
 	AssociationRef string         `json:"association_ref"` // "as-" + 12 hex
 	PinVersion     string         `json:"pin_version"`
-	EpisodeRef     string         `json:"episode_ref"` // 12 hex of the episode key + "@" + revision (capture show)
+	EpisodeRef     string         `json:"episode_ref"` // 12 hex + "@" + revision
 	Family         string         `json:"family"`      // closed: "user", "peer"
 	Origin         Origin         `json:"origin"`
 	Origins        []Origin       `json:"origins,omitempty"` // every distinct origin, sorted, when the members differ; absent otherwise, so one origin keeps its bytes
-	Assessment     string         `json:"assessment"`        // prompt version of the plan, e.g. "live-v2"
+	Assessment     string         `json:"assessment"`        // prompt version of the plan
 	Review         string         `json:"review"`            // closed: "counted", "excluded", "changed-evidence"
 	Class          PairClass      `json:"class"`
 	Reason         Code           `json:"reason,omitempty"` // set when class is unknown
@@ -331,9 +338,9 @@ type OccurrenceDetail struct {
 	Inspect        []string       `json:"inspect"` // exact commands
 }
 
-// ActionDetail is one corrected action of an occurrence.
+// ActionDetail is one action of an occurrence.
 type ActionDetail struct {
-	ActionRef    string        `json:"action_ref"` // 12 hex of the observation source key (capture show --observation)
+	ActionRef    string        `json:"action_ref"` // 12 hex of the observation source key
 	Incident     string        `json:"incident"`   // 12 hex of MatchDigest(session.root, native_session_id, tool_use_id)
 	Lane         string        `json:"lane"`       // closed: "root", "child", "unknown"
 	Class        Class         `json:"class"`
@@ -363,7 +370,7 @@ type SessionWindow struct {
 	Timing      Timing `json:"decision_timing"`
 	Reasons     []Code `json:"reasons"`
 	StartRecord string `json:"start_record,omitempty"` // the opening injection
-	Endpoint    string `json:"endpoint,omitempty"`     // "captured-session-end" when reached
+	Endpoint    string `json:"endpoint,omitempty"`     // ObservationEndpoint when reached; never set in this build
 }
 
 // unitTable returns the units map of the report, verbatim. Each call

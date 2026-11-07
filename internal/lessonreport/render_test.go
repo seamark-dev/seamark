@@ -25,9 +25,8 @@ func rendered(t *testing.T, report Report) string {
 
 // TestRenderTextOverview prints the overview of two delivered sessions.
 // The text shows the delivery records and the separate check block, and
-// it leaves out each section that needs a capture archive. The renderer
-// never changes the JSON of the report, and the same inputs give the
-// same text.
+// it leaves out the fixed fields. The renderer never changes the JSON of
+// the report, and the same inputs give the same text.
 func TestRenderTextOverview(t *testing.T) {
 	cfg := testConfig("n")
 	id, ver := pinOf(cfg, 0)
@@ -242,8 +241,8 @@ func TestRenderTextExpansion(t *testing.T) {
 	assert.Contains(t, out, "  version "+ver)
 	assert.Equal(t, 1, strings.Count(out, "; mode "), "the expansion prints the selected pin only")
 
-	// The versions keep their order. Occurrences and session windows need
-	// a capture archive, so the text leaves them out.
+	// The versions keep their order. The text leaves out the occurrences
+	// and the session windows.
 	r.Expanded.Versions = []string{"new-version", "old-version"}
 	r.Expanded.Occurrences = []OccurrenceDetail{
 		{AssociationRef: "as-old", PinVersion: "old-version", EpisodeRef: "old@1"},

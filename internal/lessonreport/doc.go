@@ -18,6 +18,13 @@
 // records of an older version of one pin never join the current version,
 // and one event counts once per version.
 //
+// Fixed fields are the delivery/1 fields that this build has no source
+// for, such as capture, as_of.archive, the occurrences, the classes, the
+// decision timing, and the historical and unlinked sections. Build fills
+// each of them with one fixed value, so the document keeps one field set
+// on every build. A fixed value is empty, zero, unknown, or a fixed
+// state, so it never reads like a result.
+//
 // Import rule: among the internal packages, the non-test files import
 // only reviews, integration, lessoncheck, model, render, and distill.
 // They never import outcome, tui, cli, mcp, store, agent, or net/http.

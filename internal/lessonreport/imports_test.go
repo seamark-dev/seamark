@@ -27,9 +27,8 @@ var allowedInternalImports = []string{
 }
 
 // bannedImports are the packages that the engine never imports
-// directly. outcome would join the capture reading to the outcome
-// reading. The others are surfaces, writers, or a way to a model
-// or the network.
+// directly. outcome would join another reading to the delivery reading.
+// The others are surfaces, writers, or a way to a model or the network.
 var bannedImports = []string{
 	modulePath + "/internal/outcome",
 	modulePath + "/internal/store",

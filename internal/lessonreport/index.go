@@ -7,15 +7,16 @@ import (
 )
 
 // index holds the keyed lookups of the audit prefix (read-only).
-// newIndex builds them in one pass over the lines, so no pin and no
-// episode rescans the log. Every list holds positions into lines, in file
-// order, because the file order of the append-only log orders the
-// records. Times never do.
+// newIndex builds them in one pass over the lines, so no pin rescans the
+// log. Every list holds positions into lines, in file order, because
+// the file order of the append-only log orders the records. Times never
+// do.
 //
 // byVersion serves the delivery counts and the windows. byEvent serves
 // the coverage counts and the totals. byMatch, bySession, and byContext
-// serve the action classes and the decision timing. These need a capture
-// archive, so this build fills the three lookups but does not read them.
+// key the records for the action classes and the decision timing. Both
+// are fixed fields in this build, so newIndex fills the three lookups,
+// but no reading uses them.
 type index struct {
 	lines []reviews.AuditLine
 
@@ -42,8 +43,8 @@ type index struct {
 
 	// scans answers the classifier's questions that look back from one
 	// position. newIndex fills it with the position lists of this index.
-	// The classifier needs a capture archive, so this build fills the
-	// lists but does not read them.
+	// The action classes are fixed fields, so no reading of this build
+	// uses the lists.
 	scans positionScans
 }
 

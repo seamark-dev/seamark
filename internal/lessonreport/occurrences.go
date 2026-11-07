@@ -4,9 +4,8 @@ import "maps"
 
 // This file holds the reading that the pin readings of one report share:
 // the coverage counts that the audit alone gives and the observation
-// windows. An occurrence count needs the capture archive, which this
-// build does not read. So the occurrence fields of every pin reading stay
-// at zero.
+// windows. This build has no source for an occurrence, so the
+// occurrence fields of every pin reading stay at zero.
 
 // CodeUnassessed is the unlinked code of feedback that awaits an
 // assessment. This build has no assessment, so no reading carries it. The
