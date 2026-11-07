@@ -1429,12 +1429,23 @@ func TestAdviceAfterResetReadsTheReturnOfAdvice(t *testing.T) {
 		}},
 		{name: "the exploration turn of the reset", change: func(r []timingAudit) []timingAudit { r[3].TurnSHA = "t3"; return r }},
 		{name: "the edit turn of the reset", change: func(r []timingAudit) []timingAudit { r[4].TurnSHA = "t3"; return r }},
+		// The two cases above also put the records in two turns. Here both
+		// records share the turn of the reset, so only the check of the
+		// reset turn can fail the case.
+		{name: "both injections in the turn of the reset", change: func(r []timingAudit) []timingAudit {
+			r[3].TurnSHA, r[4].TurnSHA = "t3", "t3"
+			return r
+		}, want: "the turn of the reset"},
 		{name: "the two records in two turns", change: func(r []timingAudit) []timingAudit { r[4].TurnSHA = "t5"; return r }},
 		{name: "a failed read", change: func(r []timingAudit) []timingAudit {
 			no := false
 			r[3].Read = &no
 			return r
 		}},
+		{name: "an exploration without a match digest", change: func(r []timingAudit) []timingAudit {
+			r[3].MatchSHA = ""
+			return r
+		}, want: "names no call"},
 		{name: "an edit without a match digest", change: func(r []timingAudit) []timingAudit { r[4].MatchSHA = ""; return r }},
 		{name: "two reset records", change: func(r []timingAudit) []timingAudit { return append(r, r[2]) }},
 	} {
