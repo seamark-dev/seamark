@@ -19,11 +19,14 @@ request copies, and generated context with markers, because they hold
 account data and no test reads them. It replaces the user name where
 it stands alone as a word, and the encoded bytes of every image or
 document. It keeps the prompts, tool calls, tool output, and every field
-that a decoder reads. A scratch directory name of the record's deny list
-becomes one fixed word where the text names it outside a full path, for
-example in a compaction summary. It refuses to finish when a deny-listed
-value is still present in any output file, for example the home path or
-the user name in a form that no rule replaces.
+that a decoder reads. A text that names the repository path in a form
+that no path pair replaces, for example without the /private prefix or
+in another case, keeps that form, and the check refuses the copy. A
+scratch directory name of the record's deny list becomes one fixed word
+where the text names it outside a full path, for example in a
+compaction summary. It refuses to finish when a deny-listed value is
+still present in any output file, for example the home path or the user
+name in a form that no rule replaces.
 
 For a Claude Code recording, an ID pass also replaces each ID that
 Claude Code or its API generates: the session, prompt, agent, tool use,
@@ -191,6 +194,22 @@ SUBAGENTS = "subagents"
 def claude_slug(path):
     """Return the project directory name that Claude Code derives."""
     return "".join(c if c.isascii() and c.isalnum() else "-" for c in path)
+
+
+def repo_forms(repo):
+    """Return the case-folded forms of the repository path that refuse a copy.
+
+    The script records the physical path. On macOS it starts with
+    /private, because /tmp and /var are links into /private. A client or a
+    model can name the path without that prefix or in another case. The
+    path pairs replace only the recorded spelling. The form without the
+    prefix is part of the form with it, so one search finds both. The
+    project directory name that Claude Code derives from the path is a
+    path pair too, so its form without the prefix also counts.
+    """
+    bare = repo[len("/private"):] if repo.startswith("/private/") else repo
+
+    return [bare.casefold(), claude_slug(bare).casefold()]
 
 
 def scratch_pattern(record):
@@ -418,6 +437,7 @@ class Sanitizer:
 
         self.deny = [record["home"], self.repo, record["seamark"], self.user]
         self.deny += record.get("deny", [])
+        self.repo_forms = repo_forms(self.repo)
         self.scratch = scratch_pattern(record)
 
         # The ID map of the Claude Code ID pass. It stays None for Codex.
@@ -433,18 +453,30 @@ class Sanitizer:
         if self.user_word:
             s = self.user_word.sub(USER, s)
 
-        s = CLAUDE_TASK_ROOT.sub(TASKS, s)
+        # A form of the repository path that no pair replaced keeps its
+        # text, so the check refuses the copy. The task-root rule and the
+        # scratch rule would change a part of that form, for example
+        # "/tmp/claude-501" or a scratch name. The changed machine path
+        # would then pass the check.
+        if not self.holds_repo(s):
+            s = CLAUDE_TASK_ROOT.sub(TASKS, s)
 
-        # The scratch rule comes after the path rules. Thus "claude-501" in
-        # a task path becomes part of the task placeholder, and only a name
-        # that no path rule replaced becomes the scratch placeholder.
-        if self.scratch:
-            s = self.scratch.sub(SCRATCH, s)
+            # The scratch rule comes after the path rules. Thus "claude-501"
+            # in a task path becomes part of the task placeholder, and only a
+            # name that no path rule replaced becomes the scratch placeholder.
+            if self.scratch:
+                s = self.scratch.sub(SCRATCH, s)
 
         s = TIMEZONE_TAG.sub("<timezone>%s</timezone>" % TIMEZONE, s)
         s = DATA_URL_BYTES.sub(r"\g<1>" + ATTACHMENT_BYTES, s)
 
         return s
+
+    def holds_repo(self, s):
+        """Return True when a text holds a form of the repository path."""
+        folded = s.casefold()
+
+        return any(form in folded for form in self.repo_forms)
 
     def value(self, v):
         """Sanitize every string inside a decoded JSON value."""
@@ -477,7 +509,7 @@ class Sanitizer:
         return shown_name(os.path.relpath(path, out_dir).replace(os.sep, "/"))
 
     def check(self, out_dir):
-        """Fail when a deny-listed value or an e-mail address remains.
+        """Fail when a deny-listed value, a repository path form, or an e-mail address remains.
 
         The deny-list match ignores case, because a tool can print the
         user name or a path in another case. A false hit only refuses
@@ -497,6 +529,10 @@ class Sanitizer:
                 for d in deny:
                     if d in folded:
                         problems.append("%s: holds a deny-listed value" % self.label(out_dir, path))
+
+                if self.holds_repo(data):
+                    problems.append("%s: holds a form of the repository path that no path pair replaces"
+                                    % self.label(out_dir, path))
 
                 for m in EMAIL.findall(data):
                     if m not in ALLOWED_EMAILS:

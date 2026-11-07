@@ -46,6 +46,13 @@ const (
 	sanitizeRecords    = 18
 )
 
+// sanitizeRepo is the scratch repository path of the sanitizer fixture.
+// It has the layout of a real recording on macOS: the /private prefix of
+// the physical path, the Claude Code task directory of user ID 501, and
+// two scratch names. The sanitizer reads this path as text only, so the
+// path does not exist.
+const sanitizeRepo = "/private/tmp/claude-501/native-20261108-release/claude-timing/repo"
+
 // sanitizeRecord returns the made-up record UUID number i. The values
 // fall as i grows, so a number that follows their sort order fails.
 func sanitizeRecord(i int) string {
@@ -109,8 +116,6 @@ type sanitizeFixture struct {
 
 // sanitizeReplacer fills the tokens of the fixture text.
 func sanitizeReplacer(root string) *strings.Replacer {
-	repo := filepath.Join(root, "repo")
-
 	pairs := []string{
 		"{S1}", sanitizeSession, "{S2}", sanitizeSession2, "{P1}", sanitizePrompt,
 		"{A1}", sanitizeAgentHook, "{A2}", sanitizeAgentLine, "{A3}", sanitizeAgentFile,
@@ -118,7 +123,7 @@ func sanitizeReplacer(root string) *strings.Replacer {
 		"{M1}", sanitizeMessage, "{M2}", sanitizeMessage2,
 		"{R0}", sanitizeDroppedReq, "{R1}", sanitizeRequest, "{R2}", sanitizeRequest2,
 		"{RUN}", sanitizeRun, "{B1}", sanitizeTask,
-		"{REPO}", repo, "{HOME}", filepath.Join(root, "operator-q7"), "{SLUG}", claudeProjectSlug(repo),
+		"{REPO}", sanitizeRepo, "{HOME}", filepath.Join(root, "operator-q7"), "{SLUG}", claudeProjectSlug(sanitizeRepo),
 	}
 
 	for i := 1; i <= sanitizeRecords; i++ {
@@ -157,14 +162,14 @@ func newSanitizeFixture(t *testing.T) sanitizeFixture {
 	root := t.TempDir()
 	fill := sanitizeReplacer(root).Replace
 	home := filepath.Join(root, "operator-q7")
-	project := filepath.Join(home, ".claude", "projects", claudeProjectSlug(filepath.Join(root, "repo")))
+	project := filepath.Join(home, ".claude", "projects", claudeProjectSlug(sanitizeRepo))
 	observed := filepath.Join(root, "observed")
 
 	for i, h := range sanitizeHooks {
 		name := fmt.Sprintf("p%d", i+1)
 		writeLines(t, filepath.Join(observed, name+".json"), fill(h.payload))
 
-		meta := fmt.Sprintf(`{"event":%q,"start_ns":%d,"process_cwd":%q}`, h.event, 1000+i, filepath.Join(root, "repo"))
+		meta := fmt.Sprintf(`{"event":%q,"start_ns":%d,"process_cwd":%q}`, h.event, 1000+i, sanitizeRepo)
 		writeLines(t, filepath.Join(observed, name+".meta.json"), meta)
 	}
 
@@ -203,8 +208,8 @@ func newSanitizeFixture(t *testing.T) sanitizeFixture {
 		`"attachment":{"type":"hook_success","toolUseID":"{T1}","content":"seamark post-edit lesson checks after this Write call"}}`))
 
 	record := map[string]any{
-		"client": ClaudeID, "client_version": "2.1.314", "repo": filepath.Join(root, "repo"), "home": home,
-		"seamark": filepath.Join(root, "bin", "seamark"), "instrumentation": filepath.Join(root, "repo", ".native-instrumentation"),
+		"client": ClaudeID, "client_version": "2.1.314", "repo": sanitizeRepo, "home": home,
+		"seamark": filepath.Join(root, "bin", "seamark"), "instrumentation": sanitizeRepo + "/.native-instrumentation",
 		"observed": observed, "runs": []int{1000}, "transcripts": transcripts,
 		"extras": map[string]string{"guard-context.jsonl": extra},
 	}
@@ -615,7 +620,7 @@ func TestNativeRecordSanitizeRefusesAnUnmappedID(t *testing.T) {
 		f := newSanitizeFixture(t)
 		record := readJSON(t, f.record)
 
-		project := filepath.Join(f.root, "operator-q7", ".claude", "projects", claudeProjectSlug(filepath.Join(f.root, "repo")))
+		project := filepath.Join(f.root, "operator-q7", ".claude", "projects", claudeProjectSlug(sanitizeRepo))
 		file := filepath.Join(project, "detached", "subagents", "agent-"+agent+".jsonl")
 		writeLines(t, file, `{"type":"user","message":{"role":"user","content":"go"}}`)
 
@@ -764,7 +769,8 @@ func TestNativeRecordDeniesTheScratchNames(t *testing.T) {
 }
 
 // The scratch names of the scratch rule test, as the record step denies
-// them. The first one is the Claude Code task directory of user ID 501.
+// them. They are the distinctive names of sanitizeRepo. The first one is
+// the Claude Code task directory of user ID 501.
 var sanitizeScratchNames = []any{"claude-501", "claude-timing", "native-20261108-release"}
 
 // newScratchFixture adds a PostCompact payload with a compaction summary
@@ -774,17 +780,26 @@ func newScratchFixture(t *testing.T, deny []any, summary func(home string) strin
 	t.Helper()
 
 	f := newSanitizeFixture(t)
-	observed := filepath.Join(f.root, "observed")
 
-	payload, err := json.Marshal(map[string]any{
+	return addDenyPayload(t, f, deny, map[string]any{
 		"session_id": sanitizeSession, "hook_event_name": "PostCompact", "trigger": "manual",
 		"compact_summary": summary(filepath.Join(f.root, "operator-q7")),
 	})
+}
+
+// addDenyPayload adds one hook payload after the payloads of the sanitizer
+// fixture, so the copy holds it as hooks/006-<event>.json. It also gives
+// the record a deny list.
+func addDenyPayload(t *testing.T, f sanitizeFixture, deny []any, payload map[string]any) sanitizeFixture {
+	t.Helper()
+
+	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	writeLines(t, filepath.Join(observed, "p6.json"), string(payload))
+	observed := filepath.Join(f.root, "observed")
+	writeLines(t, filepath.Join(observed, "p6.json"), string(data))
 	writeLines(t, filepath.Join(observed, "p6.meta.json"),
-		fmt.Sprintf(`{"event":"PostCompact","start_ns":1005,"process_cwd":%q}`, filepath.Join(f.root, "repo")))
+		fmt.Sprintf(`{"event":%q,"start_ns":1005,"process_cwd":%q}`, payload["hook_event_name"], sanitizeRepo))
 
 	record := readJSON(t, f.record)
 	record["deny"] = deny
@@ -862,4 +877,62 @@ func TestNativeRecordSanitizeReplacesTheScratchNames(t *testing.T) {
 			assert.NotContains(t, got, "operator-q7", "the message names no deny-listed value")
 		})
 	}
+}
+
+// TestNativeRecordSanitizeRefusesAnUnmatchedRepoPath proves the check of
+// the repository path forms before the scratch rule. The path pairs
+// replace only the recorded spelling of sanitizeRepo. A form without the
+// /private prefix, in another case, or as the project directory name of
+// such a form refuses the copy. The task-root rule and the scratch rule
+// must not change that form first, because a changed machine path passes
+// the deny check. A scratch name alone is no repository path, so it still
+// becomes the placeholder.
+func TestNativeRecordSanitizeRefusesAnUnmatchedRepoPath(t *testing.T) {
+	requireTools(t, "python3")
+
+	bare := strings.TrimPrefix(sanitizeRepo, "/private")
+
+	for _, tc := range []struct {
+		name, shown string
+		payload     map[string]any
+	}{
+		{
+			"a tool_input.file_path without the /private prefix", "hooks/006-PreToolUse.json",
+			map[string]any{"session_id": sanitizeSession, "hook_event_name": "PreToolUse", "tool_name": "Write",
+				"tool_input": map[string]any{"file_path": bare + "/notes/b.txt", "content": "b"}},
+		},
+		{
+			"the repository path in upper case", "hooks/006-PostCompact.json",
+			map[string]any{"session_id": sanitizeSession, "hook_event_name": "PostCompact", "trigger": "manual",
+				"compact_summary": "The notes are in " + strings.ToUpper(sanitizeRepo) + "/NOTES."},
+		},
+		{
+			"the project directory name of the path without the prefix", "hooks/006-PostToolUse.json",
+			map[string]any{"session_id": sanitizeSession, "hook_event_name": "PostToolUse", "tool_name": "Bash",
+				"tool_response": map[string]any{"stdout": claudeProjectSlug(bare) + "\n"}},
+		},
+	} {
+		t.Run("a refusal for "+tc.name, func(t *testing.T) {
+			f := addDenyPayload(t, newSanitizeFixture(t), sanitizeScratchNames, tc.payload)
+
+			got, err := f.sanitize(t, f.out)
+			require.Error(t, err)
+			assert.Contains(t, got, tc.shown+": holds a form of the repository path that no path pair replaces")
+			assert.NotContains(t, strings.ToLower(got), "claude-timing", "the message names no form of the path")
+		})
+	}
+
+	t.Run("a placeholder for a scratch name alone in tool output", func(t *testing.T) {
+		f := addDenyPayload(t, newSanitizeFixture(t), sanitizeScratchNames, map[string]any{
+			"session_id": sanitizeSession, "hook_event_name": "PostToolUse", "tool_name": "Bash",
+			"tool_response": map[string]any{"stdout": "claude-timing\nrecord.json\n"},
+		})
+
+		got, err := f.sanitize(t, f.out)
+		require.NoError(t, err, got)
+
+		post := readJSON(t, filepath.Join(f.out, "hooks", "006-PostToolUse.json"))
+		response, _ := post["tool_response"].(map[string]any)
+		assert.Equal(t, "native-scratch\nrecord.json\n", response["stdout"])
+	})
 }
