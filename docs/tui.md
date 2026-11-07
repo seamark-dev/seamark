@@ -371,28 +371,6 @@ and regions of a linked pin
   a removal again. After a refused save, `enter` reviews again from the
   current file and follows a moved entry.
 
-#### Check definitions and verification
-
-With lesson checks configured or relevant hooks installed, the CHECK
-section shows pin-ref, requested mode, check ID/kind/version, predicate,
-scope and each client's active state. An advisory pin with a check is
-listed, not evaluated. `i` edits the pin's mode and check binding; it
-does not infer a predicate from the note.
-
-`M` opens a check-definition form. It loads the cursor pin's definition
-when one exists, or starts a new definition. Choose the ID, checker kind
-and pattern (pattern checker only). `s` reviews the predicate, exact diff
-and impact on all pins using that ID; `y` writes through `distill.write`.
-This does not change any pin's binding. Invalid definitions and unsafe
-files block the save. See [configuration](configuration.md#executable-lesson-configuration).
-
-`V` runs default working-tree verification, not only the cursor pin or
-marked pins. It shows the shared verification result and appends an
-audit record, so it is an explicit action, not browsing. `V` in that
-view runs again. Freshness reads can mark the held result stale without
-rerunning the checker. A default selection names the audit and lock
-exclusions in `not covered`.
-
 **Selection sample** opens with `s` in a pin review or in the review of
 a lessons Settings group, while the review holds a candidate change. It
 runs the lesson selection of the edit hook
@@ -482,6 +460,28 @@ paste. A scope edit of a linked pin has no plain route, because it writes
 the ledger too and a hand edit of the regions unlinks the pin. The sample
 has no plain command. `seamark lessons --file <path>`
 lists up to 8 lessons of one file, with no pin budget.
+
+#### Check definitions and verification
+
+With lesson checks configured or relevant hooks installed, the CHECK
+section of Pins shows pin-ref, requested mode, check ID/kind/version,
+predicate, scope and each client's active state. An advisory pin with a
+check is listed, not evaluated. `i` edits the pin's mode and check
+binding; it does not infer a predicate from the note.
+
+`M` opens a check-definition form. It loads the cursor pin's definition
+when one exists, or starts a new definition. Choose the ID, checker kind
+and pattern (pattern checker only). `s` reviews the predicate, exact diff
+and impact on all pins using that ID; `y` writes through `distill.write`.
+This does not change any pin's binding. Invalid definitions and unsafe
+files block the save. See [configuration](configuration.md#executable-lesson-configuration).
+
+`V` runs default working-tree verification, not only the cursor pin or
+marked pins. It shows the shared verification result and appends an
+audit record, so it is an explicit action, not browsing. `V` in that
+view runs again. Freshness reads can mark the held result stale without
+rerunning the checker. A default selection names the audit and lock
+exclusions in `not covered`.
 
 ### 4 Doctor
 

@@ -261,8 +261,8 @@ document contains no handler.
 
 ### Delivery attribution
 
-Attribution is separate from hook installation and from the older
-capture/reminder recordings above:
+Attribution is separate from hook installation and from the native
+recordings above:
 
 | Item | Claude root | Claude child | Codex root | Codex child |
 | --- | --- | --- | --- | --- |
@@ -274,10 +274,10 @@ capture/reminder recordings above:
 
 No reviewed native timing recording upgrades these pending identities or
 boundaries. Own-call advice remains `same-call-only`; a command/MCP
-preparation remains receiver-unknown. Otherwise negative observation
-windows remain incomplete with `lane-coverage-unknown`. A guard's
-requested deny is not proof of prevention; current reports retain
-`prevented: 0`. See [lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
+preparation remains receiver-unknown. The delivery report reads every
+observation window as incomplete. A guard's requested deny is not proof
+of prevention; current reports retain `prevented: 0`. See
+[lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
 
 ### Disable and downgrade safely
 
@@ -293,10 +293,11 @@ seamark doctor
 ```
 
 These commands remove owned lesson-check/exploration entries, not the
-advisory reminders, accepted pins, policy, capture consent or archive.
-Inspect user-added duplicate handlers separately. A downgrade does not
-make a newer capture archive readable by an older binary; do not assume
-hook removal reverses an archive migration. Preserve a compatible backup.
+advisory reminders, accepted pins or policy. Inspect user-added duplicate
+handlers separately. A downgrade does not make a schema 8 database
+readable by an older binary, and hook removal does not reverse that
+upgrade. Preserve a compatible backup; see
+[Going back to an older seamark](configuration.md#going-back-to-an-older-seamark).
 For removal of the rest of an integration, see below.
 
 ## Choose an agent for inference
@@ -716,8 +717,7 @@ Before release:
   not close this prerequisite.
 
 Native recording commands require the operator's login, can cost tokens,
-and run in scratch workspaces. Cover the per-tool/context cases above;
-capture recordings alone do not verify timing or denial:
+and run in scratch workspaces. Cover the per-tool/context cases above:
 
 ```bash
 NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=claude

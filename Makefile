@@ -51,7 +51,8 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # Lesson-check tests: the check configuration, the working-tree
 # snapshot, both /1 checkers, and the verification surfaces. The new
 # packages run whole: lessoncheck, and privatedir, which holds the
-# private-directory helpers that lessoncheck shares with the archive.
+# private-directory and log helpers that lessoncheck shares with the
+# policy gate and the MCP usage log.
 # The CLI and the MCP server run only the tests whose names match
 # LESSON_CHECK_RUN, because -run applies to every package of one line.
 # Preparation (lessons --prepare, MCP change_set) and the exploration
@@ -62,9 +63,8 @@ agents-test: ## Run the agent-integration contract and characterization tests
 # The pre-edit hooks (lessons --guard --hook and lessons --baseline
 # --hook) run here too, through LessonsGuard and LessonsBaseline.
 # lessonreport, the read-only engine of the delivery report (delivery/1),
-# runs whole here too. It reads the audit logs and one archive snapshot,
-# and it reads the lesson-check stream, so a change to either reader
-# must fail this target.
+# runs whole here too. It reads the reminder log and the lesson-check
+# stream, so a change to either reader must fail this target.
 # mcpusage runs whole, and MCPUsage and LessonsStats select the MCP tool
 # counter and the stats section that reads it, because both write or read
 # a local log beside the audit logs.
@@ -82,8 +82,7 @@ lesson-check-race: ## Run the lesson-check tests with the race detector
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
 
 # The fixture is synthetic and deterministic, so this target reads no real
-# log, no archive, and no file under .seamark. The numbers depend on the
-# machine.
+# log and no file under .seamark. The numbers depend on the machine.
 report-bench: ## Measure the delivery report build over synthetic audit logs (offline, no model)
 	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -run '^$$' -bench '^BenchmarkBuild' -benchmem ./internal/lessonreport
 
