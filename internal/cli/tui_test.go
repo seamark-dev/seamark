@@ -55,7 +55,7 @@ func TestTUIWithoutTerminalPrintsPlainGuidance(t *testing.T) {
 // the command route of each lesson-check action of the console: the
 // verification of V, the mode edit of the pin form, the definitions that
 // M edits, and the init flags that install and remove the hooks, which
-// the console only shows (P4.10). A refused launch still writes nothing.
+// the console only shows. A refused launch still writes nothing.
 func TestTUIGuidanceNamesLessonChecks(t *testing.T) {
 	root := writeFixture(t)
 	before := snapshot(t, root)

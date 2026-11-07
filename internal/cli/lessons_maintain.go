@@ -58,7 +58,7 @@ const (
 // region keys of the entry and the ledger row change together. A key in
 // only one of them breaks liveness and coverage. confirmChecks is the
 // --confirm-checks flag: it lets the run move the regions of an
-// executable pin (contract K1).
+// executable pin.
 func runLessonsRetarget(cmd *cobra.Command, opts *options, raw string, confirmChecks bool) error {
 	return runLessonsMaintain(cmd, opts, raw, maintain.ActionRetarget, confirmChecks)
 }
@@ -108,10 +108,9 @@ func runLessonsMaintain(cmd *cobra.Command, opts *options, raw string, action ma
 // it prints the change to make by hand instead.
 //
 // A retarget that moves the regions of a check or enforce pin prints the
-// checker impact of the plan first (contract K1). With the gate on, it
-// then refuses and writes nothing unless confirmChecks is set (§4.1,
-// §5 row 113). An advisory pin has no impact, so its output keeps its
-// bytes.
+// checker impact of the plan first. With the gate on, it then refuses
+// and writes nothing unless confirmChecks is set. An advisory pin has
+// no impact, so its output keeps its bytes.
 func maintainPins(out io.Writer, deps maintain.Deps, action maintain.Action, ps []model.Proposal,
 	confirmChecks bool,
 ) error {
@@ -461,9 +460,9 @@ func printManual(out io.Writer, h handChange) {
 }
 
 // printImpact prints the checker impact block of each executable pin of
-// a plan (contract K1), then one empty line. It prints nothing for an
-// empty block, so a run on advisory pins keeps its bytes. ImpactLines
-// sanitizes the text from the file.
+// a plan, then one empty line. It prints nothing for an empty block, so
+// a run on advisory pins keeps its bytes. ImpactLines sanitizes the
+// text from the file.
 func printImpact(out io.Writer, impacts []lessoncheck.Impact) {
 	lines := lessoncheck.ImpactLines(impacts)
 	if len(lines) == 0 {
@@ -498,8 +497,8 @@ func joinCheckImpact(plan *maintain.Plan, deps maintain.Deps) {
 	}
 }
 
-// checksRefusal is the §4.1 refusal of a retarget that moves the regions
-// of an executable pin without --confirm-checks. The block above names
+// checksRefusal is the refusal of a retarget that moves the regions of
+// an executable pin without --confirm-checks. The block above names
 // every such pin. One error line names the first one, and the rerun
 // names the rows of the plan, so it changes exactly what was shown.
 func checksRefusal(im lessoncheck.Impact, ready []model.Proposal) error {

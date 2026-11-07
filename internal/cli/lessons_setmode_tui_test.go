@@ -1,11 +1,11 @@
 package cli
 
-// The parity test of lessons --set-mode and the console pin form (plan
-// step P4.9, R-17). Both surfaces call one engine route: the K6 splice
-// of the mode and check keys, and the K10 join of the active state. So
-// the same request gives the same file bytes and the same impact block.
-// Every root is a temporary directory; the hook entries name a link to
-// the test binary and never run.
+// The parity test of lessons --set-mode and the console pin form. Both
+// surfaces call one engine route: the splice of the mode and check
+// keys, and the capability join of the active state. So the same
+// request gives the same file bytes and the same impact block. Every
+// root is a temporary directory; the hook entries name a link to the
+// test binary and never run.
 
 import (
 	"strings"
@@ -26,7 +26,7 @@ import (
 )
 
 // parityRoot returns a root with an index, setModeYAML, the write gate
-// on, Claude Code enforce hooks, and the AC-1 sentinel. The pin form
+// on, Claude Code enforce hooks, and the invoker sentinel. The pin form
 // needs the index, because it reads the ledger for the link of a pin.
 func parityRoot(t *testing.T) (string, *invokerSentinel) {
 	t.Helper()
@@ -39,12 +39,12 @@ func parityRoot(t *testing.T) (string, *invokerSentinel) {
 	return root, newInvokerSentinel(t, root)
 }
 
-// TestLessonsSetModeMatchesTUIForm proves R-17 parity for the mode edit
-// (K6 step 6, AC-27). Each step runs lessons --set-mode on one root and
-// the console pin form, through the production services engine, on a
-// copy. The two pin files stay byte-equal after every step, and the
-// form review shows the impact block that the command prints, the K10
-// active line included.
+// TestLessonsSetModeMatchesTUIForm proves that the CLI and the console
+// give the same mode edit. Each step runs lessons --set-mode on one
+// root and the console pin form, through the production services
+// engine, on a copy. The two pin files stay byte-equal after every
+// step, and the form review shows the impact block that the command
+// prints, the active line included.
 func TestLessonsSetModeMatchesTUIForm(t *testing.T) {
 	cliRoot, cliSentinel := parityRoot(t)
 	tuiRoot, tuiSentinel := parityRoot(t)
@@ -94,7 +94,7 @@ func TestLessonsSetModeMatchesTUIForm(t *testing.T) {
 		require.True(t, plan.Confirmable, "%s: blocked: %v issues: %v", step.name, plan.Blockers, plan.Issues)
 
 		// The form shows the block that the command prints first,
-		// with the K10 active line, not the fixed text of milestone P1.
+		// with the active line of the capability join, not a fixed text.
 		block := strings.Join(lessoncheck.ImpactLines(plan.Impact), "\n") + "\n"
 		require.NotEqual(t, "\n", block, step.name)
 		assert.True(t, strings.HasPrefix(stdout, block), "%s: the form block\n%s\nthe command output\n%s",
@@ -128,8 +128,8 @@ func TestLessonsSetModeMatchesTUIForm(t *testing.T) {
 }
 
 // parityRef returns the binding of the pin with the pin-ref ref, as the
-// Pins view of the console reads it. The pin-ref resolves by the K2 rule
-// of the file that Pins lists.
+// Pins view of the console reads it. The pin-ref resolves by the
+// pin-ref rule of the file that Pins lists.
 func parityRef(t *testing.T, svc services.All, ref string) pinfile.EntryRef {
 	t.Helper()
 

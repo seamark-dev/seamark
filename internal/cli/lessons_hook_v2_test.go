@@ -17,7 +17,7 @@ import (
 )
 
 // The tests in this file hold the firing records of version 2 that the
-// lessons hooks write through the CLI (contract L3, K2 identity root).
+// lessons hooks write through the CLI.
 
 // hookRepo returns an indexed Git repository with one mined lesson and
 // one pin on a.go. The hooks then have something to say about a.go.
@@ -59,9 +59,9 @@ func resetPayload(session, event string) string {
 }
 
 // recordLinkedRoot makes the index of root record its repository root
-// through a symbolic link to the git top level. The K2 identity root
-// is then the link, and every digest over the git top level differs.
-// The index command writes the meta, so callers run it first.
+// through a symbolic link to the git top level. The identity root is
+// then the link, and every digest over the git top level differs. The
+// index command writes the meta, so callers run it first.
 func recordLinkedRoot(t *testing.T, root string) (top, link string) {
 	t.Helper()
 
@@ -182,8 +182,8 @@ func TestLessonsHookWritesAuditV2(t *testing.T) {
 
 // TestLessonsHookRecordsHeldBackPins proves the pin list of an edit-hook
 // record through the CLI. Only report and delivery tests checked it
-// before, so a held-back pin recorded as injected passed every CLI test
-// (P3 mutation probe 16).
+// before, so a held-back pin recorded as injected passed every CLI
+// test.
 func TestLessonsHookRecordsHeldBackPins(t *testing.T) {
 	root := hookRepo(t)
 
@@ -286,11 +286,11 @@ func TestLessonsHookOverflowReachesTheNextEdit(t *testing.T) {
 	assertFirstPins(edit("toolu-4"))
 }
 
-// TestLessonsHookNeverInvokes proves AC-1 for the record paths that
-// milestone P3 adds to the edit hook and the reset hook. An injected
-// edit, a suppressed repeat, an edit without a match, and a compaction
-// reset run with the recording switch on, without an agent, a model
-// CLI, or the network. The record checks prove that each write path ran.
+// TestLessonsHookNeverInvokes proves that the record paths of the edit
+// hook and the reset hook call no model. An injected edit, a suppressed
+// repeat, an edit without a match, and a compaction reset run with the
+// recording switch on, without an agent, a model CLI, or the network.
+// The record checks prove that each write path ran.
 func TestLessonsHookNeverInvokes(t *testing.T) {
 	// exploreRepo sets once-per-context delivery, so a repeat edit of the
 	// same file in the same context is suppressed. The sentinel adds to
@@ -334,9 +334,9 @@ func TestLessonsHookNeverInvokes(t *testing.T) {
 }
 
 func TestLessonsHookResetJoinsEditRecords(t *testing.T) {
-	// §5 row 121: the reset hook hashes over the identity root of the
-	// edit hook. The index here records a root through a symbolic link,
-	// so the git top level gives other digests.
+	// The reset hook hashes over the identity root of the edit hook. The
+	// index here records a root through a symbolic link, so the git top
+	// level gives other digests.
 	root := hookRepo(t)
 	top, link := recordLinkedRoot(t, root)
 
@@ -379,11 +379,11 @@ func TestLessonsHookResetJoinsEditRecords(t *testing.T) {
 	assert.Equal(t, integration.LaneRoot, rec.Lane)
 }
 
-// TestLessonsHookResetUsesTheIdentityRoot proves ruling R1 of the P3
-// review. The edit hook and the exploration hook key their state under
-// the K2 identity root, so the reset hook must reset that root. The
-// index here records a root through a symbolic link. A reset at the git
-// top level then writes a second state key and leaves the advice hidden.
+// TestLessonsHookResetUsesTheIdentityRoot proves that the reset hook
+// resets the state at the identity root. The edit hook and the
+// exploration hook key their state under that root. The index here
+// records a root through a symbolic link. A reset at the git top level
+// then writes a second state key and leaves the advice hidden.
 func TestLessonsHookResetUsesTheIdentityRoot(t *testing.T) {
 	root := exploreRepo(t)
 	top, link := recordLinkedRoot(t, root)
@@ -430,7 +430,7 @@ func TestLessonsHookResetUsesTheIdentityRoot(t *testing.T) {
 // only on PostCompact, the event that setup installs it for. Before the
 // decoder checked hook_event_name, a stray SessionStart payload with a
 // session id reset the edit state and the exploration state of that
-// session (P3 review, mutation probe B3).
+// session.
 func TestLessonsHookResetIgnoresOtherEvents(t *testing.T) {
 	root := exploreRepo(t)
 	recordEvaluationsOn(t)

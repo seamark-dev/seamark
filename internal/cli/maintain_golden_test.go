@@ -30,8 +30,8 @@ import (
 // froze the earlier CLI loops; each golden that a move changed names the
 // defect of the A0 report (§7) that it replaces. Some goldens still pin
 // known CLI defects on purpose. These are the wider selection and the
-// texts of the CLI extraction (A0 D4 to D7). Each waits for its own
-// decision, and a comment names each one.
+// texts of the CLI extraction. Each waits for its own decision, and a
+// comment names each one.
 // The console must not copy them. A fix updates the golden in the same
 // change.
 

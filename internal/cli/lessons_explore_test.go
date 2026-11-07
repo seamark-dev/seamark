@@ -16,9 +16,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// The tests in this file hold lessons --explore --hook (contract L2)
-// through the CLI. AC-26: exploration never touches the edit hook state.
-// BRIEF rule 15: the exploration hook never denies and runs no check.
+// The tests in this file hold lessons --explore --hook through the CLI.
+// Exploration never touches the edit hook state. The exploration hook
+// never denies and runs no check.
 
 // readPayload is a native Claude Code PostToolUse payload of the Read
 // tool for file. The decoder never reads tool_response, so the payload
@@ -87,8 +87,8 @@ func exploreStateFile(root string) string {
 	return filepath.Join(root, ".seamark", "lessons-explore-state.json")
 }
 
-// TestLessonsExploreHookNeverTouchesEditState proves AC-26 through the
-// CLI: exploration never reads or writes the edit hook state, so an
+// TestLessonsExploreHookNeverTouchesEditState proves through the CLI
+// that exploration never reads or writes the edit hook state, so an
 // edit of a pin right after a read of its file still gets the reminder.
 // It fails when exploration marks the edit state delivered.
 func TestLessonsExploreHookNeverTouchesEditState(t *testing.T) {
@@ -231,9 +231,9 @@ func TestLessonsExploreHookIgnoresShellAndOtherTools(t *testing.T) {
 	assert.True(t, firings[0].RecordEvaluations)
 }
 
-// TestLessonsExploreHookFailsOpen proves the L2 error rules: every
-// internal failure exits 0, and only a failed reply write is the hook's
-// own failure.
+// TestLessonsExploreHookFailsOpen proves the error rules of the
+// exploration hook: every internal failure exits 0, and only a failed
+// reply write is the hook's own failure.
 func TestLessonsExploreHookFailsOpen(t *testing.T) {
 	t.Run("input that the hook cannot use", func(t *testing.T) {
 		root := hookRepo(t)
@@ -351,8 +351,8 @@ func TestLessonsExploreHookFailsOpen(t *testing.T) {
 }
 
 // TestLessonsExploreHookWritesNothingForCodex proves that a client
-// without a structured read adapter writes nothing (contract L2): no
-// reply, no record, no state, also with the recording switch on.
+// without a structured read adapter writes nothing: no reply, no
+// record, no state, also with the recording switch on.
 func TestLessonsExploreHookWritesNothingForCodex(t *testing.T) {
 	root := hookRepo(t)
 	recordEvaluationsOn(t)
@@ -378,10 +378,10 @@ func TestLessonsExploreHookWritesNothingForCodex(t *testing.T) {
 	assert.Equal(t, before, treeListing(t, root), "the hook wrote no file")
 }
 
-// TestLessonsExploreHookNeverInvokes proves AC-1 for the exploration
-// hook: an advice, a suppressed repeat, a failed read, a read without a
-// match, and a read with the recording switch on run without an agent,
-// a model CLI, or the network.
+// TestLessonsExploreHookNeverInvokes proves that the exploration hook
+// calls no model: an advice, a suppressed repeat, a failed read, a read
+// without a match, and a read with the recording switch on run without
+// an agent, a model CLI, or the network.
 func TestLessonsExploreHookNeverInvokes(t *testing.T) {
 	root := exploreRepo(t)
 	sentinel := newInvokerSentinel(t, root)
@@ -407,9 +407,9 @@ func TestLessonsExploreHookNeverInvokes(t *testing.T) {
 	assert.Len(t, firings, 5, "one record per read with the recording switch on")
 }
 
-// TestLessonsExploreHookNeverDenies proves BRIEF rule 15 for the
-// exploration hook: an enforce pin with an executable check in scope of
-// the read file gives advice only. The reply has no decision field, the
+// TestLessonsExploreHookNeverDenies proves that the exploration hook
+// never denies: an enforce pin with an executable check in scope of the
+// read file gives advice only. The reply has no decision field, the
 // hook exits 0, and it touches no check state. A usage error exits 1.
 func TestLessonsExploreHookNeverDenies(t *testing.T) {
 	root := prepareRepo(t, true)
@@ -455,8 +455,8 @@ func TestLessonsExploreHookNeverDenies(t *testing.T) {
 			assert.Empty(t, stdout)
 		}
 
-		// The --client text grows with each hook mode (contracts §4.2
-		// subset rule): the head, each mode of this milestone, the tail.
+		// The --client text grows with each hook mode, so the test asserts
+		// only the head, the --explore mode, and the tail.
 		_, _, err := runIn(t, "", "-C", root, "lessons", "--list", "--client", "claude")
 		require.Error(t, err)
 
@@ -468,12 +468,13 @@ func TestLessonsExploreHookNeverDenies(t *testing.T) {
 	})
 }
 
-// TestLessonsExploreHookRefusesGrantForms proves the exclusivity rule of
-// contracts §4.2 for --explore. The skills grant `seamark lessons --file *`
-// and `seamark lessons --region *` without a prompt, so these forms must
-// not reach the exploration hook (triage item P3.12-2). Each form exits 1
-// before the dispatch and writes no state and no firing record. The test
-// fails when --explore accepts another mode or a decision flag.
+// TestLessonsExploreHookRefusesGrantForms proves that --explore
+// combines with no other lessons mode. The skills grant
+// `seamark lessons --file *` and `seamark lessons --region *` without a
+// prompt, so these forms must not reach the exploration hook. Each form
+// exits 1 before the dispatch and writes no state and no firing record.
+// The test fails when --explore accepts another mode or a decision
+// flag.
 func TestLessonsExploreHookRefusesGrantForms(t *testing.T) {
 	root := exploreRepo(t)
 	payload := readPayload(filepath.Join(root, "a.go"), "session-1", "toolu-1")

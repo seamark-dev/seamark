@@ -135,12 +135,12 @@ func checkLegacyFixture(t *testing.T) string {
 }
 
 // TestCheckLessonsAbsentKeepsPlainJSON freezes the stdout of plain
-// `check` and `check --json` as 96e14ef prints it, before `--lessons`
-// exists (BRIEF rule 14, contracts K5). Both diff sources are covered:
-// a piped diff and the `git diff HEAD` fallback. The two sources give
-// different bytes, so each golden proves that its branch of readDiff
-// ran. Stderr is not frozen, because the index refresh line depends on
-// the run order.
+// `check` and `check --json` as it was before `--lessons` existed,
+// because a call without the flag must keep its bytes. Both diff
+// sources are covered: a piped diff and the `git diff HEAD` fallback.
+// The two sources give different bytes, so each golden proves that its
+// branch of readDiff ran. Stderr is not frozen, because the index
+// refresh line depends on the run order.
 func TestCheckLessonsAbsentKeepsPlainJSON(t *testing.T) {
 	const (
 		pipedHuman = `verdict  require_approval (mode: warn)
@@ -200,10 +200,10 @@ advisory — recurring lessons for touched files (not part of the verdict)
 	}
 }
 
-// The tests of check --lessons (plan step P1.10; contracts K5, §4.1,
-// §4.2). Every test builds a temporary repository with the lessons of
-// verifyLessonsYAML and a policy, and runs the command under the AC-1
-// sentinel. Nothing reads the repository of this checkout.
+// The tests of check --lessons. Every test builds a temporary
+// repository with the lessons of verifyLessonsYAML and a policy, and
+// runs the command under the invoker sentinel. Nothing reads the
+// repository of this checkout.
 
 // checkLessonsPolicy asks for approval of every change. In warn mode it
 // never blocks. With --enforce it blocks every diff that names a file.
@@ -328,14 +328,14 @@ func combinedLine(state, policy, lessons string) string {
 	return "combined: " + state + " (policy " + policy + ", lessons " + lessons + ")\n"
 }
 
-// TestCheckLessonsExitTable proves the check --lessons rows of the K5
-// exit table through the real Execute, in a child process: 0 when the
-// policy does not block and the lessons exit 0; 1 when the policy does
-// not block and the lessons are incomplete; 2 when the policy blocks or
-// a lesson check reports a violation; 1 for an error before the
-// evaluation. A blocking policy keeps its stderr line. The JSON exit
-// code equals the process exit code. The text form is the plain check
-// text, a blank line, the lessons --verify text, and the combined line.
+// TestCheckLessonsExitTable proves the exit table of check --lessons
+// through the real Execute, in a child process: 0 when the policy does
+// not block and the lessons exit 0; 1 when the policy does not block
+// and the lessons are incomplete; 2 when the policy blocks or a lesson
+// check reports a violation; 1 for an error before the evaluation. A
+// blocking policy keeps its stderr line. The JSON exit code equals the
+// process exit code. The text form is the plain check text, a blank
+// line, the lessons --verify text, and the combined line.
 func TestCheckLessonsExitTable(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -515,12 +515,12 @@ func TestCheckLessonsExitTable(t *testing.T) {
 	})
 }
 
-// TestCheckLessonsJSONEnvelope proves the check-lessons/1 document
-// (contract K5): the policy member is the exact object of plain
-// check --json, the lessons member is the lessons --verify document,
-// and combined comes from lessoncheck.Combine. The lesson checks read
-// the working tree, so an untracked file in scope is evaluated although
-// the piped diff omits it (AC-29, §5 row 25).
+// TestCheckLessonsJSONEnvelope proves the check-lessons/1 document: the
+// policy member is the exact object of plain check --json, the lessons
+// member is the lessons --verify document, and combined comes from
+// lessoncheck.Combine. The lesson checks read the working tree, so an
+// untracked file in scope is evaluated although the piped diff omits
+// it.
 func TestCheckLessonsJSONEnvelope(t *testing.T) {
 	root, sentinel := checkLessonsFixture(t)
 	checkLessonsEditHandler(t, root)
@@ -650,9 +650,9 @@ func TestCheckLessonsNamesOwnAudit(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestCheckLessonsNeverInvokes proves AC-1 for check --lessons: the
-// text and JSON forms, a piped diff, and --enforce start no agent, no
-// model CLI, and no network client.
+// TestCheckLessonsNeverInvokes proves that check --lessons calls no
+// model: the text and JSON forms, a piped diff, and --enforce start no
+// agent, no model CLI, and no network client.
 func TestCheckLessonsNeverInvokes(t *testing.T) {
 	root, sentinel := checkLessonsFixture(t)
 	verifyEditAsset(t, root)

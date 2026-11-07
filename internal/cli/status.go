@@ -32,7 +32,7 @@ and asks how much its answers can be trusted.`,
 			defer func() { _ = st.Close() }() // read-only
 
 			// The lesson-check report identifies each hook binary against
-			// this binary and its version (contract K10).
+			// this binary and its version.
 			s, err := status.GatherAs(st, root, integration.SelfIdentity(version))
 			if err != nil {
 				return err

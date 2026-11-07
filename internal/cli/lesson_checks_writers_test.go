@@ -1,11 +1,11 @@
 package cli
 
 // Tests of the lesson-check keys through the commands that write the
-// pin file or the ledger (contract K1, writer table, AC-27). A state
-// import never writes lessons.yaml, and a distillation and its apply
-// never write a mode or a check (§5 row 111). A retarget of an
-// executable pin shows the checker impact before the apply (K1 "Checker
-// impact before apply", §5 row 113).
+// pin file or the ledger. Each writer keeps the mode and the check of a
+// reviewed pin. A state import never writes lessons.yaml, and a
+// distillation and its apply never write a mode or a check, so a new
+// pin stays advisory. A retarget of an executable pin shows the checker
+// impact before the apply.
 
 import (
 	"os"
@@ -102,9 +102,9 @@ func TestLessonsCheckImpactCandidate(t *testing.T) {
 	}
 }
 
-// writersChecksLessons is the spec example of a check configuration
-// with one more, advisory pin and a tuning value. Every command below
-// must keep it byte for byte.
+// writersChecksLessons is the example check configuration with one
+// more, advisory pin and a tuning value. Every command below must keep
+// it byte for byte.
 const writersChecksLessons = `threshold: 3
 lesson_checks_version: 1
 checks:
@@ -143,11 +143,11 @@ func writersPinChecks(t *testing.T, text string) []string {
 	return out
 }
 
-// TestStateImportLeavesLessonsYAML proves the K1 writer row "State
-// export/import". The bundle holds proposal rows and distillation
-// marks, never lessons.yaml. So an import into another workspace and
-// into the source workspace leaves the pin file with its checks byte for
-// byte, with its mode bits.
+// TestStateImportLeavesLessonsYAML proves that a state export and
+// import never write lessons.yaml. The bundle holds proposal rows and
+// distillation marks, never lessons.yaml. So an import into another
+// workspace and into the source workspace leaves the pin file with its
+// checks byte for byte, with its mode bits.
 func TestStateImportLeavesLessonsYAML(t *testing.T) {
 	src := maintainWorkspace(t, nil)
 	maintainWriteLessons(t, src, writersChecksLessons, 0o640)
@@ -192,12 +192,12 @@ func TestStateImportLeavesLessonsYAML(t *testing.T) {
 	})
 }
 
-// TestLessonsDistillNeverWritesMode proves §5 row 111 and AC-27 through
-// the commands. A distillation writes only the ledger, so lessons.yaml
-// stays. The apply of its proposals adds pins without a mode key and a
-// check key, so the new pins are advisory. The enforced pin and the
-// checks map stay byte for byte. The agent is goldenAgent, a shell
-// script, so no model runs.
+// TestLessonsDistillNeverWritesMode proves through the commands that a
+// new pin stays advisory. A distillation writes only the ledger, so
+// lessons.yaml stays. The apply of its proposals adds pins without a
+// mode key and a check key, so the new pins are advisory. The enforced
+// pin and the checks map stay byte for byte. The agent is goldenAgent,
+// a shell script, so no model runs.
 func TestLessonsDistillNeverWritesMode(t *testing.T) {
 	root := goldenWorkspace(t, goldenFindings)
 	maintainWriteLessons(t, root, writersChecksLessons, 0o644)
@@ -281,8 +281,8 @@ pin:
 
 // confirmChecksWorkspace seeds confirmChecksLessons, the applied rows p1
 // (the enforced pin) and p2 (the advisory pin), and the write gate. It
-// installs the AC-1 sentinel after the config, because the sentinel adds
-// its agent section to config.yaml.
+// installs the invoker sentinel after the config, because the sentinel
+// adds its agent section to config.yaml.
 func confirmChecksWorkspace(t *testing.T, gateOn bool) (string, *invokerSentinel) {
 	t.Helper()
 
@@ -303,7 +303,7 @@ func confirmChecksWorkspace(t *testing.T, gateOn bool) (string, *invokerSentinel
 	return root, newInvokerSentinel(t, root)
 }
 
-// confirmChecksBlock is the K1 impact block of the retarget of the
+// confirmChecksBlock is the checker impact block of the retarget of the
 // enforced pin, as the CLI prints it: the five lines and an empty line.
 func confirmChecksBlock(t *testing.T) string {
 	t.Helper()
@@ -326,13 +326,13 @@ func confirmChecksBlock(t *testing.T) string {
 		"  active: requested; inactive: not-installed\n\n"
 }
 
-// TestLessonsRetargetNeedsConfirmChecks proves §5 row 113 and the §4.1
-// row of --confirm-checks. With the gate on, a retarget that moves the
-// regions of an executable pin prints the K1 block, refuses with exit
-// code 1, and writes nothing. The rerun with --confirm-checks applies
-// and keeps the mode and the check. With the gate off, the block comes
-// before the lines to change by hand. A retarget of advisory pins keeps
-// its bytes. No path calls a model (AC-1).
+// TestLessonsRetargetNeedsConfirmChecks proves the --confirm-checks
+// rule. With the gate on, a retarget that moves the regions of an
+// executable pin prints the impact block, refuses with exit code 1, and
+// writes nothing. The rerun with --confirm-checks applies and keeps the
+// mode and the check. With the gate off, the block comes before the
+// lines to change by hand. A retarget of advisory pins keeps its bytes.
+// No path calls a model.
 func TestLessonsRetargetNeedsConfirmChecks(t *testing.T) {
 	t.Run("the gate on refuses without the flag", func(t *testing.T) {
 		root, sentinel := confirmChecksWorkspace(t, true)

@@ -5,12 +5,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
-// hookIdentityRoot returns the identity root of the hook handlers
-// (contract K2, identity root). Every session, match, context, and turn
-// digest of a hook record hashes over it. The edit and reset records of
-// one receiver then carry one digest, also when the index records a root
-// that differs from the git top level, for example a path through a
-// symbolic link.
+// hookIdentityRoot returns the identity root of the hook handlers.
+// Every session, match, context, and turn digest of a hook record
+// hashes over it. The edit and reset records of one receiver then carry
+// one digest, also when the index records a root that differs from the
+// git top level, for example a path through a symbolic link.
 //
 // The root is the repository root that the index meta records, else
 // the git top level. workspace.Probe reads the meta read-only, so the

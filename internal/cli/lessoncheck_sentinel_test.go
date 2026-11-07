@@ -14,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file holds the AC-1 sentinel of the lesson-check surfaces (plan
-// conventions). A test of a surface that must call no model runs the
-// surface under the sentinel and ends with requireNoCall. Later
-// milestones reuse the helper for every new CLI surface.
+// This file holds the invoker sentinel of the lesson-check surfaces. A
+// test of a surface that must call no model runs the surface under the
+// sentinel and ends with requireNoCall. A new CLI surface reuses the
+// helper.
 //
 // The sentinel has three parts:
 //   - agent.argv in .seamark/config.yaml names a stub script;
