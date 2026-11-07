@@ -521,6 +521,32 @@ func (r guardRecording) assertGuardStatus(t *testing.T, name string, status int)
 	}), "case %s: the debug log shows the guard command with exit status %d", name, status)
 }
 
+// noPreWriteNote is the skip note of a case without the PreToolUse
+// payload of its tool. Claude Code checks the tool input before any hook.
+// It returns an input that fails that check, for example an Edit whose
+// old_string is not in the file, as a tool_use_error result. That call
+// fires neither PreToolUse nor PostToolUseFailure. The replay does not
+// read the transcript, so it cannot tell that refusal from a model that
+// made no call, and the note names both causes.
+func noPreWriteNote(name, tool string) string {
+	return "case " + name + ": no PreToolUse " + tool + " payload; the client refused the call in its input " +
+		"validation before any hook, or the model made no call"
+}
+
+// TestNoPreWriteNoteNamesBothCauses checks the skip note of a case
+// without a pre-write payload. It names the case, the tool, the refusal
+// in the input validation before any hook, and a model without the call.
+func TestNoPreWriteNoteNamesBothCauses(t *testing.T) {
+	assert.Equal(t, "case failure-reach: no PreToolUse Edit payload; the client refused the call in its input "+
+		"validation before any hook, or the model made no call", noPreWriteNote(guardFailureReach, claudeToolEdit))
+
+	note := noPreWriteNote(guardUnknownEdit, claudeToolWrite)
+	assert.Contains(t, note, "case unknown-edit:")
+	assert.Contains(t, note, "no PreToolUse Write payload")
+	assert.Contains(t, note, "refused the call in its input validation before any hook")
+	assert.Contains(t, note, "or the model made no call")
+}
+
 // assertChild checks that a payload names the child lane of the agent
 // that SubagentStart announced, and that the deny record names its
 // receiver.
@@ -794,8 +820,7 @@ func TestNativeRecordClaudeGuardRecording(t *testing.T) {
 	t.Run("an Edit that the guard cannot project is denied", func(t *testing.T) {
 		name := guardUnknownEdit
 		if !r.has(name, "PreToolUse", claudeToolEdit) {
-			t.Skipf("case %s: no PreToolUse Edit payload; the client refused the call before the hook, "+
-				"or the model made no call", name)
+			t.Skip(noPreWriteNote(name, claudeToolEdit))
 		}
 
 		_, deny := r.assertDenied(t, name, claudeToolEdit)
@@ -806,8 +831,7 @@ func TestNativeRecordClaudeGuardRecording(t *testing.T) {
 	t.Run("one Edit on an absent file outside every pin", func(t *testing.T) {
 		name := guardAbsentEdit
 		if !r.has(name, "PreToolUse", claudeToolEdit) {
-			t.Skipf("case %s: no PreToolUse Edit payload; the client refused the call before the hook, "+
-				"or the model made no call", name)
+			t.Skip(noPreWriteNote(name, claudeToolEdit))
 		}
 
 		e := r.sequence(t, name, "UserPromptSubmit", "PreToolUse:"+claudeToolEdit)[1]
@@ -885,7 +909,7 @@ func TestNativeRecordClaudeGuardRecording(t *testing.T) {
 	t.Run("a failed Edit without a baseline gets a PostToolUseFailure reply", func(t *testing.T) {
 		name := guardFailureReach
 		if !r.has(name, "PreToolUse", claudeToolEdit) {
-			t.Skipf("case %s: no PreToolUse Edit payload; the model made no Edit call", name)
+			t.Skip(noPreWriteNote(name, claudeToolEdit))
 		}
 
 		if !r.has(name, "PostToolUseFailure", claudeToolEdit) {
