@@ -109,9 +109,7 @@ func openIndexProbe(opts *options) (*store.Store, workspace.IndexProbe, error) {
 // under the recorded root and the ledger of this database: lessons
 // --apply, --retarget, and --prune. It refuses when the two lie in two
 // repositories, as the console does. The refusal comes before the open,
-// because the open migrates an older schema. It also comes before the
-// deletion replay of each command, which writes the index and the
-// archive.
+// because the open migrates an older schema.
 //
 // A refused command writes nothing and prints no change to make by
 // hand, also with distill.write off. That answer reads the write gate of

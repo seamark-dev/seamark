@@ -868,13 +868,12 @@ func TestLessonsVerifyFileThroughALinkedRoot(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
-// TestLessonsVerifyFileFromALinkedProcessDirectory proves fix item F-A
-// of the P1 review (contracts K4 Addition of the P1 fix round). The CLI
-// resolves the links of the process directory before the inside check,
-// as capture resolves the hook cwd (correction-learning F6). So a link
-// from outside the repository into it gives paths inside the repository.
-// A link in the tree that leads outside gives the outside error. The
-// value itself stays lexical, so a link that it names is never followed.
+// TestLessonsVerifyFileFromALinkedProcessDirectory proves that the CLI
+// resolves the links of the process directory before the inside check.
+// So a link from outside the repository into it gives paths inside the
+// repository. A link in the tree that leads outside gives the outside
+// error. The value itself stays lexical, so a link that it names is
+// never followed.
 func TestLessonsVerifyFileFromALinkedProcessDirectory(t *testing.T) {
 	root, sentinel := verifyFixture(t, t.TempDir())
 

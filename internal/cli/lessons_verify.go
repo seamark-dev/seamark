@@ -91,8 +91,8 @@ func runLessonsVerify(cmd *cobra.Command, opts *options, files []string, asJSON 
 
 	if asJSON {
 		// Two-space indentation matches the other JSON documents of the
-		// CLI (status, doctor, capture). The indentation is not part of
-		// the contract.
+		// CLI (status, doctor). The indentation is not part of the
+		// contract.
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
 
@@ -211,13 +211,11 @@ func verifyAbs(input string) (string, error) {
 }
 
 // processDir returns the process directory with its symbolic links
-// resolved. The rule comes from capture.resolvePath, which compares the
-// hook cwd with the bound root after the same resolution
-// (correction-learning F6). The kernel opens a relative path from the
-// physical directory. So a link from outside the repository into it
-// selects paths inside the repository. A link in the tree that leads
-// outside selects paths outside it. A directory that does not resolve
-// keeps its tail as text below the nearest ancestor that resolves.
+// resolved. The kernel opens a relative path from the physical
+// directory. So a link from outside the repository into it selects
+// paths inside the repository. A link in the tree that leads outside
+// selects paths outside it. A directory that does not resolve keeps its
+// tail as text below the nearest ancestor that resolves.
 func processDir() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {

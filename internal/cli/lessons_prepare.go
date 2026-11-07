@@ -78,7 +78,7 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 
 	// The badges of each check come from the capability report of this
 	// workspace, so preparation computes no badge. Every preparation runs
-	// this read, so the narrow reading avoids the Git processes of Inspect.
+	// this read, so the narrow reading reads only the hook documents.
 	capability := integration.LessonCapability(integration.Builtin().InspectLessonHooks(root), root, integration.SelfIdentity(version))
 
 	// Config and ConfigErr stay nil, so Prepare loads lessons.yaml from
@@ -120,8 +120,8 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 	}
 
 	// Two-space indentation matches the other JSON documents of the CLI
-	// (lessons --verify, status, doctor, capture). The indentation is not
-	// part of the contract.
+	// (lessons --verify, status, doctor). The indentation is not part of
+	// the contract.
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
 

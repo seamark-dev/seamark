@@ -3,13 +3,9 @@ package cli
 import (
 	"encoding/json"
 	"errors"
-	"go/parser"
-	"go/token"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,11 +19,12 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// The tests of the two pre-edit hooks (plan step P4.4; contracts K7,
-// K8, K9, §4): lessons --guard --hook and lessons --baseline --hook.
-// Every test builds a temporary repository and runs the hooks under the
-// AC-1 sentinel. Nothing reads or writes the repository of this checkout
-// (BRIEF rule 7), and no test opens a real archive.
+// The tests of the two pre-edit hooks: lessons --guard --hook and
+// lessons --baseline --hook. Every test builds a temporary repository
+// and runs the hooks under the invoker sentinel. The sentinel records
+// each start of an agent or of a model client, so a test proves that a
+// hook calls no model. Nothing reads or writes the repository of this
+// checkout.
 
 // guardLessonsYAML arms two enforce pins and one check pin. The note of
 // the check pin and of the advisory pin use the word enforce: a note
@@ -728,11 +725,11 @@ func TestLessonsGuardHookFailsClosed(t *testing.T) {
 	})
 }
 
-// TestLessonsGuardHookAllowsWithEmptyReply proves the allow path of
-// contract K8: exit 0 with nothing on stdout or stderr, a pending record
-// for the paths that an executable pin scopes (contract K7), and a guard
-// record without any capture opt-in. Every digest hashes over the K2
-// identity root, also when the index records a linked root.
+// TestLessonsGuardHookAllowsWithEmptyReply proves the allow path of the
+// guard: exit 0 with nothing on stdout or stderr, a pending record for
+// the paths that an executable pin scopes, and one guard record. Every
+// digest hashes over the identity root, also when the index records a
+// linked root.
 func TestLessonsGuardHookAllowsWithEmptyReply(t *testing.T) {
 	root, sentinel := guardFixture(t)
 
@@ -815,12 +812,9 @@ func TestLessonsGuardHookAllowsWithEmptyReply(t *testing.T) {
 		assert.Empty(t, rec.Paths)
 	})
 
-	t.Run("no record needs the capture opt-in, and no archive appears", func(t *testing.T) {
+	t.Run("one guard record per run, with no raw identifier", func(t *testing.T) {
 		assert.Len(t, checkRecords(t, root), 5, "one guard record per run")
 		requireNoRawIDs(t, root)
-
-		_, err := os.Lstat(filepath.Join(root, ".seamark", "private"))
-		assert.ErrorIs(t, err, fs.ErrNotExist)
 	})
 
 	t.Run("every digest hashes over the identity root", func(t *testing.T) {
@@ -1112,51 +1106,6 @@ func TestLessonsGuardHookCodexApplyPatch(t *testing.T) {
 	})
 
 	sentinel.requireNoCall(t)
-}
-
-// TestLessonsGuardHookNeverOpensArchive proves that the pre-edit hooks
-// never open or create the capture archive: the K9 record needs no
-// capture opt-in (spec L263). A run without an archive creates none,
-// and the handler file imports neither the archive nor the capture
-// package.
-func TestLessonsGuardHookNeverOpensArchive(t *testing.T) {
-	runs := func(t *testing.T, root string) {
-		t.Helper()
-
-		_, _, err := guardHook(t, root, claudeWriteEvent(t, root, "generated/a.txt", "changed\n"))
-		requireDenied(t, err)
-
-		_, _, err = guardHook(t, root, claudeWriteEvent(t, root, "docs/readme.md", "readme\nmore\n"))
-		require.NoError(t, err)
-
-		_, _, err = baselineHook(t, root, claudeWriteEvent(t, root, "src/handler.go", "package src\n"))
-		require.NoError(t, err)
-	}
-
-	t.Run("without an archive", func(t *testing.T) {
-		root, sentinel := guardFixture(t)
-
-		runs(t, root)
-
-		_, err := os.Lstat(filepath.Join(root, ".seamark", "private"))
-		assert.ErrorIs(t, err, fs.ErrNotExist, "no hook creates the archive")
-		assert.Len(t, checkRecords(t, root), 3, "the records need no capture opt-in")
-
-		sentinel.requireNoCall(t)
-	})
-
-	t.Run("the handler file imports no archive or capture package", func(t *testing.T) {
-		file, err := parser.ParseFile(token.NewFileSet(), "lessons_guard.go", nil, parser.ImportsOnly)
-		require.NoError(t, err)
-
-		for _, spec := range file.Imports {
-			path, err := strconv.Unquote(spec.Path.Value)
-			require.NoError(t, err)
-
-			assert.NotEqual(t, "github.com/seamark-dev/seamark/internal/archive", path)
-			assert.NotEqual(t, "github.com/seamark-dev/seamark/internal/capture", path)
-		}
-	})
 }
 
 // TestLessonsGuardHookCallsNoInvoker proves AC-1 for the guard: every

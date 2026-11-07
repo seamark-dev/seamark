@@ -19,9 +19,8 @@ import (
 	"github.com/seamark-dev/seamark/internal/reviews"
 )
 
-// The tests of lessons --prepare (plan step P3.7; contracts L1, §4).
-// Every test builds a temporary repository. Nothing reads the
-// repository or the archive of this checkout.
+// The tests of lessons --prepare. Every test builds a temporary
+// repository. Nothing reads the repository of this checkout.
 
 // prepareLessonsYAML holds three pins. keep-main-small covers a.go,
 // frozen-assets is an enforce pin with a check on generated/, and

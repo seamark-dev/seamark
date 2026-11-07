@@ -30,8 +30,8 @@ import (
 //
 // Neither handler is a part of lessons --hook. That hook stays advisory
 // and fail-open, and it never runs a check.
-// Neither handler opens the capture archive or reads the capture opt-in,
-// because a lesson-check audit record needs no opt-in.
+// Neither handler reads the recording switch, because a lesson-check
+// audit record does not depend on it.
 
 // preEditConflicts lists the lessons modes and decision flags that
 // --guard and --baseline refuse, in the order of the help text. The

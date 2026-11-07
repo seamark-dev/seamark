@@ -24,8 +24,7 @@ import (
 // the lesson-check audit stream and deletes the pending baseline.
 //
 // The hook never denies, rewinds, or reverts an edit, because the tool
-// already ran (spec L122). Every run exits 0. The hook needs no capture
-// opt-in and never opens the capture archive (spec L263).
+// already ran. Every run exits 0.
 
 // errVerifyHookFlags is the refusal of a post-edit hook call with a
 // selection or an output form (contracts §4.1). The hook reads its

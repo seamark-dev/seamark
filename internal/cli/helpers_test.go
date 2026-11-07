@@ -17,8 +17,6 @@ import (
 )
 
 // This file holds test helpers that tests of several commands share.
-// They are not in the capture and live review tests, so a test of lesson
-// checks or preparation builds without those files.
 
 // stored reads one proposal row in any status.
 func stored(t *testing.T, root string, id int64) model.Proposal {
@@ -72,5 +70,5 @@ func requireExitOne(t *testing.T, err error) {
 
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, gate.ErrBlocked) || errors.Is(err, lessoncheck.ErrViolation),
-		"an association command never exits with 2")
+		"a refusal never exits with 2")
 }
