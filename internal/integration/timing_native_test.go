@@ -70,6 +70,13 @@ const (
 // custom_instructions.
 const timingCompactInstructions = "Keep the summary to one short sentence and name no file path."
 
+// timingAfterCompactFile is the fixture file that the case after the
+// compaction reads and edits. It lies in the region of the timing pin.
+// No earlier run reads or changes it, so the compaction cannot restore its
+// content. The prompt does not name its line, so the model reads the file
+// to write the edit.
+const timingAfterCompactFile = "timing/after.txt"
+
 // timingRecording is one reviewed native timing recording.
 type timingRecording struct {
 	dir      string
@@ -815,7 +822,7 @@ func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 			require.True(t, slices.ContainsFunc(events, func(e timingEvent) bool {
 				return e.hook.Event == step.event && e.tool() == step.tool
 			}), "case %s: no %s %s payload: the model made no call, or Claude Code answered the call before any hook "+
-				"(an Edit whose text beta is not in the file, or a Read stub before the hooks); record the case again",
+				"(an Edit whose old text is not in the file); record the case again",
 				name, step.event, step.tool)
 		}
 
@@ -829,6 +836,19 @@ func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 				"%s: the run compacts again", e.hook.File)
 		}
 
+		// The compaction restores the content of files that the session
+		// read or changed. A run of the session before the compaction must
+		// not name the file, or the model can edit it without a Read.
+		for _, earlier := range []string{timingPriorResult, timingNewModelStep, timingCompactReset} {
+			for _, e := range r.events[r.runs[earlier]] {
+				input, _ := e.raw["tool_input"].(map[string]any)
+				if p := nativeString(input, "file_path"); p != "" {
+					assert.NotEqual(t, timingAfterCompactFile, r.rel(nativeString(e.raw, "cwd"), p),
+						"%s: case %s names the file before the compaction; record the case again", e.hook.File, earlier)
+				}
+			}
+		}
+
 		post := r.sequence(t, timingCompactReset, claudeEventPostCompact)[0]
 		reset, err := claudeResets{}.DecodeReset(post.payload)
 		require.NoError(t, err, post.hook.File)
@@ -838,16 +858,16 @@ func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 
 		read := claudeTimingExplore(t, steps[2])
 		assert.True(t, read.Read)
-		assert.Equal(t, "timing/prior.txt", r.rel(read.CWD, read.Paths[0]))
+		assert.Equal(t, timingAfterCompactFile, r.rel(read.CWD, read.Paths[0]))
 		assertClaudeRoot(t, name, read.EventMeta)
 		assert.Equal(t, reset.SessionID, read.SessionID, "the run continues the compacted session")
 		assert.Equal(t, edit.SessionID, read.SessionID, "the compacted session holds the earlier edit")
-		assert.Equal(t, edit.Context.ID, read.Context.ID, "the compacted context reads the file again")
+		assert.Equal(t, edit.Context.ID, read.Context.ID, "the context of the earlier edit reads the file")
 		assert.NotEqual(t, reset.Turn, read.Turn, "the read belongs to a later turn than the compaction")
 		r.claudeCall(t, steps[2], read.EventMeta)
 
 		again := claudeTimingEdit(t, steps[3])
-		assert.Equal(t, []string{"timing/prior.txt"}, r.rels(again))
+		assert.Equal(t, []string{timingAfterCompactFile}, r.rels(again))
 		assertClaudeRoot(t, name, again.EventMeta)
 		assert.Equal(t, read.SessionID, again.SessionID)
 		assert.Equal(t, read.Context.ID, again.Context.ID, "one receiver reads the file and edits it")
@@ -968,8 +988,9 @@ func resetRecord(records []timingAudit) (int, error) {
 // adviceAfterReset returns nil when the audit records, in file order,
 // show that advice reaches the compacted root context again after the
 // reset. The reset starts a new generation of both kinds of delivery
-// state. So the next read and the next edit of a file whose advice the
-// context got before the reset get that advice again. Only the records
+// state. The state keys a pin by its version, not by its file. So the next
+// read and the next edit of any file in the region of a pin that the
+// context got before the reset get that pin again. Only the records
 // after the reset that name its session, its context, and the root lane
 // count. The first exploration record and the first edit record among
 // them must be injections in the generation of the reset, with a call,

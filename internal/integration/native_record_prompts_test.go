@@ -262,8 +262,35 @@ func TestNativeRecordClaudeTimingCompactsAfterTheEdit(t *testing.T) {
 
 	prompt := scriptPrompt(t, scriptFunction(t, nativeRecordScript(t), "record_claude_timing"),
 		`timing_claude `+timingAfterCompact+` resume "$steps`)
-	assert.Contains(t, prompt, "\n1. Use the Read tool to read the file timing/prior.txt.\n"+
-		"2. Use the Edit tool to replace the line beta with the line gamma in timing/prior.txt.\n")
+	assert.Contains(t, prompt, "\n1. Use the Read tool to read the file "+timingAfterCompactFile+".\n"+
+		"2. Use the Edit tool to replace the only line of "+timingAfterCompactFile+" with the line beta.\n")
+}
+
+// TestNativeRecordClaudeTimingKeepsTheFileOfTheCompactionUnread proves
+// that the timing fixture commits the file of the case after the
+// compaction as one line, that the prompt of that case does not name the
+// line, and that no other Claude Code timing case names the file. The
+// compaction restores the content of files that the session read or
+// changed. With a restored file or a named line, the model can edit the
+// file without a Read, and then no exploration hook runs.
+func TestNativeRecordClaudeTimingKeepsTheFileOfTheCompactionUnread(t *testing.T) {
+	script := nativeRecordScript(t)
+	setup := scriptFunction(t, script, "timing_setup")
+
+	loop := strings.TrimSpace(scriptLine(t, setup, "    for f in "))
+	files := strings.Fields(strings.TrimSuffix(strings.TrimPrefix(loop, "for f in "), "; do"))
+	name := strings.TrimSuffix(strings.TrimPrefix(timingAfterCompactFile, "timing/"), ".txt")
+
+	assert.Contains(t, files, name, "timing_setup commits %s", timingAfterCompactFile)
+	assert.Contains(t, setup, `printf 'alpha\n' > "$REPO/timing/$f.txt"`, "each fixture file holds the one line alpha")
+
+	body := scriptFunction(t, script, "record_claude_timing")
+	prompt := scriptPrompt(t, body, `timing_claude `+timingAfterCompact+` resume "$steps`)
+
+	assert.Equal(t, 2, strings.Count(prompt, timingAfterCompactFile), "the prompt reads and edits the file")
+	assert.NotContains(t, prompt, "alpha", "the model learns the line only through the Read")
+	assert.Equal(t, strings.Count(prompt, timingAfterCompactFile), strings.Count(body, timingAfterCompactFile),
+		"only the case after the compaction names the file")
 }
 
 // TestNativeRecordClaudeTimingRefusesDisabledCompaction proves that the

@@ -557,8 +557,10 @@ limit_stop() {
 # TestNativeRecordCodexTimingRecording decode it.
 
 # timing_setup creates the scratch repository of the timing scenario.
-# Three committed fixture files lie under timing/, and one advisory pin
-# with a check covers that region. The pin note holds a code word, so a
+# Four committed fixture files lie under timing/, and one advisory pin
+# with a check covers that region. No run reads timing/after.txt before
+# the after-compact case, for the reason in the comment of
+# record_claude_timing. The pin note holds a code word, so a
 # reviewer can find the advice in the transcripts. `seamark init`
 # installs the lesson hooks of the round binary there. The paid runs set
 # the recording switch, because only then do the hooks write the turn and
@@ -568,7 +570,7 @@ timing_setup() {
     new_repo "$REPO"
     mkdir -p "$REPO/timing"
 
-    for f in prior intra child; do
+    for f in prior intra child after; do
         printf 'alpha\n' > "$REPO/timing/$f.txt"
     done
 
@@ -717,15 +719,19 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
 # comes one turn after the read. compact-reset compacts the session of
 # new-model-step. That context then holds an exploration injection and an
 # edit injection, so the reset record shows that both kinds of delivery
-# state start a new generation. after-compact reads and edits the same
-# file again in the compacted session. Without the reset, both hooks
-# suppress that advice as a repeat. The reader subagent has only the Read
-# tool.
+# state start a new generation. after-compact reads and edits
+# timing/after.txt in the compacted session. That file lies in the region
+# of the same pin, and the delivery state keys a pin by its version, not
+# by its file. So without the reset, both hooks suppress that advice as a
+# repeat. The reader subagent has only the Read tool.
 #
-# after-compact reads before it edits. The Read triggers the exploration
-# hook. It also gives the Edit a read of the file, whatever files the
-# compaction restored, because Claude Code refuses an Edit of an unread
-# file before any hook.
+# after-compact uses a file that no earlier run reads. The compaction
+# restores the content of files that the session read or changed. A model
+# that has the content can skip the Read, and then no exploration hook
+# runs. The compaction cannot restore a file that no run has read or
+# changed. Claude Code does not refuse an Edit of an unread file for every
+# model, so the prompt does not name the line of the file. The model then
+# reads the file to know the text that the Edit replaces.
 #
 # The /compact instruction keeps the summary short and free of paths,
 # because the summary goes into hook payloads and transcripts. Claude Code
@@ -757,8 +763,8 @@ Then reply with the single word: done"
     timing_claude compact-reset resume "/compact Keep the summary to one short sentence and name no file path."
 
     timing_claude after-compact resume "$steps
-1. Use the Read tool to read the file timing/prior.txt.
-2. Use the Edit tool to replace the line beta with the line gamma in timing/prior.txt.
+1. Use the Read tool to read the file timing/after.txt.
+2. Use the Edit tool to replace the only line of timing/after.txt with the line beta.
 Then reply with the single word: done"
 
     timing_claude read-then-edit new "$steps
