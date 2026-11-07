@@ -166,7 +166,7 @@ type DeliveryCounts struct {
 	EmitFailed            int                       `json:"emit_failed"`
 	Returned              int                       `json:"returned"`
 	Sessions              int                       `json:"sessions"`                // unit delivered sessions
-	LegacyIdentityRecords int                       `json:"legacy_identity_records"` // v1 records naming the identity (PinIdentity, note included); current version only, 0 on a historical one by rule; no version, so never diagnosed
+	LegacyIdentityRecords int                       `json:"legacy_identity_records"` // v1 records naming the identity (PinIdentity, note included); every reading is of the current version; no version, so never diagnosed
 }
 
 // SelectionReading states the limits that selection applies now and
