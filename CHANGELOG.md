@@ -147,12 +147,19 @@ model-boundary delivery.
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the
   agent or reconnect the MCP server.
+- **Newer-schema refusal on MCP.** When an MCP tool or resource meets a
+  database from a newer seamark, its reply adds a line that names the
+  running version and says to restart the agent if a newer seamark is
+  installed. The CLI text does not change.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
 An older binary then refuses the upgraded database and a bundle of
 version 4 — the versioning contract. That covers v0.8.0, which has
-schema 6 and state version 2. The installed hooks move with the binary.
+schema 6 and state version 2. Restart your AI coding agent after you
+replace the binary, because a running MCP server keeps the old one: a
+v0.8.0 server tells you to "upgrade seamark" for the upgraded database,
+and a restart fixes that. The installed hooks move with the binary.
 A new binary still reads every older bundle, and a row of such a bundle
 records no scope choice.
 An export of the new binary is no way back, so make a backup before you

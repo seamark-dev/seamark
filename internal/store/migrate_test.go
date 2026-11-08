@@ -52,6 +52,11 @@ func TestOpenRefusesNewerDatabase(t *testing.T) {
 	assert.Contains(t, err.Error(), "upgrade seamark")
 	assert.Contains(t, err.Error(), "do not delete", "the message must protect the durable decisions")
 
+	var newer *NewerSchemaError
+	require.ErrorAs(t, err, &newer, "a caller can tell the refusal apart from other open errors")
+	assert.Equal(t, schemaVersion+7, newer.Stored)
+	assert.Equal(t, schemaVersion, newer.Supported)
+
 	db, err = rawOpen(t, path)
 	require.NoError(t, err)
 

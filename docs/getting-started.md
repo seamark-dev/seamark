@@ -23,7 +23,8 @@ seamark version
 
 Homebrew installs the latest published version, not the development tree.
 Existing installations can update with
-`brew update` followed by `brew upgrade seamark`.
+`brew update` followed by `brew upgrade seamark`. Restart your AI coding
+agent after an upgrade, because its running MCP server keeps the old binary.
 
 The [tap](https://github.com/seamark-dev/homebrew-tap) provides bottles for
 Apple Silicon macOS and x86_64 Linux. Other platforms, including Intel macOS,
@@ -45,7 +46,8 @@ seamark version
 
 Add `~/.local/bin` to your shell's startup configuration to keep it on `PATH`.
 Check that `command -v seamark` points to the build you intend to use, especially
-if you also installed a release with Homebrew.
+if you also installed a release with Homebrew. Restart your AI coding agent
+after each rebuild, because its running MCP server keeps the old binary.
 
 ## Install a release archive
 
@@ -137,6 +139,10 @@ is a matching lesson. You can inspect a file with
   `command -v seamark`. Upgrade to v0.7.0 or newer.
 - **The AI coding agent cannot find tools:** restart it from the repository,
   run `seamark doctor`, and check its MCP registration and project trust.
+- **Tools report a database schema newer than they understand:** the running
+  MCP server can be an older binary than the one you installed. Restart the
+  AI coding agent, and run `seamark version` to see the installed version.
+  Do not delete the database.
 - **Codex has tools but no reminders:** review `/hooks`, check hooks are
   enabled, and verify there is a lesson for the edited file.
 - **No findings or proposals:** the history may lack recognizable fixes or

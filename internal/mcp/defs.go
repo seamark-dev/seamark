@@ -152,7 +152,7 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 
 	text, err := s.withStore(render)
 	if err != nil {
-		return nil, &rpcError{Code: codeInternal, Message: err.Error()}
+		return nil, &rpcError{Code: codeInternal, Message: err.Error() + s.newerSchemaAdvice(err)}
 	}
 
 	return map[string]any{

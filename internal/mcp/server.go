@@ -378,13 +378,26 @@ func (s *Server) callTool(params json.RawMessage) (any, *rpcError) {
 	if err != nil {
 		// Tool failures travel in-band (isError), not as protocol errors:
 		// the model should see "nothing matches X" and correct course.
-		return toolResult(notes+err.Error(), true), nil
+		return toolResult(notes+err.Error()+s.newerSchemaAdvice(err), true), nil
 	}
 
 	result := s.outputResult(out)
 	prefixNotes(result, notes)
 
 	return result, nil
+}
+
+// newerSchemaAdvice returns a line for the refusal of a newer database,
+// or "". The store text says "upgrade seamark". A long-running server
+// can be the old binary after an upgrade, and then only a restart helps.
+func (s *Server) newerSchemaAdvice(err error) string {
+	var newer *store.NewerSchemaError
+	if !errors.As(err, &newer) {
+		return ""
+	}
+
+	return "\nThis MCP server runs seamark " + s.version + " until it restarts. If a newer seamark is " +
+		"installed, restart the agent or reconnect its MCP server; otherwise upgrade seamark first."
 }
 
 func toolResult(text string, isErr bool) map[string]any {
