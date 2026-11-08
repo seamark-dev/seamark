@@ -155,6 +155,9 @@ model-boundary delivery.
   call refreshes the index, appends to `audit.jsonl`, and can write
   `lessons-audit.jsonl` and `lesson-check-audit.jsonl`. The data-flow
   tables name the same writes for `check` and `mcp`.
+- **Ignored MCP arguments.** A tool call with an argument key that the
+  tool does not take still runs, and its reply now opens with a note that
+  names each ignored key and the keys the tool takes.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

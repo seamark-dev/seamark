@@ -372,8 +372,9 @@ func (s *Server) callTool(params json.RawMessage) (any, *rpcError) {
 	out, err := run(s, p.Arguments)
 
 	// The call notes open every result, also an error. An agent acts on
-	// the reply, and the log of the server does not reach it.
-	notes := s.binary.note(s.version, s.logf)
+	// the reply, and the log of the server does not reach it. The note on
+	// ignored keys goes first, because it is about this call.
+	notes := unknownArgsNote(p.Name, p.Arguments) + s.binary.note(s.version, s.logf)
 
 	if err != nil {
 		// Tool failures travel in-band (isError), not as protocol errors:
