@@ -390,6 +390,26 @@ func TestReminderForOneFileEqualsTheSingleFileReminder(t *testing.T) {
 	assert.Empty(t, edit.String())
 }
 
+// TestReminderReadsANoteLineBreakAsASpace covers a pin note with line
+// breaks, as a YAML block note gives. The hook prints one line, so the
+// two note lines must not run together, and the end break adds no space.
+func TestReminderReadsANoteLineBreakAsASpace(t *testing.T) {
+	cfg := &reviews.Config{Pin: []reviews.PinRule{
+		{Rule: "two-line", Region: "api", Note: "First line.\nSecond line.\n"},
+	}}
+
+	lessons := cfg.Surface(nil, "api/a.go")
+	require.Len(t, lessons, 1)
+
+	var single strings.Builder
+	require.NoError(t, PrintLessonReminder(&single, "api/a.go", lessons, 0))
+	assert.Contains(t, single.String(), "\n- [pin] two-line — First line. Second line.\n")
+
+	var several strings.Builder
+	require.NoError(t, PrintEditReminder(&several, []string{"api/a.go", "api/b.go"}, lessons, 0))
+	assert.Contains(t, several.String(), "\n- [pin · api] two-line — First line. Second line.\n")
+}
+
 func TestReminderForSeveralFilesNamesRegions(t *testing.T) {
 	lessons := []model.Lesson{
 		{Region: "db", Reviewer: "pinned", Symptom: "wrap dependent writes", Occurrences: 1 << 30},

@@ -94,6 +94,9 @@ model-boundary delivery.
   cannot be read no longer makes doctor and status warn that installed
   seamark hooks never run under `disableAllHooks: true` when no seamark
   hook is installed. The unread-file warning stays.
+- **Multi-line pin notes.** A line break inside a pin note reads as a
+  space on one-line surfaces, for example the edit hook and
+  `lessons --prepare`, so two lines no longer run together.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.

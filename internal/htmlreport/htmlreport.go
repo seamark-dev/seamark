@@ -799,8 +799,8 @@ func sourceMix(findings []model.Finding) string {
 	return strings.Join(parts, " · ")
 }
 
-// clean strips control characters — including newlines — from text
-// that came from a reviewer, a commit, or a model. Escaping is the
+// clean strips control characters from text that came from a reviewer,
+// a commit, or a model, and puts the text on one line. Escaping is the
 // template's job; this is about text that would corrupt the page's
 // layout rather than its markup.
 func clean(s string) string {

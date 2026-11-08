@@ -718,8 +718,8 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   rule or region that you write by hand can be longer; the pin form then
   opens it read-only and names the length.
 - The edit hook, `change_set`, `check`, `why`, `orient`, and `seamark
-  lessons --file` print a pin on one line. So the lines of a multi-line
-  note join without a space. The pin form, the review, and the Pins
+  lessons --file` print a pin on one line. So a line break in a
+  multi-line note reads as one space. The pin form, the review, and the Pins
   detail show the line breaks.
 - A selection sample lists at most the first 8 paths that the hook
   rejects. It reads at most 100 mined lessons per path, as the hook

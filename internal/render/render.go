@@ -30,19 +30,21 @@ func needsShellQuote(r rune) bool {
 // terminal or editor: commit titles and authors come straight from git
 // history, where ANSI/OSC escape sequences are legal and can manipulate
 // the viewer's terminal (title changes, cursor moves, fake hyperlinks).
+//
+// The result is one line. A dropped line break joins the two words next
+// to it, so each inner break becomes one space instead. Breaks at either
+// end go away, so a YAML block note gains no trailing space. A lone
+// carriage return is still dropped, and "\r\n" becomes one space.
+//
+// Sanitize reuses SanitizeBlock and only joins its lines, so the two
+// functions never scrub a different set of runes.
 func Sanitize(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r != '\t' && isUnsafeRune(r) {
-			return -1
-		}
-
-		return r
-	}, s)
+	return strings.ReplaceAll(strings.Trim(SanitizeBlock(s), "\n"), "\n", " ")
 }
 
 // isUnsafeRune reports whether a terminal can act on r instead of
-// showing it. Both sanitizers use it, so a one-line field and a block
-// get the same protection.
+// showing it. SanitizeBlock uses it, and Sanitize builds on
+// SanitizeBlock, so a one-line field and a block get the same protection.
 func isUnsafeRune(r rune) bool {
 	switch {
 	case r < 0x20 || r == 0x7f:
