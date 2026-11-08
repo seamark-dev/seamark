@@ -85,6 +85,10 @@ model-boundary delivery.
   `seamark init` run that changes nothing. Setup still keeps the matcher.
   For a Codex gate handler in the Claude Code form that
   `init --client codex` removes, doctor names that run instead.
+- **Unreadable local settings.** A `.claude/settings.local.json` that
+  cannot be read no longer makes doctor and status warn that installed
+  seamark hooks never run under `disableAllHooks: true` when no seamark
+  hook is installed. The unread-file warning stays.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.

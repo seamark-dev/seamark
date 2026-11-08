@@ -852,9 +852,11 @@ type gateInspection struct {
 // because gate.err already names it. A file without such a hook also
 // gives nil.
 //
-// The disableAllHooks finding comes once, when a hook entry is not
-// absent. A repository without seamark hooks gets no finding for a
-// setting of its own.
+// The disableAllHooks finding comes once, when a seamark hook is
+// installed: a hook entry is not absent, or the lesson reading holds an
+// owned entry or a report-only definition. An unreadable local file
+// alone is no installed hook. A repository without seamark hooks gets
+// no finding for a setting of its own.
 func inspectClaudeHooks(root string, evidence VerificationEvidence, rules hookRules) (
 	entries []CapabilityInspection, gate gateInspection, findings []Finding, lessons *LessonHookInspection,
 ) {
@@ -915,9 +917,8 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence, rules hookRu
 	gate.managed = hooks.InstalledGateMode(settings)
 	lessons = lessonHookReading(claudeLessonSources(settings, local, localState, false).inspection(settings, claudeLessonHooks))
 
-	installed := lessons != nil || slices.ContainsFunc(all, func(c *CapabilityInspection) bool {
-		return c.State != StateAbsent
-	})
+	installed := (lessons != nil && (len(lessons.Entries) > 0 || lessons.ReportOnly)) ||
+		slices.ContainsFunc(all, func(c *CapabilityInspection) bool { return c.State != StateAbsent })
 
 	if installed {
 		findings = append(findings, claudeHooksDisabledFindings(settings, local, localState)...)
