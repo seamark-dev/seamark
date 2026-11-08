@@ -205,7 +205,7 @@ func Run(opts Options) (*Summary, error) {
 		}
 	}
 
-	files, deleted, err := listFiles(root)
+	files, deleted, present, err := listFiles(root)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +360,15 @@ func Run(opts Options) (*Summary, error) {
 			}
 		}
 
+		// History names files that the workspace no longer has. A
+		// partner that cannot be opened misleads the agent, so a pair is
+		// stored only when both files are present. The pairs come from
+		// mining, so lift still counts the commits of the gone files.
 		for _, p := range pairs {
+			if !present[p.FileA] || !present[p.FileB] {
+				continue
+			}
+
 			if err := tx.InsertCoChange(p); err != nil {
 				return err
 			}
@@ -1295,7 +1303,11 @@ var skipDirs = map[string]bool{
 // tracked paths that git status shows as deleted and not staged. files
 // leaves them out, because nothing exists to parse. A walk finds no such
 // path.
-func listFiles(root string) (files, deleted []string, err error) {
+//
+// present holds every path that git lists and does not show as deleted,
+// parsed or not. The co-change pairs are kept to these paths. A walk
+// returns no present set, because a workspace without git has no pairs.
+func listFiles(root string) (files, deleted []string, present map[string]bool, err error) {
 	if history.IsRepo(root) {
 		return gitFiles(root)
 	}
@@ -1325,10 +1337,10 @@ func listFiles(root string) (files, deleted []string, err error) {
 		return nil
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("index: walk %s: %w", root, err)
+		return nil, nil, nil, fmt.Errorf("index: walk %s: %w", root, err)
 	}
 
-	return files, nil, nil
+	return files, nil, nil, nil
 }
 
 // gitFiles lists the workspace through git. The cached list keeps a
@@ -1340,12 +1352,17 @@ func listFiles(root string) (files, deleted []string, err error) {
 // directory replaces is deleted. A path that git cannot lstat for a
 // different reason, such as a denied permission, is not deleted. It
 // stays in files, so the read reports it as a parse error.
-func gitFiles(root string) (files, deleted []string, err error) {
+//
+// present uses the same two git calls, so the index has one deletion
+// rule. It keeps the paths that files drops for parsing reasons: paths
+// under skipped directories and skip-worktree paths that a sparse
+// checkout leaves out of the working tree.
+func gitFiles(root string) (files, deleted []string, present map[string]bool, err error) {
 	// -t tags each path, so the loop below can find skip-worktree
 	// entries. The tag is one letter and a space before the path.
 	listed, err := gitRecords(root, "ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// --relative gives paths relative to root, as ls-files does.
@@ -1353,21 +1370,30 @@ func gitFiles(root string) (files, deleted []string, err error) {
 	// path has the same content.
 	gone, err := gitRecords(root, "diff-files", "-z", "--name-only", "--relative", "--no-renames", "--diff-filter=D")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	isGone := make(map[string]bool, len(gone))
 
 	for _, f := range gone {
+		isGone[f] = true
+
 		if !underSkippedDir(f) {
-			isGone[f] = true
 			deleted = append(deleted, f)
 		}
 	}
 
+	present = make(map[string]bool, len(listed))
+
 	for _, rec := range listed {
 		tag, f, ok := strings.Cut(rec, " ")
-		if !ok || underSkippedDir(f) || isGone[f] {
+		if !ok || f == "" || isGone[f] {
+			continue
+		}
+
+		present[f] = true
+
+		if underSkippedDir(f) {
 			continue
 		}
 
@@ -1382,7 +1408,7 @@ func gitFiles(root string) (files, deleted []string, err error) {
 		files = append(files, f)
 	}
 
-	return files, deleted, nil
+	return files, deleted, present, nil
 }
 
 // missingFile reports whether rel has no working-tree entry. Only

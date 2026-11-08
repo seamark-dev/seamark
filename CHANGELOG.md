@@ -97,6 +97,10 @@ model-boundary delivery.
 - **Multi-line pin notes.** A line break inside a pin note reads as a
   space on one-line surfaces, for example the edit hook and
   `lessons --prepare`, so two lines no longer run together.
+- **Gone co-change partners.** Partner lists, the orient hubs, and the
+  pair count leave out deleted and renamed-away files from the next
+  index run. `seamark index --force` applies this at once to an older
+  index.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.
