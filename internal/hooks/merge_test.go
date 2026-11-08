@@ -243,8 +243,9 @@ func TestEffectiveGateModeReadsTheCodexMarkers(t *testing.T) {
 		"warn":                   {hookDoc("command", "/bin/seamark gate --hook --client codex", "Bash"), ModeWarn},
 		"enforce":                {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "Bash"), ModeEnforce},
 		"enforce under a regexp": {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "^Bash$"), ModeEnforce},
-		"a Claude Code gate":     {hookDoc("command", "/bin/seamark gate --enforce --hook", "Bash"), ""},
-		"never fires":            {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "apply_patch"), ""},
+		// Codex runs a gate in the Claude Code form, and it blocks.
+		"a Claude Code gate": {hookDoc("command", "/bin/seamark gate --enforce --hook", "Bash"), ModeEnforce},
+		"never fires":        {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "apply_patch"), ""},
 	} {
 		assert.Equal(t, tc.want, EffectiveGateMode(tc.settings, codex, CodexMatcher), name)
 		assert.Equal(t, tc.want, EffectiveGateMode(tc.settings, CodexSpecs(ModeEnforce)[0], CodexMatcher), name)
@@ -369,7 +370,9 @@ func TestCodexAliasesListOnlyTheCodexAliases(t *testing.T) {
 func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
 	// Both clients can share one repository, and a document can hold the
 	// commands of both. A marker matches as a suffix, so the shorter
-	// Claude marker must not own the longer Codex command.
+	// Claude marker must not own the longer Codex command. The Codex gate
+	// spec reads the Claude Code gate as its other form, so only the own
+	// markers of a Codex spec are checked in that direction.
 	// The Codex reset command exists although setup does not install it.
 	claude := append(ClaudeSpecs(ModeWarn), ClaudeSpecs(ModeEnforce)[0])
 	codex := append(CodexSpecs(ModeWarn), CodexSpecs(ModeEnforce)[0],
@@ -379,7 +382,7 @@ func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
 		for _, x := range codex {
 			assert.False(t, OwnedBySeamark(x.Command("/bin/seamark"), c.Markers()),
 				"%q must not own %q", c.Marker, x.Marker)
-			assert.False(t, OwnedBySeamark(c.Command("/bin/seamark"), x.Markers()),
+			assert.False(t, OwnedBySeamark(c.Command("/bin/seamark"), x.ownMarkers()),
 				"%q must not own %q", x.Marker, c.Marker)
 		}
 	}

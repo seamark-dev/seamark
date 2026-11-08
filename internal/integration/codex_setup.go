@@ -215,6 +215,16 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 		managed = append(managed, spec)
 	}
 
+	// Codex runs a gate handler in the Claude Code form too. Before the
+	// merge, setup keeps at most one such handler and rewrites a kept one
+	// to the managed command, so one gate handler of setup remains.
+	var forms []hooks.FormChange
+
+	if slices.ContainsFunc(managed, func(s hooks.Spec) bool { return s.Name == gate.Name }) {
+		forms = hooks.ReduceOtherForms(document, gate, binary, hooks.CodexMatcher)
+		plan.Findings = append(plan.Findings, otherFormFindings(forms)...)
+	}
+
 	// An owned gate command stays managed, so the merge rewrites it. The
 	// narrator reports an --enforce flag that the rewrite removes.
 	merged, err := hooks.Merge(document, binary, managed)
@@ -262,8 +272,10 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	}
 
 	change := codexHooksChange{
-		created: !guard.Exists, hooksChanged: merged.Changed,
-		removedEnforce: merged.RemovesEnforce(hooks.CodexGateMarker(hooks.ModeEnforce)), lessons: lessons,
+		created: !guard.Exists, hooksChanged: merged.Changed || len(forms) > 0,
+		removedEnforce: merged.RemovesEnforce(hooks.CodexGateMarker(hooks.ModeEnforce)) ||
+			removesOtherFormEnforce(forms, gateMode),
+		lessons: lessons,
 	}
 	narrate := func(w io.Writer, status OpStatus) {
 		narrateCodexHooks(w, binary, managed, change, status == OpPlanned)
@@ -306,6 +318,77 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	})
 
 	return nil
+}
+
+// otherFormFindings reports each gate handler in the Claude Code form
+// that setup removed from hooks.json or rewrote there. A warning, because
+// a plain init prints no information finding. Codex hashes the handler
+// into its trust record, so the action names the review.
+func otherFormFindings(changes []hooks.FormChange) []Finding {
+	findings := make([]Finding, 0, len(changes))
+
+	for _, c := range changes {
+		reason := fmt.Sprintf("setup removed %#q, the seamark gate hook in the Claude Code form, "+
+			"so one gate handler of setup remains", describeCommand(c.From))
+
+		if c.To != "" {
+			reason = fmt.Sprintf("setup replaced %#q, the seamark gate hook in the Claude Code form, with %#q; "+
+				"the change alters the Codex trust hash, so Codex asks you to review that hook again in /hooks",
+				describeCommand(c.From), describeCommand(c.To))
+		}
+
+		findings = append(findings, Finding{
+			Level: FindingWarning, Path: codexHooksFile, Reason: reason,
+			Action: "open the project in Codex and review the hooks with /hooks",
+		})
+	}
+
+	return findings
+}
+
+// removesOtherFormEnforce reports whether setup removed or replaced a
+// gate handler in the Claude Code form with --enforce, while the run
+// installs another mode. That handler blocked, so the narrator reports
+// the removed flag, as for a Codex-form handler.
+func removesOtherFormEnforce(changes []hooks.FormChange, gateMode string) bool {
+	if gateMode == hooks.ModeEnforce {
+		return false
+	}
+
+	return slices.ContainsFunc(changes, func(c hooks.FormChange) bool {
+		return hooks.OwnedBySeamark(c.From, []string{hooks.GateMarker(hooks.ModeEnforce)})
+	})
+}
+
+// otherFormInspectionFindings names each running gate handler of
+// hooks.json in the Claude Code form. Codex runs it, and the Claude codec
+// reads its input, so it blocks in its own mode. The action is the setup
+// route of rules, which replaces the handler.
+func otherFormInspectionFindings(rules hookRules, sources []hookSource) []Finding {
+	codexForm := slices.ContainsFunc(sources, func(s hookSource) bool { return s.managed && !s.otherForm })
+
+	var findings []Finding
+
+	for _, s := range sources {
+		if !s.otherForm {
+			continue
+		}
+
+		reason := fmt.Sprintf("has %#q, the seamark gate hook in the Claude Code form; Codex runs it in %s mode",
+			describeCommand(s.command), s.mode)
+		if codexForm {
+			reason = fmt.Sprintf("has %#q, the seamark gate hook in the Claude Code form; Codex runs it beside "+
+				"the managed gate hook, in %s mode", describeCommand(s.command), s.mode)
+		}
+
+		findings = append(findings, Finding{
+			Level: FindingWarning, Path: s.path, Reason: reason,
+			Action: cmp.Or(rules.rewrite, "run `seamark init --client codex`") + ", which replaces that handler with the " +
+				"managed gate hook; then open the project in Codex and review the hooks with /hooks",
+		})
+	}
+
+	return findings
 }
 
 // codexInlineHooksPath names the inline [hooks] of config.toml in a
@@ -777,6 +860,7 @@ func classifyCodexHooks(reads codexHookReads, rules hookRules) (entries []Capabi
 	gateSources := startableSources(gateRead)
 	classifyHook(&commands, gateSpec, gateRead)
 	sourceFindings(&findings, gateSpec, gateSources)
+	findings = append(findings, otherFormInspectionFindings(rules, gateSources)...)
 
 	lessonRead := codexHookSources(&findings, rules, reads.document, reads.inline, lessons)
 	classifyHook(&edits, lessons, lessonRead)

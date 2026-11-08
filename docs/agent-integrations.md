@@ -635,7 +635,16 @@ The rules that hold every adapter to the same behavior:
   must not read any other document; a test records the documents it
   reads. `Plan` rewrites every owned gate command, also one under a
   matcher that never fires, and the narration reports each `--enforce`
-  that the rewrite removes.
+  that the rewrite removes. Codex also runs a gate handler in the
+  Claude Code form (`gate --hook` or `gate --enforce --hook`, without
+  `--client codex`), and that handler blocks. So the Codex readers count
+  it as a managed gate in its own mode, and doctor names it. The Codex
+  `Plan` keeps at most one such handler: none when a Codex-form handler
+  runs for Bash, else the first one that runs, rewritten in place to the
+  managed command with its matcher and other keys. It removes the
+  others, and an entry left without handlers. Without `--gate-mode`,
+  enforce in either form wins, and each removal or rewrite names the
+  `/hooks` review that the new trust hash needs.
 - **A finding names its document once.** `Finding.Path` is the document
   that holds what the finding describes, and every consumer prints
   `<Path>: <Reason>`. The reason never starts with a path. It names a

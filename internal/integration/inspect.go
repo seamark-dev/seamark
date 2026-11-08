@@ -350,6 +350,9 @@ type hookSource struct {
 	// so it counts for nothing. Only classifyHook reads it, to name the
 	// broken definition when no other definition runs the hook.
 	missing string
+	// otherForm is true for an owned command in the form of another
+	// client, such as a Codex gate handler in the Claude Code form.
+	otherForm bool
 	// missingAction is the action that repairs a missing binary. The
 	// finding and the hook entry print it, so both say the same words.
 	missingAction string
@@ -641,6 +644,7 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		if bin, marker, owned := hooks.OwnedCommand(cmd, markers); owned {
 			source.certain, source.managed = true, managed
 			source.mode = hooks.GateMarkerMode(marker)
+			source.otherForm = slices.Contains(spec.OtherForms, marker)
 			asked, binary = source.mode, bin
 		} else if reading := hooks.ReadHook(cmd, markers); reading.Use() != hooks.HookNotRun {
 			source.certain = reading.Use() == hooks.HookRuns
