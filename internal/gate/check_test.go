@@ -107,7 +107,9 @@ func TestCheckDiffOutsideBlastRadius(t *testing.T) {
 	p, err := LoadPolicy(root)
 	require.NoError(t, err)
 
-	// A hunk touching only helperOnly (line 7) reaches nothing.
+	// The hunk adds line 8, below helperOnly (line 7). Only the added
+	// line counts, so no symbol is touched: the verdict allows with no
+	// effects, and the note says that the reach of main.go is unknown.
 	quiet := `diff --git a/main.go b/main.go
 --- a/main.go
 +++ b/main.go
@@ -120,6 +122,8 @@ func TestCheckDiffOutsideBlastRadius(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, d.Effects)
 	assert.Equal(t, VerdictAllow, d.Verdict)
+	require.Len(t, d.Notes, 1)
+	assert.Contains(t, d.Notes[0], "(main.go)")
 }
 
 func TestEvalDiffRegistersHunklessRecords(t *testing.T) {

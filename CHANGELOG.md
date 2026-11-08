@@ -138,6 +138,11 @@ model-boundary delivery.
   give a bare allow for it. Empty `git diff HEAD` output gets a note that
   untracked files are not part of it. Input that names no changed file
   gets a note in warn mode and blocks with exit 2 under enforcement.
+- **Only changed lines count in `check`.** The context lines of a hunk
+  no longer touch the symbols around an edit, so verdicts can change: a
+  comment edit next to an effectful function no longer reaches its
+  effects. An added or removed line whose text starts with `++ ` or
+  `-- ` no longer reads as a file header.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

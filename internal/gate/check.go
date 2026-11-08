@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,8 +15,6 @@ import (
 // ErrBlocked marks decisions that must stop the caller (enforce mode);
 // the CLI maps it to a distinct exit code for hooks and CI.
 var ErrBlocked = errors.New("blocked by policy")
-
-var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
 // The diff sources name where the diff text of EvalDiff comes from. The
 // texts for a diff with no changed file name the source, so the CLI and
@@ -44,92 +42,25 @@ const noFileHeader = "names no changed file (no diff --git, ---, +++ or rename h
 // gets a note. Text with bytes but no file gets a note, and under
 // enforcement it blocks, because the gate cannot read it as a diff.
 func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, error) {
-	touched := map[string][][2]uint32{} // file -> [start, end] line ranges
-
-	file := ""
-	oldFile := ""
-
-	// register marks a path as touched even before (or without) any
-	// hunk: binary, mode-only, rename-only, and empty-file changes have
-	// no `@@` hunks, yet all alter behaviour-relevant state and must
-	// enter diff.files and the uncertainty accounting.
-	register := func(p string) {
-		if p == "" {
-			return
-		}
-
-		if _, ok := touched[p]; !ok {
-			touched[p] = nil
-		}
-	}
-
-	for line := range strings.SplitSeq(diffText, "\n") {
-		switch {
-		case strings.HasPrefix(line, "diff --git "):
-			file, oldFile = "", "" // new record
-
-			if p := gitHeaderPath(line); p != "" {
-				file = p
-				register(p)
-			}
-		case strings.HasPrefix(line, "rename to "):
-			// More reliable than the `diff --git` split for spaced
-			// paths; replaces the record's registration when they differ.
-			if p := diffHeaderPath(strings.TrimPrefix(line, "rename to "), ""); p != "" {
-				file = p
-				register(p)
-			}
-		case strings.HasPrefix(line, "--- "):
-			oldFile = diffHeaderPath(line[4:], "a/")
-		case strings.HasPrefix(line, "+++ "):
-			file = diffHeaderPath(line[4:], "b/")
-
-			// A whole-file deletion has `+++ /dev/null`: the OLD path is
-			// what vanished, and it must enter diff.files — deleting an
-			// effectful file must never look like an empty diff.
-			if file == "" && oldFile != "" {
-				file = oldFile
-			}
-
-			register(file)
-		default:
-			m := hunkRe.FindStringSubmatch(line)
-			if m == nil || file == "" {
-				continue
-			}
-
-			start, _ := strconv.Atoi(m[1])
-			count := 1
-
-			if m[2] != "" {
-				count, _ = strconv.Atoi(m[2])
-			}
-
-			if count < 1 {
-				count = 1 // pure deletions still touch the surrounding area
-			}
-
-			touched[file] = append(touched[file],
-				[2]uint32{uint32(start), uint32(start + count - 1)})
-		}
-	}
+	parsed := parseDiff(diffText)
 
 	// Input with bytes in it but no file is not a diff that check can
 	// read. Under enforcement a failure of the gate must not fail open,
 	// so the gate blocks before any rule runs.
-	unreadable := len(touched) == 0 && diffText != ""
+	unreadable := len(parsed.paths) == 0 && diffText != ""
 	if unreadable && p.Mode == "enforce" {
 		return nil, FailClosed(fmt.Errorf("%s %s; enforce mode blocks input that it cannot read as a diff",
 			source, noFileHeader), true)
 	}
 
-	files := make([]string, 0, len(touched))
+	files := make([]string, 0, len(parsed.paths))
 	tagSet := map[string]bool{}
 
 	var unindexed []string
 
-	for f, ranges := range touched {
+	for _, f := range parsed.paths {
 		files = append(files, f)
+		changed := parsed.lines[f]
 
 		syms, err := st.SymbolsInFile(f)
 		if err != nil {
@@ -141,16 +72,11 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 		for i := range syms {
 			sym := &syms[i]
 
-			overlaps := false
-
-			for _, r := range ranges {
-				if sym.Span.StartLine <= r[1] && sym.Span.EndLine >= r[0] {
-					overlaps = true
-					break
-				}
-			}
-
-			if !overlaps {
+			// A symbol is touched when a changed line lies in its span.
+			touches := slices.ContainsFunc(changed, func(n uint32) bool {
+				return sym.Span.StartLine <= n && n <= sym.Span.EndLine
+			})
+			if !touches {
 				continue
 			}
 
@@ -177,8 +103,8 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 		}
 	}
 
-	// The loop above reads a map, so its order changes between runs. A
-	// rule that indexes diff.files must see the same list on every run.
+	// The diff gives the files in its own order. A rule that indexes
+	// diff.files must see the same list for the same set of files.
 	sort.Strings(files)
 
 	tags := make([]string, 0, len(tagSet))
@@ -248,42 +174,11 @@ func gitHeaderPath(line string) string {
 }
 
 // ChangedPaths lists the repo-relative files a unified diff touches, in
-// first-appearance order — the same header parsing EvalDiff trusts, so
-// an advisory surface (lessons on `check`) can never disagree with the
-// verdict about which files changed.
+// first-appearance order. It uses the parser of EvalDiff, so an advisory
+// surface (lessons on `check`) can never disagree with the verdict about
+// which files changed.
 func ChangedPaths(diffText string) []string {
-	seen := map[string]bool{}
-
-	var out []string
-
-	add := func(p string) {
-		if p != "" && !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-
-	oldFile := ""
-
-	for line := range strings.SplitSeq(diffText, "\n") {
-		switch {
-		case strings.HasPrefix(line, "diff --git "):
-			oldFile = ""
-			add(gitHeaderPath(line))
-		case strings.HasPrefix(line, "rename to "):
-			add(diffHeaderPath(strings.TrimPrefix(line, "rename to "), ""))
-		case strings.HasPrefix(line, "--- "):
-			oldFile = diffHeaderPath(line[4:], "a/")
-		case strings.HasPrefix(line, "+++ "):
-			if p := diffHeaderPath(line[4:], "b/"); p != "" {
-				add(p)
-			} else {
-				add(oldFile) // whole-file deletion: the old path vanished
-			}
-		}
-	}
-
-	return out
+	return parseDiff(diffText).paths
 }
 
 // diffHeaderPath extracts the repo-relative path from a "---"/"+++"

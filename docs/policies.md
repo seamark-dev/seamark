@@ -135,8 +135,17 @@ writes no audit entry; the MCP `check` tool returns an error result.
 
 Changed lines map to symbols; symbols carry transitively-propagated
 effect tags; the union is what the change can _ultimately_ reach — even
-when the edited function never touches a sink itself. Policy rules over
-`diff.effects` gate merges the same way `gate` gates commands, and
+when the edited function never touches a sink itself. Only added and
+removed lines count: the context lines of a hunk do not. Removed lines
+count as the line directly above them, and for a pure deletion also as
+the line below them, because either line can belong to the symbol that
+lost them. When the first removed line with text is indented, the
+nearest line with text above them in the hunk counts too: a Python
+function ends at its last statement, so a blank line between it and the
+removed lines lies outside it. A cut before the first line, such as the
+deletion of a whole file, counts no line, so the reach of that file
+stays unknown. Policy
+rules over `diff.effects` gate merges the same way `gate` gates commands, and
 `diff.unindexed_files` exposes coverage blind spots to your rules —
 changed files the index cannot attribute never silently read as safe.
 `diff.files` and `diff.effects` reach the rules in sorted order, so a
