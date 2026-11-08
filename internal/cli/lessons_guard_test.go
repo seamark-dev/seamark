@@ -368,7 +368,8 @@ func TestLessonsGuardHookDeniesViolation(t *testing.T) {
 			assert.Equal(t, lessoncheck.GuardRequestedDeny, d.Requested)
 			assert.Equal(t, lessoncheck.GuardProtocolExit2, d.Protocol)
 			assert.True(t, d.ReplyWritten)
-			assert.Equal(t, lessoncheck.GuardNativeUnverified, d.NativeBlocking, "no reviewed recording verifies a pre-write path yet")
+			assert.Equal(t, lessoncheck.GuardNativeVerified, d.NativeBlocking,
+				"the reviewed Claude Code recording verifies Write and Edit in both contexts")
 			assert.True(t, d.PathsComplete)
 			require.Len(t, d.Pins, 1, "only the enforce pin in scope is evaluated")
 			assert.Equal(t, tc.pin.Identity, d.Pins[0].PinIdentity)
@@ -446,6 +447,7 @@ func TestLessonsGuardHookDeniesMultiFileWhole(t *testing.T) {
 		assert.Equal(t, []string{"docs/new.md", "generated/a.txt", "src/ok.go"}, rec.Paths)
 		assert.Equal(t, lessoncheck.GuardCauseViolation, rec.Guard.Cause)
 		assert.Equal(t, integration.CodexID, rec.Client)
+		assert.Equal(t, lessoncheck.GuardNativeUnverified, rec.Guard.NativeBlocking, "no reviewed Codex recording exists")
 	})
 
 	t.Run("one failing step of a MultiEdit denies the whole call", func(t *testing.T) {
@@ -470,6 +472,8 @@ func TestLessonsGuardHookDeniesMultiFileWhole(t *testing.T) {
 		rec := lastRecord(t, root, lessoncheck.AuditGuard)
 		assert.Equal(t, lessoncheck.GuardCauseUnknown, rec.Guard.Cause)
 		assert.Equal(t, []lessoncheck.Reason{lessoncheck.ReasonUnprojectableEdit}, rec.Guard.Reasons)
+		assert.Equal(t, lessoncheck.GuardNativeUnverified, rec.Guard.NativeBlocking,
+			"the reviewed Claude Code recording holds no MultiEdit call")
 	})
 
 	sentinel.requireNoCall(t)

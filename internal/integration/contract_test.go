@@ -316,22 +316,41 @@ func TestBuiltinClientsDeclareLessonCheckCapabilities(t *testing.T) {
 		}
 	})
 
-	t.Run("every pre-write path waits for its recording", func(t *testing.T) {
-		// No reviewed native recording of a guard path exists yet, so no
-		// guard path claims a verified block. An unverified path never
-		// reads as "enforced".
-		for client, tools := range map[string][]string{
-			ClaudeID: {"Edit", "Write", "MultiEdit"},
-			CodexID:  {"apply_patch"},
+	t.Run("only a reviewed recording verifies a pre-write path", func(t *testing.T) {
+		// The reviewed Claude Code 2.1.319 recording verifies Write and
+		// Edit in both contexts. That client lets the write run after its
+		// 10 s hook timeout, so each verified path names the limit. The
+		// client made no MultiEdit call, and no reviewed Codex recording
+		// exists, so those paths wait for a recording. They name no
+		// version, because the recording sets the version it ran against.
+		for _, tc := range []struct {
+			client   string
+			tool     string
+			verified bool
+		}{
+			{ClaudeID, "Edit", true},
+			{ClaudeID, "Write", true},
+			{ClaudeID, "MultiEdit", false},
+			{CodexID, "apply_patch", false},
 		} {
-			for _, tool := range tools {
-				for _, context := range []lessoncheck.PathContext{"root", "child"} {
-					evidence := GuardEvidence(client, tool, context)
-					assert.Equal(t, VerificationPending, evidence.Level, "%s %s %s", client, tool, context)
-					assert.Empty(t, evidence.ClientVersion, "the recording names the version it ran against")
-					assert.Contains(t, evidence.Surface, tool)
-					require.NoError(t, evidence.Validate())
+			for _, context := range []lessoncheck.PathContext{"root", "child"} {
+				label := tc.client + " " + tc.tool + " " + string(context)
+				evidence := GuardEvidence(tc.client, tc.tool, context)
+				require.NoError(t, evidence.Validate(), label)
+				assert.Contains(t, evidence.Surface, tc.tool, label)
+				assert.Contains(t, evidence.Surface, string(context), label)
+
+				if !tc.verified {
+					assert.Equal(t, VerificationPending, evidence.Level, label)
+					assert.Empty(t, evidence.ClientVersion, "%s: the recording names the version it ran against", label)
+					assert.Empty(t, evidence.Limit, label)
+
+					continue
 				}
+
+				assert.Equal(t, VerificationVerified, evidence.Level, label)
+				assert.Equal(t, "Claude Code 2.1.319", evidence.ClientVersion, label)
+				assert.Equal(t, "the client lets the write run after its 10 s hook timeout", evidence.Limit, label)
 			}
 		}
 

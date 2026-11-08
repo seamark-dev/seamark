@@ -53,6 +53,12 @@ type guardProof struct {
 	slow slowProof
 }
 
+// claudeEvidenceVersion is the client version of the reviewed Claude
+// Code recordings in testdata/claude/guard and testdata/claude/timing.
+// Both recordings ran on this version, so the guard, timeout, and timing
+// entries of Claude Code name it.
+const claudeEvidenceVersion = "Claude Code 2.1.319"
+
 // guardRecorded lists the pre-write paths that a reviewed native guard
 // recording verifies. A reviewer adds an entry only after a review of
 // the recording in testdata/<client>/guard. The recording must show a
@@ -61,8 +67,44 @@ type guardProof struct {
 // native-timeout-unverified, so it needs proof of both. No path takes
 // the proof of another path.
 // TestGuardEvidenceMatchesRecordings checks each entry against the
-// recording. The map is empty, because no reviewed recording exists yet.
-var guardRecorded = map[guardPath]guardProof{}
+// recording.
+//
+// The Claude Code recording shows a blocked deny of Write and Edit in
+// the root and the child context. Each of these paths also has an
+// in-budget slow deny: a slow pre-write hook ends inside the 10 s hook
+// timeout, and the client waits for it and honors the deny. Claude
+// Code stops a slower hook at the timeout and lets the write run
+// (timeoutRecorded), so no Claude Code path has a slowPastTimeout
+// proof. MultiEdit has no entry, because the client offered no
+// MultiEdit tool to the model. Codex has no entry, because no reviewed
+// Codex recording exists yet.
+var guardRecorded = map[guardPath]guardProof{
+	{client: ClaudeID, tool: claudeToolEdit, context: lessoncheck.ContextRoot}: claudeInBudgetProof(
+		claudeToolEdit, lessoncheck.ContextRoot),
+	{client: ClaudeID, tool: claudeToolEdit, context: lessoncheck.ContextChild}: claudeInBudgetProof(
+		claudeToolEdit, lessoncheck.ContextChild),
+	{client: ClaudeID, tool: claudeToolWrite, context: lessoncheck.ContextRoot}: claudeInBudgetProof(
+		claudeToolWrite, lessoncheck.ContextRoot),
+	{client: ClaudeID, tool: claudeToolWrite, context: lessoncheck.ContextChild}: claudeInBudgetProof(
+		claudeToolWrite, lessoncheck.ContextChild),
+}
+
+// claudeInBudgetProof returns the proof of one Claude Code pre-write
+// path with an in-budget slow deny. The surface is the surface of the
+// pending evidence of the path, so a review changes the level and the
+// version of a path, not the surface that it names.
+func claudeInBudgetProof(tool string, context lessoncheck.PathContext) guardProof {
+	return guardProof{
+		recordedEvidence: recordedEvidence{clientVersion: claudeEvidenceVersion, surface: guardSurface(tool, context)},
+		slow:             slowInBudget,
+	}
+}
+
+// guardSurface names the native surface of one pre-write path: the
+// PreToolUse event of the tool, its exit 2 deny, and the context.
+func guardSurface(tool string, context lessoncheck.PathContext) string {
+	return "PreToolUse " + tool + " exit 2 in the " + string(context) + " context"
+}
 
 // timeoutOutcome is what a client does when its pre-write hook runs past
 // the hook timeout.
@@ -98,8 +140,15 @@ type timeoutDisposition struct {
 // path. The key version uses the words of recordedEvidence, so a path
 // entry finds the fact of its own version.
 // TestGuardEvidenceMatchesRecordings checks each entry against the
-// recording. The map is empty, because no reviewed recording exists yet.
-var timeoutRecorded = map[clientVersion]timeoutDisposition{}
+// recording.
+//
+// In the slow-guard case of the Claude Code recording, the client stops
+// the pre-write hook after 10 s and the write runs. So each verified
+// Claude Code path names that limit. Codex has no entry, because no
+// reviewed Codex recording exists yet.
+var timeoutRecorded = map[clientVersion]timeoutDisposition{
+	{client: ClaudeID, version: claudeEvidenceVersion}: {outcome: timeoutFailOpen, seconds: 10},
+}
 
 // timeoutLimit returns the limit text of a verified path of the client
 // version: what happens to a write when the guard runs past the hook
@@ -143,8 +192,5 @@ func GuardEvidence(clientID, tool string, context lessoncheck.PathContext) Verif
 		return e
 	}
 
-	return VerificationEvidence{
-		Level:   VerificationPending,
-		Surface: "PreToolUse " + tool + " exit 2 in the " + string(context) + " context",
-	}
+	return VerificationEvidence{Level: VerificationPending, Surface: guardSurface(tool, context)}
 }

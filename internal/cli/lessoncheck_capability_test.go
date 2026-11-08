@@ -58,11 +58,13 @@ func capabilityInstall(t *testing.T, root string, setups ...integration.ClientSe
 }
 
 // The active lines of the example pin under Claude Code enforce hooks
-// and no Codex hooks.
+// and no Codex hooks. The reviewed recording verifies Edit and Write
+// only, so MultiEdit keeps the pin enforced-unverified.
 const (
 	activeEnforceBlock  = "  active: requested; claude enforced-unverified, codex requested-inactive\n"
 	activeEnforceClaude = "active: claude enforced-unverified (native-deny-unverified, native-timeout-unverified) · " +
-		"pre-write Edit, Write, MultiEdit active-unverified\n"
+		"pre-write Edit, Write active (limit: the client lets the write run after its 10 s hook timeout); " +
+		"MultiEdit active-unverified\n"
 	activeCodexInactive = "active: codex requested; inactive: not-installed\n"
 )
 
@@ -197,7 +199,8 @@ func TestLessonCheckHealthSurfacesCallNoInvoker(t *testing.T) {
 
 	statusOut, err := run(t, "-C", root, "status")
 	require.NoError(t, err)
-	assert.Contains(t, statusOut, "lesson checks  claude  enforce · pre-write Edit, Write, MultiEdit active-unverified")
+	assert.Contains(t, statusOut, "lesson checks  claude  enforce · pre-write Edit, Write active (limit: the client "+
+		"lets the write run after its 10 s hook timeout); MultiEdit active-unverified")
 	assert.Contains(t, statusOut, "               codex   check · pre-write apply_patch active-unverified")
 
 	statusJSON, err := run(t, "-C", root, "status", "--json")

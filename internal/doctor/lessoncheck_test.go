@@ -133,7 +133,11 @@ func TestDoctorLessonChecksRow(t *testing.T) {
 		row, ok := checksRow(t, root, dbPath)
 		require.True(t, ok)
 		assert.Equal(t, StateWarn, row.State)
+
+		// The reviewed Claude Code recording verifies the Edit and Write
+		// paths, so the row names the timeout limit of that client.
 		assert.Equal(t, "claude enforce, codex off · 1 enforce, 0 check, 0 advisory pin(s) · config valid · "+
+			"claude pre-write limit: the client lets the write run after its 10 s hook timeout · "+
 			"exploration inactive for codex", row.Detail)
 		assert.Contains(t, row.Fix, "run `seamark init --client codex --lesson-checks enforce` to install the handlers")
 	})
@@ -149,6 +153,7 @@ func TestDoctorLessonChecksRow(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, StateOK, row.State, "enforced-unverified is consistent: %s", row.Fix)
 		assert.Equal(t, "claude enforce, codex enforce · 1 enforce, 0 check, 0 advisory pin(s) · config valid · "+
+			"claude pre-write limit: the client lets the write run after its 10 s hook timeout · "+
 			"exploration inactive for codex", row.Detail)
 		assert.Empty(t, row.Fix)
 	})
