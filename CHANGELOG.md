@@ -145,6 +145,10 @@ model-boundary delivery.
 - **Reset after a compaction.** The context reset waits up to 2 s, not
   200 ms, for a state lock that another hook holds, so a compaction less
   often leaves delivered lessons hidden.
+- **Short omitted lists.** The text of `lessons --prepare` and the second
+  `change_set` text part list the first five omitted pins and lessons and
+  then a `+N more` line. `--json` and `structuredContent` still list every
+  omission.
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`

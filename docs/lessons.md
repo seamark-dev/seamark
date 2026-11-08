@@ -687,7 +687,9 @@ one theme never spend two slots:
   is `check` or `enforce`, and every advisory pin with a `check` (listed
   as not run); and each pin or lesson that the budget or the restatement
   collapse left out, with the `seamark lessons --file <path>` command that
-  shows it. A relative path starts at the current directory, and a new
+  shows it. The text lists the first five omissions and then a `+N more`
+  line for the rest; `--json` lists every one. A relative path starts at
+  the current directory, and a new
   path need not exist. Without an index the result holds the pins of
   `lessons.yaml` (`mined lessons no-index`). `--json` prints the
   versioned `lesson-preparation/1` document. The command exits 0 also
@@ -729,7 +731,9 @@ one theme never spend two slots:
   stays the first part of the answer. When the preparation of the same
   files has a pin, a check, an omission, or a rejected path, a second
   text part lists the pin-refs, versions, modes, checks, and omissions
-  with their inspect commands, without the lesson text again. A client
+  with their inspect commands, without the lesson text again. This part
+  lists the first five omissions and then a `+N more` line, and
+  `structuredContent` lists every one. A client
   that negotiated MCP protocol `2025-06-18` or later also gets the whole
   `lesson-preparation/1` document as `structuredContent` under
   `lesson_preparation`, and the first text part again, byte for byte,

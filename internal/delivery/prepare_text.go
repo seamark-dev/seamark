@@ -26,6 +26,12 @@ const (
 // shownHex is the printed length of a digest, as of a pin-ref.
 const shownHex = 12
 
+// maxOmittedShown caps the omission lines of both text forms. The
+// supplement is agent context, and the budget exists to keep that context
+// small. The --json document and the MCP structured result keep every
+// omission, so the cap removes no data.
+const maxOmittedShown = 5
+
 // RenderPreparation writes p as text in form, FormFull or FormSupplement.
 // An unknown form writes nothing.
 //
@@ -246,9 +252,11 @@ func checkText(c CheckSummary) string {
 	return fmt.Sprintf("%s (%s, version %s)", id, render.Sanitize(string(c.Check.Kind)), shortHex(c.Check.Version))
 }
 
-// writeOmitted writes each left-out pin and mined lesson with the
-// command that shows it. The first MCP part does not show these lessons,
-// so the rule text is not a repeat.
+// writeOmitted writes the first maxOmittedShown left-out pins and mined
+// lessons with the command that shows each one. A count line then names
+// the rest. The cap counts pins and mined lessons together, so mined
+// lessons cannot make the list long either. The first MCP part does not
+// show these lessons, so the rule text is not a repeat.
 func writeOmitted(w io.Writer, p *Preparation) {
 	if len(p.Omitted) == 0 {
 		return
@@ -256,7 +264,9 @@ func writeOmitted(w io.Writer, p *Preparation) {
 
 	fmt.Fprintln(w, "\nomitted")
 
-	for _, o := range p.Omitted {
+	shown := p.Omitted[:min(len(p.Omitted), maxOmittedShown)]
+
+	for _, o := range shown {
 		// A cluster key is the region, a NUL byte, and the symptom. The
 		// line prints the symptom as the rule, so it names the region only.
 		region, _, _ := strings.Cut(o.ClusterKey, "\x00")
@@ -268,6 +278,12 @@ func writeOmitted(w io.Writer, p *Preparation) {
 
 		fmt.Fprintf(w, "- %s · %s · %s: %s\n",
 			name, render.Sanitize(o.Reason), render.Sanitize(o.Rule), render.Sanitize(o.Inspect))
+	}
+
+	// The count line offers the command of every omission line, so it runs
+	// wherever those lines run. It holds no repository text to sanitize.
+	if hidden := len(p.Omitted) - len(shown); hidden > 0 {
+		fmt.Fprintf(w, "(+%d more: `seamark lessons --file <path>` shows a file's full view)\n", hidden)
 	}
 }
 
