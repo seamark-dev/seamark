@@ -5,8 +5,10 @@ package integration
 // claude program on PATH. So they need no model, no login, and no client
 // CLI. The stand-in copies the behavior of Claude Code 2.1.314: it appends
 // to the debug file, and it writes the advisor debug line only when
-// CLAUDE_CODE_DISABLE_ADVISOR_TOOL is not 1. These tests prove the
-// script, not the client.
+// CLAUDE_CODE_DISABLE_ADVISOR_TOOL is not 1. claude_print also runs
+// claude_failure on the result. The stand-in prints no JSON, so that
+// verdict is 0 and the expected output stays the same. These tests prove
+// the script, not the client.
 
 import (
 	"encoding/json"
@@ -198,13 +200,13 @@ func (r advisorRun) advisorRecords(t *testing.T) []advisorRecord {
 // starts claude with CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 in the scratch
 // repository, and records the advisor state of the run after it.
 func TestNativeRecordClaudePrintTurnsAdvisorOff(t *testing.T) {
-	requireTools(t, "sh", "sed", "grep", "head")
+	requireTools(t, "sh", "sed", "grep", "head", "python3")
 
 	r := newAdvisorRun(t)
 	debug := filepath.Join(r.out, "run-1-debug.log")
 
 	got, err := r.run(t, `claude_print 1 --model haiku --debug-file "$OUT/run-1-debug.log"`, nil,
-		"claude_print", "claude_advisor")
+		"claude_print", "claude_advisor", "claude_failure")
 	require.NoError(t, err, got)
 	assert.Equal(t, "  advisor  run 1: off\nfailed=0\n", got)
 
@@ -220,12 +222,12 @@ func TestNativeRecordClaudePrintTurnsAdvisorOff(t *testing.T) {
 // TestNativeRecordClaudePrintRecordsAFailedRun proves that a failed run
 // keeps the exit status of claude and still records its advisor state.
 func TestNativeRecordClaudePrintRecordsAFailedRun(t *testing.T) {
-	requireTools(t, "sh", "sed", "grep", "head")
+	requireTools(t, "sh", "sed", "grep", "head", "python3")
 
 	r := newAdvisorRun(t)
 
 	program := `if claude_print 1 --debug-file "$OUT/run-1-debug.log"; then echo status=0; else echo "status=$?"; fi`
-	got, err := r.run(t, program, []string{"FAKE_CLAUDE_EXIT=3"}, "claude_print", "claude_advisor")
+	got, err := r.run(t, program, []string{"FAKE_CLAUDE_EXIT=3"}, "claude_print", "claude_advisor", "claude_failure")
 	require.NoError(t, err, got)
 	assert.Equal(t, "  advisor  run 1: off\nstatus=3\nfailed=0\n", got)
 
@@ -238,7 +240,7 @@ func TestNativeRecordClaudePrintRecordsAFailedRun(t *testing.T) {
 // The client appends to the debug file. So an old advisor line would make
 // the new run read on, although the switch kept the tool off.
 func TestNativeRecordClaudePrintIgnoresAnEarlierRun(t *testing.T) {
-	requireTools(t, "sh", "sed", "grep", "head", "rm")
+	requireTools(t, "sh", "sed", "grep", "head", "rm", "python3")
 
 	r := newAdvisorRun(t)
 	debug := filepath.Join(r.out, "run-1-debug.log")
@@ -248,7 +250,7 @@ func TestNativeRecordClaudePrintIgnoresAnEarlierRun(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(r.out, "run-1.json"), []byte(`{"session_id": "OLD-RUN-SESSION"}`), 0o600))
 	require.NoError(t, os.WriteFile(stderr, []byte("OLD-RUN-STDERR\n"), 0o600))
 
-	got, err := r.run(t, `claude_print 1 --debug-file "$OUT/run-1-debug.log"`, nil, "claude_print", "claude_advisor")
+	got, err := r.run(t, `claude_print 1 --debug-file "$OUT/run-1-debug.log"`, nil, "claude_print", "claude_advisor", "claude_failure")
 	require.NoError(t, err, got)
 	assert.Equal(t, "  advisor  run 1: off\nfailed=0\n", got)
 
@@ -274,12 +276,12 @@ func TestNativeRecordClaudePrintIgnoresAnEarlierRun(t *testing.T) {
 // the advisor on prints FAIL and counts it for the summary. The run keeps
 // its own exit status and its advisor record.
 func TestNativeRecordClaudePrintFailsAnAdvisorRun(t *testing.T) {
-	requireTools(t, "sh", "sed", "grep", "head", "rm")
+	requireTools(t, "sh", "sed", "grep", "head", "rm", "python3")
 
 	r := newAdvisorRun(t)
 
 	program := `if claude_print 1 --debug-file "$OUT/run-1-debug.log"; then echo status=0; else echo "status=$?"; fi`
-	got, err := r.run(t, program, []string{"FAKE_CLAUDE_ADVISOR=on"}, "claude_print", "claude_advisor")
+	got, err := r.run(t, program, []string{"FAKE_CLAUDE_ADVISOR=on"}, "claude_print", "claude_advisor", "claude_failure")
 	require.NoError(t, err, got)
 	assert.Equal(t, "  advisor  run 1: on, with the advisor model claude-opus-5-5\n"+
 		"  FAIL     run 1 used the advisor tool; no recording run may use it\nstatus=0\nfailed=1\n", got)

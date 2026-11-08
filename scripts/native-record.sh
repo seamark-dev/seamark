@@ -10,8 +10,9 @@
 #           turns off the advisor tool of Claude Code for each Claude
 #           run, and records the advisor state of each run. A run with
 #           the advisor on or unknown prints FAIL (see claude_print). A
-#           Codex run at a usage or account limit prints FAIL and stops
-#           the call before the next run (see codex_verdict).
+#           Claude or Codex run at a usage or account limit prints FAIL
+#           and stops the call before the next run (see claude_print and
+#           codex_verdict).
 #
 # The script has no offline mode. The Go tests replay a reviewed
 # recording offline (make native-replay).
@@ -367,7 +368,8 @@ PY
 # in the scratch repository. The prompt comes from prompt-<run>.txt. The
 # result goes to run-<run>.json, and stderr goes to run-<run>-stderr.txt.
 # It returns the exit status of claude. Each paid Claude run goes through
-# this function, so each run gets the same advisor switch.
+# this function, so each run gets the same advisor switch and the same
+# limit stop.
 #
 # Claude Code 2.1.314 has a server-side advisor tool that calls a stronger
 # model. So a run can call a model that --model does not name. The client
@@ -384,6 +386,13 @@ PY
 # Without the removal, claude_advisor can read the advisor line of that
 # earlier run. The function then records the advisor state of the run,
 # also after a failed run.
+#
+# At a usage or account limit the function prints FAIL and stops the
+# record call, whatever the exit status of claude. Every later run fails
+# the same way, and the stop must not depend on an operator who watches
+# the output. For any other run it sets print_reason, which the runners
+# print when the run failed: the error result text, else the last stderr
+# line, else the exit status.
 claude_print() {
     print_run=$1
     shift
@@ -392,7 +401,107 @@ claude_print() {
     (cd "$REPO" && CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 claude -p "$@" < "$OUT/prompt-$print_run.txt" \
         > "$OUT/run-$print_run.json" 2> "$OUT/run-$print_run-stderr.txt") || print_status=$?
     claude_advisor "$print_run"
+
+    print_verdict=0
+    print_reason=$(claude_failure "$OUT/run-$print_run.json" "$OUT/run-$print_run-stderr.txt") || print_verdict=$?
+
+    if [ "$print_verdict" = 2 ]; then
+        fail "run $print_run stopped at a Claude Code usage or account limit: $print_reason"
+        limit_stop
+    fi
+
+    [ -n "$print_reason" ] || print_reason="claude exited with status $print_status and printed no message"
     return "$print_status"
+}
+
+# claude_failure <result> [<stderr>] reads the --output-format json result
+# of one Claude run. It prints the failure text on one line. Its exit
+# status is the verdict, with the codes of codex_failure:
+#   0  no error result: a missing file, no JSON object, or is_error is not
+#      true; the line is empty
+#   1  an error result with no limit text; the line holds its result text,
+#      or nothing
+#   2  an error result whose text reports a usage or account limit; the
+#      line holds that text
+# With a stderr file, an empty line takes the last non-empty stderr line
+# instead. The verdict does not change, because stderr only names the
+# failure.
+#
+# The limit test copies the one of Claude Code 2.1.319. That client marks
+# a result as a usage limit in two cases. In the first case, the text
+# starts with one prefix of its own list or matches its one pattern. In
+# the second case, the limit response pauses the usage of the whole
+# organization. The client then sends one fixed text, which its list does
+# not hold. So the list here holds the client prefixes in the client
+# order, and then the start of that fixed text. To compare a later
+# client, search its binary for "You've reached your" and "Usage is
+# paused for your organization", and read the code around them.
+#
+# The client also sends the text "API Error: Server is temporarily
+# limiting requests (not your usage limit)". That error is transient, so
+# it does not stop the call. Its prefix is in no list, so it reads 1.
+# The line drops control characters, because the text goes to the
+# terminal.
+claude_failure() {
+    python3 -I - "$1" "${2:-}" <<'PY'
+import json, re, sys
+
+LIMIT_PREFIXES = (
+    "You've hit your",
+    "You've reached your",
+    "You're out of usage credits",
+    "Your org is out of usage · add funds to continue",
+    "Your org is out of usage · contact your admin",
+    "Your seat type doesn't include usage credits",
+    "Your seat type doesn't include usage",
+    "Your usage allocation has been disabled by your admin",
+    "Your group's usage limit is set to $0",
+    "Fable 5 requires usage credits",
+    "You're out of extra usage",
+    "Your seat type doesn't include extra usage",
+    "Usage is paused for your organization",
+)
+
+LIMIT_PATTERN = re.compile(r"^(?:Fable|Haiku|Mythos|Opus|Sonnet)(?: [^·\n]{1,40})? requires usage credits\.")
+
+
+def one_line(text):
+    text = "".join(c if c.isprintable() else " " for c in text)
+    text = " ".join(text.split())
+    return text if len(text) <= 400 else text[:397] + "..."
+
+
+def last_stderr_line(path):
+    # A missing stderr file gives no line, as an empty one does.
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = [one_line(line) for line in f.read().splitlines()]
+    except OSError:
+        return ""
+    lines = [line for line in lines if line]
+    return lines[-1] if lines else ""
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+        result = json.load(f)
+except (OSError, ValueError):
+    result = None
+
+verdict, text = 0, ""
+if isinstance(result, dict) and result.get("is_error") is True:
+    verdict = 1
+    if isinstance(result.get("result"), str):
+        text = one_line(result["result"])
+    if text.startswith(LIMIT_PREFIXES) or LIMIT_PATTERN.match(text):
+        verdict = 2
+
+if not text and sys.argv[2]:
+    text = last_stderr_line(sys.argv[2])
+
+print(text)
+sys.exit(verdict)
+PY
 }
 
 # claude_advisor <run> prints the advisor state of one Claude run, and
@@ -536,9 +645,9 @@ codex_verdict() {
     return 1
 }
 
-# limit_stop ends the record call after a Codex limit, before the next
-# run. The guard scenario first puts back the enforce setup, so the
-# reused repository keeps the hook document that the operator trusted.
+# limit_stop ends the record call after a Claude or Codex limit, before
+# the next run. The guard scenario first puts back the enforce setup, so
+# the reused repository keeps the hook document that the operator trusted.
 # The summary exits with status 1, because the limit line counts as FAIL.
 limit_stop() {
     [ "$SCENARIO" != guard ] || guard_restore
@@ -708,7 +817,7 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
         fi
     else
         SESSION=
-        fail "run $RUN ($tcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
+        fail "run $RUN ($tcase) failed: $print_reason"
     fi
 }
 
@@ -1592,7 +1701,7 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
             ok "run $RUN ($gcase) finished (session $SESSION)"
         fi
     else
-        fail "run $RUN ($gcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
+        fail "run $RUN ($gcase) failed: $print_reason"
     fi
 }
 
