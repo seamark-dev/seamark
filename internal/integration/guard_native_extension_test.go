@@ -688,8 +688,9 @@ func TestNoMultiEditToolReadsTheModelThatHeldTheTools(t *testing.T) {
 // TestGuardExtensionSkipsAChildWithoutMultiEdit replays the child
 // MultiEdit cases of a client without the tool. The subagent replies the
 // word guardNoMultiEdit, and the parent gives no one-word reply, as the
-// one child guard run of Claude Code 2.1.314 did. Each case must skip
-// with its reason and not ask for a new recording.
+// case slow-deny-subagent-multiedit of the Claude Code 2.1.319 guard
+// recording did. Each case must skip with its reason and not ask for a
+// new recording.
 func TestGuardExtensionSkipsAChildWithoutMultiEdit(t *testing.T) {
 	for _, name := range []string{"subagent-multiedit-violation", "slow-deny-subagent-multiedit"} {
 		x := guardExtensionRow(t, ClaudeID, name)

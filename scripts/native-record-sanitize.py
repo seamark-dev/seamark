@@ -135,10 +135,13 @@ SYNTHETIC_PREFIX = {
     RUN: "native-run-",
 }
 
-# The ID shapes of Claude Code 2.1.314. An agent ID is "a" and 16 or 7
-# hex digits. A background task ID is one lower-case letter for the task
-# type and 8 base-36 characters. The two shapes differ in length, so the
-# shape alone gives the kind of a task-id value.
+# The ID shapes of Claude Code. An agent ID is "a" and 16 or 7 hex
+# digits. A background task ID is one lower-case letter for the task type
+# and 8 base-36 characters. The two shapes differ in length, so the shape
+# alone gives the kind of a task-id value. The recordings of Claude Code
+# 2.1.319 hold the UUID and the 16-digit agent shape. The 7-digit agent
+# shape and the task shape come from Claude Code 2.1.314, because no
+# 2.1.319 recording holds them.
 UUID_TEXT = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 UUID_SHAPE = re.compile(r"^%s$" % UUID_TEXT)
 AGENT_SHAPE = re.compile(r"^a(?:[0-9a-f]{16}|[0-9a-f]{7})$")
@@ -297,7 +300,9 @@ def key_kind(text, key, obj, owner):
     """Return the kind of an ID that its member names, or None.
 
     The member names come from the hook payloads, transcripts, and
-    subagent meta files of Claude Code 2.1.314.
+    subagent meta files of Claude Code 2.1.314. They cover the recordings
+    of Claude Code 2.1.319 too: the residual check found no ID there that
+    the pass left.
     """
     if key in ("session_id", "sessionId"):
         return SESSION

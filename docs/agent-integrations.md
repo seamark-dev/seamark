@@ -111,9 +111,11 @@ was dry-run only, and trusted-hook isolation was not tested.
 ## Lesson checks and exploration (Unreleased)
 
 v0.9.0 is the planned first release with lesson-check hook handlers. It
-has not shipped. The features below have fixture coverage, not the native
-evidence needed to release them. Installing an `enforce` configuration
-is not a claim of verified enforcement.
+has not shipped. The features below have fixture coverage. Reviewed
+native recordings of Claude Code 2.1.319 cover part of them, as the
+tables below name; the rest still needs the native evidence of the
+[release checklist](#release-checklist). Installing an `enforce`
+configuration is not a claim of verified enforcement.
 
 Choose each client's lesson hooks explicitly:
 
@@ -138,8 +140,8 @@ implemented handlers, not verified native prevention:
 
 | Client / tool | Pre-write | Post-edit | Contexts and current evidence |
 | --- | --- | --- | --- |
-| Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths; native deny, timeout and model-visible reply evidence pending for each path |
-| Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; native model-visible delivery pending; main-context repeats reset at compaction, child reminders repeat |
+| Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offered no MultiEdit tool in the recording. Post-edit reply: seen in the recording, still unverified in the report |
+| Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; reply seen in the next model request on Claude Code 2.1.319, still unverified in the report; main-context repeats reset at compaction, child reminders repeat |
 | Claude Code `NotebookEdit`, `Bash` | No lesson-check hook | No lesson-check hook | Uncovered writers in both contexts; a shell command can write files |
 | Codex `apply_patch` | Baseline or guard; Add/Delete and move metadata supported; Update before/after content projection not yet supported | `PostToolUse` verification, also for failed tools | Root and child paths declared; native deny, timeout, reply and child attribution remain pending or unsupported as detailed below |
 | Codex structured `Read` | Unsupported | No exploration hook | Setup prints the no-Read notice and installs nothing for exploration; use preparation |
@@ -174,30 +176,49 @@ timeout is **15 seconds**. The handlers budget 5 seconds for the guard
 and 10 seconds for post-edit evaluation inside those limits. The hook
 timeouts remain candidates until native validation covers each supported
 tool and context. A slow-tool result cannot verify another path. Failed
-validation reopens the defaults before release.
+validation reopens the defaults before release. Claude Code 2.1.319
+validates the pre-edit timeout for `Write` and `Edit` in the root and
+child contexts: it waits for a pre-edit hook that ends after about 7
+seconds and honors its deny, and it stops a hook at 10 seconds and lets
+the write run. `MultiEdit`, the post-edit timeout, and every Codex path
+remain candidates.
 
 ### Installed, active, and verified are different
 
 `status`, `doctor`, preparation, mode-change impact and TUI read the same
 capability report. It separates the requested pin mode, installed mode,
-path state, binary identity and native evidence. An installed path can
-be `active-unverified`, `inactive`, or `unsupported`; a requested mode
-alone does not establish a working guard. An `enforced-unverified` badge
-is explicitly unverified, not the verified `enforced` state.
+path state, binary identity and native evidence. An installed path
+reads `active` only with verified native evidence and no reason; it
+can also read `active-unverified`, `inactive`, or `unsupported`. A
+requested mode alone does not establish a working guard. A pin reads
+`enforced` only when every pre-write path of the client is `active`. An
+`enforced-unverified` badge is explicitly unverified, not the verified
+`enforced` state.
 
 A verified path can carry a limit. A client can stop a slow pre-edit
 hook at its timeout and let the write run (fail-open). Claude Code
-2.1.314 does this at 10 seconds. Such a path reads `enforced` only when a
-reviewed native recording of that client version, tool, and context
-shows a guard that is slow but ends inside the timeout, and the client
-waits for it and honors its deny. The claim then holds only inside the
-limit, so every surface that shows it names the limit too, for example
-`claude enforced (limit: the client lets the write run after its 10 s
-hook timeout)`. Status, doctor, setup, preparation, mode-change impact,
-and the TUI print it. The JSON report carries it in `verification.limit`
-of the path and in `limits` of the pin badge. A client that waits for a
-hook past its timeout, or blocks the write, gives no limit. No path reads
-`enforced` before its recording is reviewed and committed as test data.
+2.1.319 does this at 10 seconds. Such a path reads `active`, and a pin
+`enforced`, only when a reviewed native recording of that client
+version, tool, and context shows a guard that is slow but ends inside
+the timeout, and the client waits for it and honors its deny. The claim
+then holds only inside the limit, so every surface that shows it names
+the limit too, for example `claude enforced (limit: the client lets the
+write run after its 10 s hook timeout)`. Status, doctor, setup,
+preparation, mode-change impact, and the TUI print it. The JSON report
+carries it in `verification.limit` of the path and in `limits` of the
+pin badge. A client that waits for a hook past its timeout, or blocks
+the write, gives no limit. No path reads `active` before its recording
+is reviewed and committed as test data.
+
+The reviewed Claude Code 2.1.319 recordings give this proof for `Write`
+and `Edit` in the root and child contexts. Status prints these paths as
+`pre-write Edit, Write active (limit: the client lets the write run after
+its 10 s hook timeout)`. The baseline paths of check mode read the same,
+because the recording shows that the client waits for a slow pre-edit
+hook. `MultiEdit` has no recorded call, so its paths stay
+`active-unverified` with `native-deny-unverified` and
+`native-timeout-unverified`, and a Claude Code enforce pin reads
+`enforced-unverified`. No Codex path is verified yet.
 
 Setup keeps warning-and-install behavior for unknown local capability or
 trust. It refuses known-bad enforce states, such as disabled hooks (Claude
@@ -266,18 +287,24 @@ recordings above:
 
 | Item | Claude root | Claude child | Codex root | Codex child |
 | --- | --- | --- | --- | --- |
-| Call match identity | Unverified | Unverified | Unverified | Unsupported |
-| Receiving-lane identity | Unverified | Unverified | Unverified | Unsupported |
+| Call match identity | Verified | Verified | Unverified | Unsupported |
+| Receiving-lane identity | Verified | Verified | Unverified | Unsupported |
 | Context reset | Unverified | Unsupported | Unsupported | Unsupported |
-| Turn boundary | Unverified | Unverified | Unverified | Unverified |
-| Model boundary | Unverified | Unverified | Unverified | Unverified |
+| Turn boundary | Verified | Unverified | Unverified | Unverified |
+| Model boundary | Verified | Unverified | Unverified | Unverified |
 
-No reviewed native timing recording upgrades these pending identities or
-boundaries. Own-call advice arrives in the same call as the edit that it
-names, so it is no evidence of guidance before construction. A
-command/MCP preparation names no receiver. The delivery report reads
-every observation window as incomplete. A guard's requested deny is not
-proof of prevention; current reports retain `prevented: 0`. See
+The reviewed timing recording of Claude Code 2.1.319 verifies the
+Claude items marked Verified, for that client version only. Its one
+child case is a subagent read, which shows no turn or model step of the
+child, so those child items stay unverified. Context reset copies the
+evidence of the reset hook, which the report keeps unverified. No reviewed
+Codex timing recording exists. Own-call advice arrives in the same call
+as the edit that it names, so it is no evidence of guidance before
+construction. A command/MCP preparation names no receiver. The delivery
+report reads every observation window as incomplete. A guard's requested
+deny is not proof of prevention: `prevented` counts only a deny with a
+written reply, no later execution record, and a verified native deny
+path, which today means Claude Code `Write` or `Edit`. See
 [lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
 
 ### Disable and downgrade safely
@@ -698,11 +725,17 @@ Before release:
   supported client, tool, stage and root/child context. Record versions,
   receiving identity, reply visibility, denied execution and slow-hook
   behavior. Preserve pending or unsupported states for unproven paths;
-  never generalize a successful path to the rest.
+  never generalize a successful path to the rest. Claude Code: the
+  timing and guard recordings of 2.1.319 are reviewed and committed in
+  `internal/integration/testdata/claude/timing` and `.../guard`;
+  `MultiEdit` has no recorded call. Codex: pending.
 - Validate the candidate 10-second pre-edit and 15-second post-edit
   timeouts per tool/context, including slow cases. Change defaults if
   validation fails. Verify post-edit reply visibility separately from
   pre-write denial, and verify Codex trust without granting it in setup.
+  Claude Code 2.1.319 validates the 10-second pre-edit timeout for
+  `Write` and `Edit` in both contexts, with a fail-open limit at 10
+  seconds.
 - Add a verified Codex Update before/after oracle, then implement and
   test content projection. Current conservative unknown/deny behavior
   is not sufficient for the planned release.

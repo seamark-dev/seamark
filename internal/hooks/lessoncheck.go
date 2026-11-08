@@ -149,8 +149,9 @@ func (c lessonCheckClient) specs(mode string) []Spec {
 // ClaudeExplorationSpec returns the exploration hook of Claude Code: a
 // structured Read reaches the hook after the tool ran. The status
 // message stays empty, because a message on every read is noise. The
-// failure event is not matched: its context has no native recording
-// yet that shows that it reaches the model.
+// failure event is not matched yet. In the timing recording of Claude
+// Code 2.1.319, a test entry on that event gave a reply that reached the
+// next model request.
 func ClaudeExplorationSpec() Spec {
 	return Spec{
 		Name:  "lesson exploration",

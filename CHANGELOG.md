@@ -29,7 +29,9 @@ model-boundary delivery.
   from the audit logs, with separate check and guard counts. The text
   shows what the audit logs give. The JSON keeps the full `delivery/1`
   field set, and the fields without a source in this build hold fixed
-  values. Current native evidence keeps prevention at zero.
+  values. `prevented` counts only a written deny on a natively verified
+  path with no later execution record; today that is Claude Code `Write`
+  and `Edit`, from a recording of Claude Code 2.1.319.
 - **Selection reading.** `lessons --delivery` shows requested and
   effective budgets and splits held-back records by surface and cause. A
   hook record now reads `over-total`, not `over-pin-cap`, when

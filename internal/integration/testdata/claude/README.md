@@ -32,8 +32,9 @@ Files:
   Claude Code 2.1.310. They are an `Edit` with
   `replace_all: true`; a `MultiEdit` on a file that does not exist yet,
   whose first edit has an empty `old_string`; a `Write` of a new file
-  inside a subagent (`agent_id`). No native run produced them. A native
-  guard run on Claude Code 2.1.314 showed that one `Edit` with an empty
+  inside a subagent (`agent_id`). No native run produced them. The
+  native guard recording of Claude Code 2.1.319 (`guard/`, case
+  `n1-absent-edit`) shows that one `Edit` with an empty
   `old_string` creates an absent file with `new_string`, so the guard
   projects such an edit as an add. No native run made a `MultiEdit`
   call, so a first `MultiEdit` step with an empty `old_string` follows
