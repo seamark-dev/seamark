@@ -216,9 +216,11 @@ and `Edit` in the root and child contexts. Status prints these paths as
 its 10 s hook timeout)`. The baseline paths of check mode read the same,
 because the recording shows that the client waits for a slow pre-edit
 hook. `MultiEdit` has no recorded call, so its paths stay
-`active-unverified` with `native-deny-unverified` and
-`native-timeout-unverified`, and a Claude Code enforce pin reads
-`enforced-unverified`. No Codex path is verified yet.
+`active-unverified`. In enforce mode its guard paths also name
+`native-deny-unverified` and `native-timeout-unverified`, and a Claude
+Code enforce pin reads `enforced-unverified`. In check mode its baseline
+path reads `active-unverified` with no reason. No Codex path is verified
+yet.
 
 Setup keeps warning-and-install behavior for unknown local capability or
 trust. It refuses known-bad enforce states, such as disabled hooks (Claude
