@@ -350,6 +350,12 @@ type hookSource struct {
 	// so it counts for nothing. Only classifyHook reads it, to name the
 	// broken definition when no other definition runs the hook.
 	missing string
+	// idle is true for an owned lifecycle command of the managed document
+	// under a matcher that fires for none of the spec's tools. matcher is
+	// that matcher. Such a source has no tools and no mode, and only
+	// classifyHook reads it, to name the matcher.
+	idle    bool
+	matcher string
 	// otherForm is true for an owned command in the form of another
 	// client, such as a Codex gate handler in the Claude Code form.
 	otherForm bool
@@ -620,8 +626,10 @@ func (s *hookSource) applyExecution(spec hooks.Spec, execution hooks.Execution) 
 // never runs either. It is kept without tools, so the classification can
 // name the field. An owned lifecycle command whose binary the client
 // cannot start gets a warning. It is kept without tools and mode, so the
-// classification can name it, and startableSources drops it for every
-// other consumer.
+// classification can name it, and runningSources drops it for every
+// other consumer. An owned lifecycle command of the managed document
+// under a matcher that never fires is kept in the same way, with a
+// warning that names the matcher.
 func documentSources(findings *[]Finding, document map[string]any, rules hookRules, path string, spec hooks.Spec, managed bool) []hookSource {
 	var sources []hookSource
 
@@ -659,8 +667,19 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		}
 
 		// The matcher decides first. A definition that never fires gets the
-		// finding about its matcher, whatever its other fields say.
+		// finding about its matcher, whatever its other fields say. Setup
+		// keeps the matcher of its own command, so that command gets a
+		// warning with the matcher to set, and the source stays for the
+		// classification.
 		if len(source.tools) == 0 {
+			if binary != "" && managed && hookType == "command" && lifecycleSpec(spec) {
+				source.idle, source.matcher, source.mode = true, matcher, ""
+				*findings = append(*findings, idleMatcherFinding(source, spec))
+				sources = append(sources, source)
+
+				return
+			}
+
 			*findings = append(*findings, neverFiresFinding(path, cmd, spec.Event, matcher, spec))
 
 			return
@@ -881,10 +900,12 @@ func missingTools(spec hooks.Spec, covered []string) []string {
 // partial, not absent, so the action names the field and no re-run of
 // setup claims to repair it. A definition whose binary the client cannot
 // start counts for nothing. When no other definition runs the hook, it
-// makes the hook partial with the repair of its binary.
+// makes the hook partial with the repair of its binary. So does a managed
+// definition under a matcher that never fires, with the matcher to set.
 func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource) {
 	broken := slices.IndexFunc(all, hookSource.cannotStart)
-	sources := startableSources(all)
+	idle := slices.IndexFunc(all, func(s hookSource) bool { return s.idle })
+	sources := runningSources(all)
 	certain := coveredTools(spec, sources, certainSource)
 	// Every other source has at least one of the spec's tools, so the
 	// first uncertain one also tells whether any uncertain coverage exists.
@@ -934,6 +955,11 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource
 		entry.State = StatePartial
 		entry.Detail = fmt.Sprintf("%s cannot start from %s: %s is missing", name, all[broken].path, render.Sanitize(all[broken].missing))
 		entry.Action = all[broken].missingAction
+	case idle >= 0:
+		entry.State = StatePartial
+		entry.Detail = fmt.Sprintf("%s never runs from %s: its matcher %q does not fire for %s", name, all[idle].path,
+			render.Sanitize(all[idle].matcher), strings.Join(toolNames(spec.Tools()), ", "))
+		entry.Action = idleMatcherAction(all[idle], spec)
 	default:
 		entry.State = StateAbsent
 	}
@@ -1127,11 +1153,37 @@ func missingBinaryFinding(s hookSource, spec hooks.Spec, gate bool) Finding {
 // cannotStart reports whether the client cannot start the source.
 func (s hookSource) cannotStart() bool { return s.missing != "" }
 
-// startableSources drops each source that the client cannot start. Such
-// a source counts for no tool, no mode, and no duplicate, so every
-// consumer except classifyHook reads this list.
-func startableSources(sources []hookSource) []hookSource {
-	return slices.DeleteFunc(slices.Clone(sources), hookSource.cannotStart)
+// inert reports whether the client never runs the source: it cannot
+// start, or it is a managed command under a matcher that never fires.
+func (s hookSource) inert() bool { return s.cannotStart() || s.idle }
+
+// runningSources drops each inert source. Such a source counts for no
+// tool, no mode, and no duplicate, so every consumer except
+// classifyHook reads this list.
+func runningSources(sources []hookSource) []hookSource {
+	return slices.DeleteFunc(slices.Clone(sources), hookSource.inert)
+}
+
+// idleMatcherAction sets the matcher of a managed command that never
+// fires. Setup keeps the matcher of an existing hook, because a narrow
+// matcher can be the user's choice, so a re-run of setup cannot repair
+// it. The action therefore never names a run of setup.
+func idleMatcherAction(s hookSource, spec hooks.Spec) string {
+	return fmt.Sprintf("set the matcher of that hook to %q in %s", spec.Matcher, s.path)
+}
+
+// idleMatcherFinding names a managed command under a matcher that fires
+// for none of the spec's tools. It is a warning, because setup does not
+// repair it and the hook does nothing. Setup and inspection share it, so
+// init and doctor say it alike.
+func idleMatcherFinding(s hookSource, spec hooks.Spec) Finding {
+	return Finding{
+		Level: FindingWarning,
+		Path:  s.path,
+		Reason: fmt.Sprintf("has %#q under %s %q, which never runs for %s; setup does not change the matcher of an existing hook",
+			describeCommand(s.command), spec.Event, render.Sanitize(s.matcher), strings.Join(toolNames(spec.Tools()), ", ")),
+		Action: idleMatcherAction(s, spec),
+	}
 }
 
 // unreadableHooks marks every hook entry unreadable with one reason.

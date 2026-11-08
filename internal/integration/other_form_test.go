@@ -80,7 +80,8 @@ func TestCodexInspectionSaysBesideOnlyForACodexFormHandlerThatRuns(t *testing.T)
 	// A Codex-form handler that Codex cannot run is no managed gate hook
 	// that the Claude Code form runs beside.
 	cases := map[string]string{
-		"a Codex form whose binary is missing": hookEntry("Bash", absentBinary+" "+hooks.CodexGateMarker(hooks.ModeWarn)),
+		"a Codex form whose binary is missing":          hookEntry("Bash", absentBinary+" "+hooks.CodexGateMarker(hooks.ModeWarn)),
+		"a Codex form under a matcher that never fires": hookEntry("ash", codexWarnGate),
 	}
 
 	for name, codexForm := range cases {
@@ -160,6 +161,14 @@ func TestCodexSetupKeepsOneGateHandler(t *testing.T) {
 			[]string{hookEntry("Bash", codexWarnGate), foreign},
 			hooks.ModeEnforce, []string{codexEnforceGate}, 1, 0,
 		},
+		"the Claude Code form never fires": {
+			[]string{hookEntry("Bash", codexWarnGate), hookEntry("ash", claudeFormEnforce)},
+			hooks.ModeWarn, []string{codexWarnGate}, 1, 0,
+		},
+		"a Claude Code handler that never fires before one that runs": {
+			[]string{hookEntry("Read", claudeFormWarn), hookEntry("Bash", claudeFormEnforce)},
+			hooks.ModeEnforce, []string{codexEnforceGate}, 1, 1,
+		},
 	}
 
 	for name, tc := range cases {
@@ -181,9 +190,19 @@ func TestCodexSetupKeepsOneGateHandler(t *testing.T) {
 				assert.Equal(t, "open the project in Codex and review the hooks with /hooks", f.Action)
 			}
 
+			// Each matcher warning names a handler that the written file holds,
+			// so the advised edit has a hook to change.
+			matchers := warningsWith(plan.Findings, `set the matcher of that hook to "Bash" in .codex/hooks.json`)
+			for _, f := range matchers {
+				_, rest, _ := strings.Cut(f.Reason, "`")
+				command, _, _ := strings.Cut(rest, "`")
+				assert.Contains(t, commandsIn(writeFor(t, plan, codexHooksFile), "PreToolUse"), command, f.Reason)
+			}
+
 			// The ash entry keeps its matcher: setup never changes one.
 			if name == "the Codex form never fires" {
 				assert.Equal(t, []any{"ash", "Bash", "apply_patch"}, matchersOf(writeFor(t, plan, codexHooksFile), "PreToolUse"))
+				assert.Len(t, matchers, 1)
 			}
 
 			if name == "a handler beside a foreign hook" {
@@ -191,6 +210,104 @@ func TestCodexSetupKeepsOneGateHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCodexSetupNamesTheMatcherOfTheHandlerThatStays(t *testing.T) {
+	// The removed handler gets no matcher warning. The handler that stays
+	// keeps its matcher, so its warning names the command after the run.
+	cases := map[string][]string{
+		"both forms never fire":                 {hookEntry("ash", codexWarnGate), hookEntry("Read", claudeFormWarn)},
+		"only the Claude Code form, idle":       {hookEntry("ash", claudeFormWarn)},
+		"two equal Claude Code forms, idle":     {hookEntry("ash", claudeFormWarn), hookEntry("ash", claudeFormWarn)},
+		"the Claude Code form first, both idle": {hookEntry("Read", claudeFormWarn), hookEntry("ash", codexWarnGate)},
+	}
+
+	for name, entries := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			codexHooksWith(t, root, entries...)
+
+			plan := planCodex(t, root, ClientSetup{Hooks: true})
+
+			assert.Equal(t, []string{codexWarnGate}, gateCommands(t, plan))
+
+			found := warningsWith(plan.Findings, `set the matcher of that hook to "Bash" in .codex/hooks.json`)
+			require.Len(t, found, 1)
+			assert.Contains(t, found[0].Reason, "has `"+codexWarnGate+"` under PreToolUse \"ash\"")
+		})
+	}
+}
+
+func TestCodexInspectionNamesTheSetupRunThatRemovesAnIdleClaudeCodeForm(t *testing.T) {
+	removes := "run `seamark init --client codex`, which removes that handler, so one gate handler of setup remains"
+	matcher := `set the matcher of that hook to "Bash" in .codex/hooks.json`
+
+	t.Run("beside a Codex form that runs", func(t *testing.T) {
+		root := t.TempDir()
+		codexHooksWith(t, root, hookEntry("Bash", codexWarnGate), hookEntry("ash", claudeFormEnforce))
+
+		insp := codexSetup{}.Inspect(root)
+
+		assert.Empty(t, warningsWith(insp.Findings, matcher), "a matcher edit would start a second gate")
+
+		found := warningsWith(insp.Findings, removes)
+		require.Len(t, found, 1)
+		assert.Equal(t, codexHooksFile, found[0].Path)
+		assert.Equal(t, "has `"+claudeFormEnforce+"` under PreToolUse \"ash\", the seamark gate hook in the Claude Code form, "+
+			"which never runs for Bash", found[0].Reason)
+
+		assert.Equal(t, StateCurrent, entryOf(t, insp, CapabilityCommands).State)
+		assert.Equal(t, hooks.ModeWarn, insp.GateMode)
+	})
+
+	t.Run("before a Codex form that never fires", func(t *testing.T) {
+		root := t.TempDir()
+		codexHooksWith(t, root, hookEntry("Read", claudeFormWarn), hookEntry("ash", codexWarnGate))
+
+		insp := codexSetup{}.Inspect(root)
+
+		// The entry names the handler that stays.
+		commands := entryOf(t, insp, CapabilityCommands)
+		assert.Equal(t, StatePartial, commands.State)
+		assert.Contains(t, commands.Detail, `its matcher "ash" does not fire for Bash`)
+		assert.Equal(t, matcher, commands.Action)
+		assert.Len(t, warningsWith(insp.Findings, matcher), 1)
+		assert.Len(t, warningsWith(insp.Findings, removes), 1)
+	})
+
+	t.Run("with an unreadable config.toml", func(t *testing.T) {
+		root := t.TempDir()
+		codexHooksWith(t, root, hookEntry("Bash", codexWarnGate), hookEntry("ash", claudeFormEnforce))
+		writeRel(t, root, ".codex/config.toml", "[mcp_servers\n")
+
+		found := findingsAt(codexSetup{}.Inspect(root).Findings, codexHooksFile, "in the Claude Code form, which never runs")
+		require.Len(t, found, 1)
+		assert.True(t, strings.HasPrefix(found[0].Action,
+			"fix the file, then re-run `seamark init --client codex`, which removes that handler"), found[0].Action)
+	})
+
+	t.Run("the only handler keeps the matcher warning", func(t *testing.T) {
+		// Setup keeps and rewrites the only handler, so its matcher stays.
+		root := t.TempDir()
+		codexHooksWith(t, root, hookEntry("ash", claudeFormWarn))
+
+		insp := codexSetup{}.Inspect(root)
+
+		assert.Len(t, warningsWith(insp.Findings, matcher), 1)
+		assert.Empty(t, findingsWith(insp.Findings, "which removes that handler"))
+	})
+
+	t.Run("equal handlers", func(t *testing.T) {
+		// Setup keeps one of two equal handlers and removes the other.
+		root := t.TempDir()
+		codexHooksWith(t, root, hookEntry("ash", claudeFormWarn), hookEntry("ash", claudeFormWarn))
+
+		insp := codexSetup{}.Inspect(root)
+
+		assert.Len(t, warningsWith(insp.Findings, matcher), 1)
+		assert.Len(t, warningsWith(insp.Findings, removes), 1)
+		assert.Equal(t, matcher, entryOf(t, insp, CapabilityCommands).Action)
+	})
 }
 
 func TestCodexSetupNamesTheTrustReviewOfAReplacedHandler(t *testing.T) {

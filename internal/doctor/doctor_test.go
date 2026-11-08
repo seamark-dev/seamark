@@ -218,6 +218,50 @@ func TestRunWarnsWhenEveryHookBinaryIsMissing(t *testing.T) {
 	}
 }
 
+func TestRunNamesTheMatcherOfAHookThatNeverFires(t *testing.T) {
+	cases := map[string]struct{ rel, document, want string }{
+		"claude gate": {
+			".claude/settings.json",
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"Shell","hooks":[{"type":"command","command":"/bin/seamark gate --hook"}]},` +
+				`{"matcher":"Edit|Write|MultiEdit","hooks":[{"type":"command","command":"/bin/seamark lessons --hook"}]}]}}`,
+			`set the matcher of that hook to "Bash" in .claude/settings.json`,
+		},
+		"codex gate": {
+			".codex/hooks.json",
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"ash","hooks":[{"type":"command","command":"/bin/seamark gate --hook --client codex"}]},` +
+				`{"matcher":"apply_patch","hooks":[{"type":"command","command":"/bin/seamark lessons --hook --client codex"}]}]}}`,
+			`set the matcher of that hook to "Bash" in .codex/hooks.json`,
+		},
+		"claude gate and lessons": {
+			".claude/settings.json",
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"Shell","hooks":[{"type":"command","command":"/bin/seamark gate --hook"}]},` +
+				`{"matcher":"Read","hooks":[{"type":"command","command":"/bin/seamark lessons --hook"}]}]}}`,
+			// Doctor prints the first action of a client, and the lessons
+			// hook comes first. The line warns, so no "run init" line prints.
+			`set the matcher of that hook to "Edit|Write|MultiEdit" in .claude/settings.json`,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root, dbPath := fixtureRoot(t)
+
+			require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.Dir(tc.rel)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, tc.rel), []byte(tc.document), 0o644))
+
+			hooks := byName(Run(root, dbPath, "test"))["hooks"]
+
+			assert.Equal(t, StateWarn, hooks.State)
+			assert.Contains(t, hooks.Detail, "never runs from "+tc.rel+": its matcher")
+			assert.Contains(t, hooks.Fix, tc.want)
+			assert.NotContains(t, hooks.Fix, "seamark init")
+		})
+	}
+}
+
 func TestRunDetectsMissingAgentBinary(t *testing.T) {
 	root, dbPath := fixtureRoot(t)
 

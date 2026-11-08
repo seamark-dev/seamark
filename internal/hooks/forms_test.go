@@ -74,50 +74,50 @@ func TestReduceOtherFormsKeepsOneGateHandler(t *testing.T) {
 		"both forms under Bash": {
 			`{"hooks":{"PreToolUse":[` + entry("Bash", codexWarnGate) + `,` + entry("Bash", claudeEnforceGate) + `]}}`,
 			`[` + entry("Bash", codexWarnGate) + `]`,
-			[]FormChange{{From: claudeEnforceGate}},
+			[]FormChange{{From: claudeEnforceGate, Matcher: "Bash"}},
 		},
 		"only the Claude Code form": {
 			`{"hooks":{"PreToolUse":[` + entry("Bash", claudeEnforceGate) + `]}}`,
 			`[` + entry("Bash", codexWarnGate) + `]`,
-			[]FormChange{{From: claudeEnforceGate, To: codexWarnGate}},
+			[]FormChange{{From: claudeEnforceGate, To: codexWarnGate, Matcher: "Bash"}},
 		},
 		"the Codex form never fires": {
 			`{"hooks":{"PreToolUse":[` + entry("ash", codexWarnGate) + `,` + entry("Bash", claudeWarnGate) + `]}}`,
 			`[` + entry("ash", codexWarnGate) + `,` + entry("Bash", codexWarnGate) + `]`,
-			[]FormChange{{From: claudeWarnGate, To: codexWarnGate}},
+			[]FormChange{{From: claudeWarnGate, To: codexWarnGate, Matcher: "Bash"}},
 		},
 		"two Claude Code handlers": {
 			`{"hooks":{"PreToolUse":[` + entry("Bash", claudeWarnGate) + `,` + entry("Bash", claudeEnforceGate) + `]}}`,
 			`[` + entry("Bash", codexWarnGate) + `]`,
-			[]FormChange{{From: claudeWarnGate, To: codexWarnGate}, {From: claudeEnforceGate}},
+			[]FormChange{{From: claudeWarnGate, To: codexWarnGate, Matcher: "Bash"}, {From: claudeEnforceGate, Matcher: "Bash"}},
 		},
 		"a handler beside a foreign hook": {
 			`{"hooks":{"PreToolUse":[` + entry("Bash", codexWarnGate) + `,` +
 				`{"matcher":"Bash","hooks":[{"type":"command","command":"my-linter"},` +
 				`{"type":"command","command":"` + claudeEnforceGate + `"}]}]}}`,
 			`[` + entry("Bash", codexWarnGate) + `,{"hooks":[{"command":"my-linter","type":"command"}],"matcher":"Bash"}]`,
-			[]FormChange{{From: claudeEnforceGate}},
+			[]FormChange{{From: claudeEnforceGate, Matcher: "Bash"}},
 		},
 		"only Claude Code handlers that never fire": {
 			`{"hooks":{"PreToolUse":[` + entry("ash", claudeWarnGate) + `,` + entry("sh", claudeEnforceGate) + `]}}`,
 			`[` + entry("ash", codexWarnGate) + `]`,
-			[]FormChange{{From: claudeWarnGate, To: codexWarnGate}, {From: claudeEnforceGate}},
+			[]FormChange{{From: claudeWarnGate, To: codexWarnGate, Matcher: "ash"}, {From: claudeEnforceGate, Matcher: "sh"}},
 		},
 		"a Claude Code handler that never fires before one that runs": {
 			`{"hooks":{"PreToolUse":[` + entry("Read", claudeWarnGate) + `,` + entry("Bash", claudeEnforceGate) + `]}}`,
 			`[` + entry("Bash", codexWarnGate) + `]`,
-			[]FormChange{{From: claudeWarnGate}, {From: claudeEnforceGate, To: codexWarnGate}},
+			[]FormChange{{From: claudeWarnGate, Matcher: "Read"}, {From: claudeEnforceGate, To: codexWarnGate, Matcher: "Bash"}},
 		},
 		"handlers of both forms that never fire": {
 			`{"hooks":{"PreToolUse":[` + entry("ash", codexWarnGate) + `,` + entry("Read", claudeWarnGate) + `]}}`,
 			`[` + entry("ash", codexWarnGate) + `]`,
-			[]FormChange{{From: claudeWarnGate}},
+			[]FormChange{{From: claudeWarnGate, Matcher: "Read"}},
 		},
 		"a Claude Code handler of another type before a command": {
 			`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"prompt","command":"` + claudeWarnGate + `"}]},` +
 				entry("Bash", claudeEnforceGate) + `]}}`,
 			`[` + entry("Bash", codexWarnGate) + `]`,
-			[]FormChange{{From: claudeWarnGate}, {From: claudeEnforceGate, To: codexWarnGate}},
+			[]FormChange{{From: claudeWarnGate, Matcher: "Bash"}, {From: claudeEnforceGate, To: codexWarnGate, Matcher: "Bash"}},
 		},
 	}
 
@@ -125,9 +125,23 @@ func TestReduceOtherFormsKeepsOneGateHandler(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			document := formDocument(t, tc.document)
 
+			// The removal list follows the same rule and changes nothing.
+			removals := OtherFormRemovals(document, CodexSpecs(ModeWarn)[0], CodexMatcher)
+			assert.Equal(t, formDocument(t, tc.document), document)
+
 			changes := ReduceOtherForms(document, CodexSpecs(ModeWarn)[0], formBinary, CodexMatcher)
 
 			assert.Equal(t, tc.changes, changes)
+
+			var removed []FormChange
+
+			for _, c := range changes {
+				if c.To == "" {
+					removed = append(removed, c)
+				}
+			}
+
+			assert.Equal(t, removed, removals)
 			assert.JSONEq(t, tc.want, preToolUse(t, document))
 
 			// A second pass finds nothing in the other form.

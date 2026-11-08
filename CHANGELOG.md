@@ -79,6 +79,12 @@ model-boundary delivery.
   one gate handler: it removes the extra handlers or rewrites the only
   one, keeps enforce unless `--gate-mode` asks otherwise, and asks for a
   new review in /hooks.
+- **Hooks under a matcher that never fires.** For a seamark hook in the
+  managed file under such a matcher, doctor and init for both clients
+  now warn and name the matcher to set in that file, in place of a
+  `seamark init` run that changes nothing. Setup still keeps the matcher.
+  For a Codex gate handler in the Claude Code form that
+  `init --client codex` removes, doctor names that run instead.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.

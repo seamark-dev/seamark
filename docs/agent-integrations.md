@@ -81,6 +81,14 @@ with an absolute path from another machine is one example. For the file
 that setup manages, the fix is a setup run, which rewrites the command
 to the running binary; Codex then asks for a new review in `/hooks`.
 
+Setup keeps the matcher of an existing hook, because a narrow matcher can
+be your choice. When the matcher of a seamark hook in the file that setup
+manages never fires for the hook's tools, init and doctor warn and name
+the matcher to set in that file. A setup run does not change it. A Codex
+gate handler in the Claude Code form is the exception when `seamark init
+--client codex` removes it, because another gate handler stays: doctor
+names that setup run instead.
+
 ## What each agent supports
 
 The table distinguishes installed features from behavior verified with a

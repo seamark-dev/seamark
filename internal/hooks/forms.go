@@ -12,15 +12,18 @@ type FormChange struct {
 	// To is the managed command that replaced it, or "" when the handler
 	// was removed.
 	To string
+	// Matcher is the matcher of the entry that held the handler. A caller
+	// uses it to find its own finding about that handler.
+	Matcher string
 }
 
 // formHandler is one owned handler of the spec's event, with what
 // ReduceOtherForms needs to choose the handler that stays.
 type formHandler struct {
-	entry, index int
-	command      string
-	other        bool
-	runs         bool
+	entry, index     int
+	command, matcher string
+	other            bool
+	runs             bool
 }
 
 // ReduceOtherForms keeps at most one handler of the spec's hook in the
@@ -65,7 +68,7 @@ func ReduceOtherForms(settings map[string]any, spec Spec, bin string, fires Matc
 			want := spec.Command(bin)
 			if h.command != want {
 				handlerAt(entries, h.entry, h.index)["command"] = want
-				changes = append(changes, FormChange{From: h.command, To: want})
+				changes = append(changes, FormChange{From: h.command, To: want, Matcher: h.matcher})
 			}
 
 			continue
@@ -76,7 +79,7 @@ func ReduceOtherForms(settings map[string]any, spec Spec, bin string, fires Matc
 		}
 
 		drop[h.entry][h.index] = true
-		changes = append(changes, FormChange{From: h.command})
+		changes = append(changes, FormChange{From: h.command, Matcher: h.matcher})
 	}
 
 	if len(drop) > 0 {
@@ -84,6 +87,31 @@ func ReduceOtherForms(settings map[string]any, spec Spec, bin string, fires Matc
 	}
 
 	return changes
+}
+
+// OtherFormRemovals lists the handlers that ReduceOtherForms removes,
+// by the same rule, and changes nothing. Inspection reads it, so doctor
+// names the setup run that removes a handler, not an edit of that
+// handler.
+func OtherFormRemovals(settings map[string]any, spec Spec, fires MatcherRule) []FormChange {
+	if len(spec.OtherForms) == 0 {
+		return nil
+	}
+
+	hookMap, _ := settings["hooks"].(map[string]any)
+	entries, _ := hookMap[spec.Event].([]any)
+	handlers := ownedHandlers(entries, spec, fires)
+	keep := keptOtherForm(handlers)
+
+	var removals []FormChange
+
+	for i, h := range handlers {
+		if h.other && i != keep {
+			removals = append(removals, FormChange{From: h.command, Matcher: h.matcher})
+		}
+	}
+
+	return removals
 }
 
 // ownedHandlers lists every handler of the event that the spec owns, in
@@ -117,7 +145,7 @@ func ownedHandlers(entries []any, spec Spec, fires MatcherRule) []formHandler {
 			hookType, _ := h["type"].(string)
 			runs := hookType == "command" && Fires(spec, matcher, fires)
 
-			out = append(out, formHandler{entry: e, index: i, command: cmd, other: other, runs: runs})
+			out = append(out, formHandler{entry: e, index: i, command: cmd, matcher: matcher, other: other, runs: runs})
 		}
 	}
 

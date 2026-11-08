@@ -283,10 +283,13 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 			sources = append(sources, documentSources(&plan.Findings, local, rules, claudeLocalSettings, spec, false)...)
 		}
 
-		// A definition whose binary the client cannot start counts for no
-		// tool and no mode. The merge already rewrote the managed commands
-		// to the running binary, so only a local definition can be one.
-		sources = startableSources(sources)
+		// A definition that the client never runs counts for no tool and no
+		// mode. The merge already rewrote the managed commands to the running
+		// binary, so only a local one can fail to start. A managed one can
+		// sit under a matcher that never fires, and its warning names that
+		// matcher, so no coverage warning repeats it.
+		idle := slices.ContainsFunc(sources, func(s hookSource) bool { return s.idle })
+		sources = runningSources(sources)
 
 		// A local copy of a managed definition can change the managed gate
 		// mode, so the copies are read before the gate hooks.
@@ -309,7 +312,7 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 
 		sourceFindings(&plan.Findings, spec, withoutClaudeCopies(sources))
 
-		if req.CheckHookSources {
+		if req.CheckHookSources && !idle {
 			reportMissingCoverage(plan, spec, sources)
 		}
 	}
@@ -886,7 +889,7 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence, rules hookRu
 		applyClaudeCopies(&findings, spec, read)
 		classifyHook(all[i], spec, read)
 
-		sources := startableSources(read)
+		sources := runningSources(read)
 		sourceFindings(&findings, spec, withoutClaudeCopies(sources))
 
 		if i == 0 {

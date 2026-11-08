@@ -391,17 +391,18 @@ func Fixtures() []Fixture {
 		},
 		{
 			// seamark's own gate command under a matcher that never fires for
-			// Bash: it gates nothing, and the finding says why.
+			// Bash: it gates nothing, and the finding names the matcher to set.
+			// Setup keeps the matcher, so the hook is partial, not missing.
 			Name: "never fires",
 			Write: func(root string) error {
 				return WriteFile(root, ".claude/settings.json", PreToolUseDocument("Edit", Binary+" gate --enforce --hook"))
 			},
 			Client: integration.ClaudeID,
 			States: map[integration.Capability]integration.CapabilityState{
-				integration.CapabilityEdits: integration.StateAbsent, integration.CapabilityCommands: integration.StateAbsent,
+				integration.CapabilityEdits: integration.StateAbsent, integration.CapabilityCommands: integration.StatePartial,
 			},
-			Findings: []string{`under PreToolUse "Edit", which never runs for PreToolUse Bash`},
-			Words:    []string{"no hooks installed"},
+			Findings: []string{`under PreToolUse "Edit", which never runs for Bash; setup does not change the matcher`},
+			Words:    []string{`gate hook never runs from .claude/settings.json: its matcher "Edit" does not fire for Bash`},
 		},
 		{
 			// seamark's own enforcing gate under a "*" matcher. Claude Code

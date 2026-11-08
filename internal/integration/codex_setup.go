@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
@@ -191,7 +192,7 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 
 		read := codexHookSources(&found, rules, document, inline, spec)
 		plan.Findings = append(plan.Findings, withoutManagedRewrites(found, spec, read)...)
-		elsewhere := unmanagedSources(startableSources(read))
+		elsewhere := unmanagedSources(runningSources(read))
 
 		// plan.GateHooks lists each gate hook that Codex runs from a
 		// definition that setup does not manage, with its own mode. It
@@ -222,6 +223,7 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 
 	if slices.ContainsFunc(managed, func(s hooks.Spec) bool { return s.Name == gate.Name }) {
 		forms = hooks.ReduceOtherForms(document, gate, binary, hooks.CodexMatcher)
+		plan.Findings = followFormChanges(plan.Findings, gate, forms)
 		plan.Findings = append(plan.Findings, otherFormFindings(forms)...)
 	}
 
@@ -344,6 +346,78 @@ func otherFormFindings(changes []hooks.FormChange) []Finding {
 	}
 
 	return findings
+}
+
+// followFormChanges updates the matcher warning of each handler in the
+// Claude Code form that the reduction of this run changed. The plan
+// reads its sources before the reduction, so the warnings name the old
+// handlers. A removed handler loses its warning, because no handler is
+// left to edit, and the removal finding names it. A replaced handler
+// keeps its matcher, so its warning names the new command. Equal
+// handlers give equal warnings, so each change takes one warning.
+func followFormChanges(findings []Finding, spec hooks.Spec, changes []hooks.FormChange) []Finding {
+	for _, c := range changes {
+		stale := idleMatcherFinding(hookSource{path: codexHooksFile, command: c.From, matcher: c.Matcher}, spec)
+
+		i := slices.Index(findings, stale)
+		if i < 0 {
+			continue
+		}
+
+		if c.To == "" {
+			findings = slices.Delete(findings, i, i+1)
+
+			continue
+		}
+
+		findings[i] = idleMatcherFinding(hookSource{path: codexHooksFile, command: c.To, matcher: c.Matcher}, spec)
+	}
+
+	return findings
+}
+
+// removedFormSources takes out of sources each idle handler in the
+// Claude Code form that setup removes, by the rule of
+// hooks.ReduceOtherForms. Setup keeps another gate handler, so a matcher
+// edit would start a second gate beside it. The finding of such a
+// handler therefore names the setup run, and the classification names
+// the handler that stays. Equal handlers give equal sources, so each
+// removal takes one source.
+func removedFormSources(findings []Finding, rules hookRules, spec hooks.Spec, sources []hookSource,
+	removals []hooks.FormChange,
+) ([]Finding, []hookSource) {
+	kept := slices.Clone(sources)
+
+	for _, c := range removals {
+		i := slices.IndexFunc(kept, func(s hookSource) bool {
+			return s.idle && s.otherForm && s.command == c.From && s.matcher == c.Matcher
+		})
+		if i < 0 {
+			continue
+		}
+
+		if at := slices.Index(findings, idleMatcherFinding(kept[i], spec)); at >= 0 {
+			findings[at] = removedFormFinding(rules, kept[i], spec)
+		}
+
+		kept = slices.Delete(kept, i, i+1)
+	}
+
+	return findings, kept
+}
+
+// removedFormFinding names an idle handler in the Claude Code form that
+// setup removes. The action is the setup route of rules, so it follows
+// the route that can run in the current state.
+func removedFormFinding(rules hookRules, s hookSource, spec hooks.Spec) Finding {
+	return Finding{
+		Level: FindingWarning,
+		Path:  s.path,
+		Reason: fmt.Sprintf("has %#q under %s %q, the seamark gate hook in the Claude Code form, which never runs for %s",
+			describeCommand(s.command), spec.Event, render.Sanitize(s.matcher), strings.Join(toolNames(spec.Tools()), ", ")),
+		Action: cmp.Or(rules.rewrite, "run `seamark init --client codex`") +
+			", which removes that handler, so one gate handler of setup remains",
+	}
 }
 
 // removesOtherFormEnforce reports whether setup removed or replaced a
@@ -857,14 +931,16 @@ func classifyCodexHooks(reads codexHookReads, rules hookRules) (entries []Capabi
 	gateSpec, lessons := specs[0], specs[1]
 
 	gateRead := codexHookSources(&findings, rules, reads.document, reads.inline, gateSpec)
-	gateSources := startableSources(gateRead)
+	findings, gateRead = removedFormSources(findings, rules, gateSpec, gateRead,
+		hooks.OtherFormRemovals(reads.document, gateSpec, hooks.CodexMatcher))
+	gateSources := runningSources(gateRead)
 	classifyHook(&commands, gateSpec, gateRead)
 	sourceFindings(&findings, gateSpec, gateSources)
 	findings = append(findings, otherFormInspectionFindings(rules, gateSources)...)
 
 	lessonRead := codexHookSources(&findings, rules, reads.document, reads.inline, lessons)
 	classifyHook(&edits, lessons, lessonRead)
-	sourceFindings(&findings, lessons, startableSources(lessonRead))
+	sourceFindings(&findings, lessons, runningSources(lessonRead))
 
 	gate.mode, gate.possible = hookMode(gateSources, certainSource), hookMode(gateSources, uncertainSource)
 	gate.background = backgroundReportOnly(gateSources)
