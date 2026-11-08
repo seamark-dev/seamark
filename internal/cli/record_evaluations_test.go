@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/seamark-dev/seamark/internal/integration"
 )
 
 // TestMain clears the recording switch before the tests run. The native
@@ -12,10 +14,15 @@ import (
 // the hook tests find evaluation and reset records that they do not expect.
 // A test that needs the switch sets it with t.Setenv, which clears it again
 // after that test.
+//
+// The hook fixtures also name /opt/bin/seamark, which a test machine does
+// not need to hold. The inspection reads it as a hook that can start.
 func TestMain(m *testing.M) {
 	if err := os.Unsetenv(recordEvaluationsEnv); err != nil {
 		panic(err)
 	}
+
+	integration.TreatHookBinaryAsPresent("/opt/bin/seamark")
 
 	os.Exit(m.Run())
 }

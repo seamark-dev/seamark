@@ -274,12 +274,19 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 
 	localState := claudeLocalStateOf(readsLocal, localErr)
 
+	rules := claudeHookRules.withSelf(narration.binary)
+
 	for i, spec := range specs {
-		sources := documentSources(&plan.Findings, settings, claudeHookRules, approve.ClaudeSettings, spec, true)
+		sources := documentSources(&plan.Findings, settings, rules, approve.ClaudeSettings, spec, true)
 
 		if req.CheckHookSources {
-			sources = append(sources, documentSources(&plan.Findings, local, claudeHookRules, claudeLocalSettings, spec, false)...)
+			sources = append(sources, documentSources(&plan.Findings, local, rules, claudeLocalSettings, spec, false)...)
 		}
+
+		// A definition whose binary the client cannot start counts for no
+		// tool and no mode. The merge already rewrote the managed commands
+		// to the running binary, so only a local definition can be one.
+		sources = startableSources(sources)
 
 		// A local copy of a managed definition can change the managed gate
 		// mode, so the copies are read before the gate hooks.
@@ -378,7 +385,7 @@ func readsClaudeLocalHooks(req ClientSetup, settings map[string]any) bool {
 // handlers. requested is true when the run names a lesson-check mode.
 func checkClaudeLessonHandlers(plan *ClientPlan, settings, local map[string]any, specs []hooks.Spec, requested bool) error {
 	for _, spec := range specs {
-		sources := claudeHookSources(&plan.Findings, settings, local, spec)
+		sources := claudeHookSources(&plan.Findings, claudeHookRules, settings, local, spec)
 		applyClaudeCopies(&plan.Findings, spec, sources)
 
 		if spec.Marker != claudeExplorationSpec.Marker {
@@ -394,11 +401,11 @@ func checkClaudeLessonHandlers(plan *ClientPlan, settings, local map[string]any,
 }
 
 // claudeHookSources lists every definition of the spec's hook in both
-// settings files. Setup manages the shared file only.
-func claudeHookSources(findings *[]Finding, settings, local map[string]any, spec hooks.Spec) []hookSource {
-	sources := documentSources(findings, settings, claudeHookRules, approve.ClaudeSettings, spec, true)
+// settings files, by the given rules. Setup manages the shared file only.
+func claudeHookSources(findings *[]Finding, rules hookRules, settings, local map[string]any, spec hooks.Spec) []hookSource {
+	sources := documentSources(findings, settings, rules, approve.ClaudeSettings, spec, true)
 
-	return append(sources, documentSources(findings, local, claudeHookRules, claudeLocalSettings, spec, false)...)
+	return append(sources, documentSources(findings, local, rules, claudeLocalSettings, spec, false)...)
 }
 
 // claudeHandlerKey lists the fields of Claude Code's key for a command
@@ -748,13 +755,22 @@ var claudeHookEvidence = VerificationEvidence{Level: VerificationUnverified}
 func (claudeSetup) Inspect(root string) Inspection {
 	evidence := claudeHookEvidence
 
-	hookEntries, gate, findings, lessons := inspectClaudeHooks(root, evidence)
+	// The explicit setup also plans .mcp.json, so it can stop there. The
+	// plain form of init never reads .mcp.json, so it installs a missing
+	// hook in that state. The repair of a missing hook binary follows the
+	// same route.
+	registration, stops := inspectClaudeRegistration(root, evidence)
+
+	rewrite := "run `seamark init --client claude`"
+	if stops {
+		rewrite = "run `seamark init` (the plain form never reads .mcp.json, where `seamark init --client claude` stops)"
+	}
+
+	hookEntries, gate, findings, lessons := inspectClaudeHooks(root, evidence, claudeHookRules.withRewrite(rewrite))
 
 	// The skills entry carries evidence only; the registry fills the
 	// directory state.
 	skillsEvidence := CapabilityInspection{Capability: CapabilitySkills, Supported: true, Verification: evidence}
-
-	registration, stops := inspectClaudeRegistration(root, evidence)
 	capabilities := append([]CapabilityInspection{
 		skillsEvidence,
 		registration,
@@ -768,9 +784,6 @@ func (claudeSetup) Inspect(root string) Inspection {
 		CapabilityCommands: approve.ClaudeSettings, CapabilityResets: approve.ClaudeSettings,
 	})
 
-	// The explicit setup also plans .mcp.json, so it can stop there. The
-	// plain form of init never reads .mcp.json, so it installs a missing
-	// hook in that state.
 	restore := "run `seamark init --client claude` to install the missing hook"
 	if stops {
 		restore = "run `seamark init` to install the missing hook: the plain form never reads .mcp.json, " +
@@ -796,7 +809,7 @@ func (claudeSetup) Inspect(root string) Inspection {
 // Inspect and skips the other documents, because the lesson capability
 // report reads only the hook documents.
 func (claudeSetup) InspectLessonHooks(root string) Inspection {
-	entries, gate, _, lessons := inspectClaudeHooks(root, claudeHookEvidence)
+	entries, gate, _, lessons := inspectClaudeHooks(root, claudeHookEvidence, claudeHookRules)
 
 	return Inspection{ClientID: ClaudeID, Capabilities: entries, HookDocumentError: gate.err, LessonHooks: lessons}
 }
@@ -839,7 +852,7 @@ type gateInspection struct {
 // The disableAllHooks finding comes once, when a hook entry is not
 // absent. A repository without seamark hooks gets no finding for a
 // setting of its own.
-func inspectClaudeHooks(root string, evidence VerificationEvidence) (
+func inspectClaudeHooks(root string, evidence VerificationEvidence, rules hookRules) (
 	entries []CapabilityInspection, gate gateInspection, findings []Finding, lessons *LessonHookInspection,
 ) {
 	edits := CapabilityInspection{Capability: CapabilityEdits, Supported: true, Verification: evidence}
@@ -867,10 +880,13 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence) (
 	findings = scratch.Findings
 
 	for i, spec := range hooks.ClaudeSpecs(hooks.ModeWarn) {
-		sources := claudeHookSources(&findings, settings, local, spec)
-		applyClaudeCopies(&findings, spec, sources)
+		// A definition that cannot start shares no tool with another one, so
+		// it is never a copy. applyClaudeCopies can read the whole list.
+		read := claudeHookSources(&findings, rules, settings, local, spec)
+		applyClaudeCopies(&findings, spec, read)
+		classifyHook(all[i], spec, read)
 
-		classifyHook(all[i], spec, sources)
+		sources := startableSources(read)
 		sourceFindings(&findings, spec, withoutClaudeCopies(sources))
 
 		if i == 0 {

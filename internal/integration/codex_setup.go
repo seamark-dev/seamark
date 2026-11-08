@@ -184,12 +184,14 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 
 	var managed []hooks.Spec
 
+	rules := codexHookRules.withSelf(binary)
+
 	for _, spec := range specs {
 		var found []Finding
 
-		sources := codexHookSources(&found, document, inline, spec)
-		plan.Findings = append(plan.Findings, withoutManagedBackground(found, spec, sources)...)
-		elsewhere := unmanagedSources(sources)
+		read := codexHookSources(&found, rules, document, inline, spec)
+		plan.Findings = append(plan.Findings, withoutManagedRewrites(found, spec, read)...)
+		elsewhere := unmanagedSources(startableSources(read))
 
 		// plan.GateHooks lists each gate hook that Codex runs from a
 		// definition that setup does not manage, with its own mode. It
@@ -248,7 +250,7 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	plan.Findings = append(plan.Findings, backgroundRemovalFindings(codexHooksFile, lessons.removed, true)...)
 
 	for _, spec := range lessons.specs {
-		sources := unmanagedSources(codexHookSources(&plan.Findings, document, inline, spec))
+		sources := unmanagedSources(codexHookSources(&plan.Findings, rules, document, inline, spec))
 
 		if err := refuseSecondLessonHandler(CodexID, spec, sources, lessons.requested); err != nil {
 			return err
@@ -356,8 +358,10 @@ func codexInstalledGateMode(document map[string]any) string {
 // the reader does not know has no matcher or type to check. It counts
 // as a source that can run the hook for every tool: a false "runs"
 // leaves the user without any hook.
-func codexHookSources(findings *[]Finding, document map[string]any, inline []approve.InlineHook, spec hooks.Spec) []hookSource {
-	sources := documentSources(findings, document, codexHookRules, codexHooksFile, spec, true)
+func codexHookSources(findings *[]Finding, rules hookRules, document map[string]any, inline []approve.InlineHook,
+	spec hooks.Spec,
+) []hookSource {
+	sources := documentSources(findings, document, rules, codexHooksFile, spec, true)
 
 	for _, entry := range inline {
 		reading := hooks.ReadHook(entry.Command, spec.Markers())
@@ -404,18 +408,31 @@ func codexHookSources(findings *[]Finding, document map[string]any, inline []app
 	return sources
 }
 
-// withoutManagedBackground removes the background finding of each
-// managed source from findings. The Codex plan reads its sources before
-// the merge, because they decide which specs the merge gets. An owned
-// entry keeps its spec in the merge, so the merge removes the key. The
-// removal finding then replaces the warning, which asks for this run.
-func withoutManagedBackground(findings []Finding, spec hooks.Spec, sources []hookSource) []Finding {
+// withoutManagedRewrites removes from findings each finding about a
+// managed source that the merge of this run repairs. The Codex plan
+// reads its sources before the merge, because they decide which specs
+// the merge gets. An owned entry keeps its spec in the merge, so the
+// merge removes its background key and rewrites its command to the
+// running binary. The removal finding then replaces the background
+// warning, which asks for this run. A missing binary needs no finding,
+// because the rewritten command names the running binary.
+func withoutManagedRewrites(findings []Finding, spec hooks.Spec, sources []hookSource) []Finding {
 	for _, s := range sources {
-		if !s.managed || s.background == "" {
+		if !s.managed {
 			continue
 		}
 
-		stale := backgroundFinding(s, spec, CodexID)
+		var stale Finding
+
+		switch {
+		case s.cannotStart():
+			stale = missingBinaryFinding(s, spec, spec.Name == "gate")
+		case s.background != "":
+			stale = backgroundFinding(s, spec, CodexID)
+		default:
+			continue
+		}
+
 		findings = slices.DeleteFunc(findings, func(f Finding) bool { return f == stale })
 	}
 
@@ -597,10 +614,24 @@ func (codexSetup) Inspect(root string) Inspection {
 	// from .agents/skills on codex-cli 0.152.1.
 	skillsEvidence := CapabilityInspection{Capability: CapabilitySkills, Supported: true, Verification: codexSkillsEvidence}
 
+	// Every Codex setup that installs hooks also plans the registration,
+	// so it stops at a config.toml that the plan cannot read. The fix of
+	// that file then comes first, for a missing hook and for a missing
+	// hook binary. The action of a linked file names the link, so the
+	// route reads the registration after linkActions.
+	linked := []CapabilityInspection{registration}
+	linkActions(root, linked, map[Capability]string{CapabilityMCPRegistration: approve.CodexConfig})
+	registration = linked[0]
+
+	restore, rewrite := "run `seamark init --client codex` to install the missing hook", "run `seamark init --client codex`"
+	if registration.State == StateUnreadable {
+		restore, rewrite = registration.Action, registration.Action
+	}
+
 	// One read of each hook source serves every hook inspector below. So
 	// the hook inspectors see the same state of each file.
 	reads := readCodexHookSources(root)
-	hookEntries, gate, findings := classifyCodexHooks(reads)
+	hookEntries, gate, findings := classifyCodexHooks(reads, codexHookRules.withRewrite(rewrite))
 	capabilities := append([]CapabilityInspection{skillsEvidence, registration, inspectGrants(record, evidence)}, hookEntries...)
 
 	// Setup owns both documents. Inspection still reads the inline hooks
@@ -610,16 +641,6 @@ func (codexSetup) Inspect(root string) Inspection {
 		CapabilityMCPRegistration: approve.CodexConfig, CapabilityToolGrants: approve.CodexConfig,
 		CapabilityEdits: codexHooksFile, CapabilityCommands: codexHooksFile,
 	})
-
-	// Every Codex setup that installs hooks also plans the registration,
-	// so it stops at a config.toml that the plan cannot read. The fix of
-	// that file then comes first.
-	restore := "run `seamark init --client codex` to install the missing hook"
-	if i := slices.IndexFunc(capabilities, func(e CapabilityInspection) bool {
-		return e.Capability == CapabilityMCPRegistration && e.State == StateUnreadable
-	}); i >= 0 {
-		restore = capabilities[i].Action
-	}
 
 	restoreHooks(capabilities, restore, CapabilityEdits, CapabilityCommands)
 
@@ -641,7 +662,7 @@ func (codexSetup) Inspect(root string) Inspection {
 // capability report reads neither.
 func (codexSetup) InspectLessonHooks(root string) Inspection {
 	reads := readCodexHookSources(root)
-	entries, gate, _ := classifyCodexHooks(reads)
+	entries, gate, _ := classifyCodexHooks(reads, codexHookRules)
 
 	return Inspection{
 		ClientID: CodexID, Capabilities: entries, HookDocumentError: gate.err, LessonHooks: inspectCodexLessonHooks(reads),
@@ -732,7 +753,7 @@ const codexResetDetail = "no reset hook is installed: reminders repeat, so a res
 // the receiving context that no verified reset reaches. Hooks turned off
 // in the project configuration and a definition Codex never runs are
 // limitations too.
-func classifyCodexHooks(reads codexHookReads) (entries []CapabilityInspection, gate gateInspection, findings []Finding) {
+func classifyCodexHooks(reads codexHookReads, rules hookRules) (entries []CapabilityInspection, gate gateInspection, findings []Finding) {
 	edits := CapabilityInspection{Capability: CapabilityEdits, Supported: true, Verification: codexEditsEvidence}
 	commands := CapabilityInspection{Capability: CapabilityCommands, Supported: true, Verification: codexCommandsEvidence}
 	resets := CapabilityInspection{
@@ -752,13 +773,14 @@ func classifyCodexHooks(reads codexHookReads) (entries []CapabilityInspection, g
 	specs := hooks.CodexSpecs(hooks.ModeWarn)
 	gateSpec, lessons := specs[0], specs[1]
 
-	gateSources := codexHookSources(&findings, reads.document, reads.inline, gateSpec)
-	classifyHook(&commands, gateSpec, gateSources)
+	gateRead := codexHookSources(&findings, rules, reads.document, reads.inline, gateSpec)
+	gateSources := startableSources(gateRead)
+	classifyHook(&commands, gateSpec, gateRead)
 	sourceFindings(&findings, gateSpec, gateSources)
 
-	lessonSources := codexHookSources(&findings, reads.document, reads.inline, lessons)
-	classifyHook(&edits, lessons, lessonSources)
-	sourceFindings(&findings, lessons, lessonSources)
+	lessonRead := codexHookSources(&findings, rules, reads.document, reads.inline, lessons)
+	classifyHook(&edits, lessons, lessonRead)
+	sourceFindings(&findings, lessons, startableSources(lessonRead))
 
 	gate.mode, gate.possible = hookMode(gateSources, certainSource), hookMode(gateSources, uncertainSource)
 	gate.background = backgroundReportOnly(gateSources)
@@ -774,7 +796,7 @@ func classifyCodexHooks(reads codexHookReads) (entries []CapabilityInspection, g
 	for _, spec := range codexLessonHooks.allSpecs() {
 		var scratch []Finding
 
-		for _, s := range codexHookSources(&scratch, reads.document, reads.inline, spec) {
+		for _, s := range codexHookSources(&scratch, rules, reads.document, reads.inline, spec) {
 			findings = append(findings, s.executionFindings(spec, CodexID)...)
 		}
 	}

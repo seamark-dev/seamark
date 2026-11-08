@@ -74,6 +74,13 @@ appears only when Seamark has a relevant lesson for the edited files.
 For Claude Code, check that no project settings file sets
 `disableAllHooks: true`.
 
+Doctor warns when a seamark hook command names a binary that does not
+exist, or that is not an executable file. The client cannot start such a
+hook, so it blocks nothing and delivers nothing. A committed hook file
+with an absolute path from another machine is one example. For the file
+that setup manages, the fix is a setup run, which rewrites the command
+to the running binary; Codex then asks for a new review in `/hooks`.
+
 ## What each agent supports
 
 The table distinguishes installed features from behavior verified with a

@@ -67,6 +67,11 @@ model-boundary delivery.
   also as Edit and Write, as Codex does. A gate under ash no longer
   reads as running for Bash, and an inline lesson hook under Edit is no
   longer installed twice.
+- **Hook binaries that do not exist.** Setup, doctor, and status warn
+  about a seamark hook whose binary path names no executable file, and
+  no longer report such a hook as installed or count its gate mode. The
+  warning names the setup run that rewrites the command, or the hand
+  edit for `.claude/settings.local.json`.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.

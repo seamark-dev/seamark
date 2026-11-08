@@ -19,6 +19,13 @@ import (
 // Binary is the seamark path the fixtures install hooks with.
 const Binary = "/usr/local/bin/seamark"
 
+// The fixtures name Binary, which a test machine does not need to hold.
+// So every test package that imports this package reads a fixture hook
+// as one that the client can start.
+func init() {
+	integration.TreatHookBinaryAsPresent(Binary)
+}
+
 // SharedID is the registry ID of the test-only client that shares the
 // Codex skill directory. It exists so the matrix can pin how a shared
 // destination is reported to every consumer, and how pending trust and

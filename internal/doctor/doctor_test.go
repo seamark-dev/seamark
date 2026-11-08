@@ -14,10 +14,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
+
+// The hook fixtures of this file name /bin/seamark, which a test machine
+// does not need to hold. The inspection reads it as a hook that can start.
+func init() {
+	integration.TreatHookBinaryAsPresent("/bin/seamark")
+}
 
 // fixtureRoot builds a git workspace with a healthy index database.
 func fixtureRoot(t *testing.T) (root, dbPath string) {
@@ -172,6 +179,43 @@ func TestRunDetectsPartialHooks(t *testing.T) {
 
 	assert.Equal(t, StateWarn, checks["hooks"].State)
 	assert.Contains(t, checks["hooks"].Detail, "lessons hook missing")
+}
+
+func TestRunWarnsWhenEveryHookBinaryIsMissing(t *testing.T) {
+	const absent = "/nonexistent/seamark"
+
+	cases := map[string]struct{ rel, document, route string }{
+		"claude": {
+			".claude/settings.json",
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"Bash","hooks":[{"type":"command","command":"` + absent + ` gate --hook"}]},` +
+				`{"matcher":"Edit|Write|MultiEdit","hooks":[{"type":"command","command":"` + absent + ` lessons --hook"}]}],` +
+				`"PostCompact":[{"hooks":[{"type":"command","command":"` + absent + ` lessons --hook-reset"}]}]}}`,
+			"seamark init --client claude",
+		},
+		"codex": {
+			".codex/hooks.json",
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"Bash","hooks":[{"type":"command","command":"` + absent + ` gate --hook --client codex"}]},` +
+				`{"matcher":"apply_patch","hooks":[{"type":"command","command":"` + absent + ` lessons --hook --client codex"}]}]}}`,
+			"seamark init --client codex",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root, dbPath := fixtureRoot(t)
+
+			require.NoError(t, os.MkdirAll(filepath.Join(root, filepath.Dir(tc.rel)), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, tc.rel), []byte(tc.document), 0o644))
+
+			hooks := byName(Run(root, dbPath, "test"))["hooks"]
+
+			assert.Equal(t, StateWarn, hooks.State)
+			assert.Contains(t, hooks.Detail, "gate hook cannot start from "+tc.rel+": "+absent+" is missing")
+			assert.Contains(t, hooks.Fix, tc.route+"`, which rewrites the hook command")
+		})
+	}
 }
 
 func TestRunDetectsMissingAgentBinary(t *testing.T) {
