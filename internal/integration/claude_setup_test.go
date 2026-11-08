@@ -1120,3 +1120,63 @@ func TestClaudeSetupAndInspectionWarnOnceWhenHooksAreDisabled(t *testing.T) {
 		assert.Equal(t, want.Findings, got.Findings)
 	})
 }
+
+func TestClaudeSetupAndInspectionDoNotReadUserSettings(t *testing.T) {
+	// Setup, doctor, and status read only the two project settings files
+	// of Claude Code, and the agent guide says so. A hook or a
+	// disableAllHooks in the user settings file stays out of their reports.
+	// Claude Code finds the user file under HOME or CLAUDE_CONFIG_DIR, so
+	// the test points both at one scratch folder.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+
+	user := map[string]any{"disableAllHooks": true}
+	_, err := hooks.Merge(user, testBinary, hooks.ClaudeSpecs(hooks.ModeWarn))
+	require.NoError(t, err)
+
+	_, err = hooks.Merge(user, testBinary, hooks.ClaudeLessonCheckSpecs(hooks.LessonChecksCheck))
+	require.NoError(t, err)
+
+	data, err := json.Marshal(user)
+	require.NoError(t, err)
+	writeRel(t, home, ".claude/settings.json", string(data))
+
+	t.Run("a user disableAllHooks gives no warning", func(t *testing.T) {
+		root := t.TempDir()
+
+		plan := planClaude(t, root, ClientSetup{Hooks: true})
+		assert.Empty(t, findingsWith(plan.Findings, disabledReason))
+
+		applyLessonSetupWithBinary(t, root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
+		assert.Empty(t, findingsWith(claudeSetup{}.Inspect(root).Findings, disabledReason))
+	})
+
+	t.Run("a user hook is not installed", func(t *testing.T) {
+		insp := claudeSetup{}.Inspect(t.TempDir())
+
+		for _, capability := range []Capability{CapabilityCommands, CapabilityEdits, CapabilityResets} {
+			entry, ok := insp.Entry(capability)
+			require.True(t, ok, "%s", capability)
+			assert.Equal(t, StateAbsent, entry.State, "%s", capability)
+		}
+
+		assert.Nil(t, insp.LessonHooks)
+	})
+
+	t.Run("a user disableAllHooks stays out of the lesson-check reading", func(t *testing.T) {
+		// A project without a lesson-check hook gives no reading for any
+		// value of the flag, so the subtest installs one. The lesson
+		// capability report turns the flag into a reason for each path.
+		root := t.TempDir()
+
+		applyLessonSetupWithBinary(t, root, testBinary,
+			ClientSetup{ClientID: ClaudeID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
+
+		for _, insp := range []Inspection{claudeSetup{}.Inspect(root), claudeSetup{}.InspectLessonHooks(root)} {
+			require.NotNil(t, insp.LessonHooks)
+			assert.NotEmpty(t, insp.LessonHooks.Entries)
+			assert.False(t, insp.LessonHooks.HooksDisabled)
+		}
+	})
+}

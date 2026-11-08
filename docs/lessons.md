@@ -204,6 +204,9 @@ local state, or a state-lock failure causes normal injection rather than
 silently hiding a lesson. Only repository-scoped digests of the receiving
 context and of the lessons are stored in the gitignored
 `.seamark/lessons-hook-state.json`; entries expire after 24 hours.
+A reset after a compaction waits up to 2 s for the state lock. When another
+hook holds the lock for longer, the context keeps its delivered lessons until
+the 24-hour expiry.
 
 A receiving context is the client plus the conversation that the client's
 adapter reports as the receiver. Two clients that report the same session
@@ -684,7 +687,9 @@ one theme never spend two slots:
   is `check` or `enforce`, and every advisory pin with a `check` (listed
   as not run); and each pin or lesson that the budget or the restatement
   collapse left out, with the `seamark lessons --file <path>` command that
-  shows it. A relative path starts at the current directory, and a new
+  shows it. The text lists the first five omissions and then a `+N more`
+  line for the rest; `--json` lists every one. A relative path starts at
+  the current directory, and a new
   path need not exist. Without an index the result holds the pins of
   `lessons.yaml` (`mined lessons no-index`). `--json` prints the
   versioned `lesson-preparation/1` document. The command exits 0 also
@@ -726,7 +731,9 @@ one theme never spend two slots:
   stays the first part of the answer. When the preparation of the same
   files has a pin, a check, an omission, or a rejected path, a second
   text part lists the pin-refs, versions, modes, checks, and omissions
-  with their inspect commands, without the lesson text again. A client
+  with their inspect commands, without the lesson text again. This part
+  lists the first five omissions and then a `+N more` line, and
+  `structuredContent` lists every one. A client
   that negotiated MCP protocol `2025-06-18` or later also gets the whole
   `lesson-preparation/1` document as `structuredContent` under
   `lesson_preparation`, and the first text part again, byte for byte,
@@ -766,9 +773,11 @@ one theme never spend two slots:
   stays verdict-shaped.
 
 Each surface records what it surfaced to the firing log, tagged by
-surface (`prepare`, `change_set`, the edit hook, `explore`, `check`), so
-the stats below never conflate a speculative plan with a reminder that
-reached an agent.
+surface (`prepare`, `change_set`, the edit hook, `explore`, `check`).
+The first line of `--stats` counts each surface apart. The ranking, the
+never-fired list, and the pin outcomes count the firings of all surfaces
+together. A firing shows that a surface returned or injected a lesson, not
+that an agent read it.
 
 ## Executable lessons: advisory, check, and enforce
 
@@ -1029,7 +1038,8 @@ such records. Raw session, agent, tool-use, and turn identifiers are never
 stored.
 
 `seamark lessons --stats` turns
-the log into which lessons actually reach agents, split by surface (a
+the log into which lessons the surfaces delivered, split by surface in
+the first line (a
 `change_set` plan, a preparation, and a CI `check` are exposure, not edits
 reminded), and which
 *would* surface but never have (a lesson whose region no edit touches is a
@@ -1094,19 +1104,19 @@ this file.
 The finding-based outcome below is independent of lesson delivery.
 The outcome proves no cause.
 
-Firing counts measure *exposure* — a pin reached an agent. The `pin
-outcomes` block measures *effect*: did the pin's mistake recur after
-agents started seeing it? For every applied pin, seamark joins three
-things it already stores — the firing log (when the pin first reached
-an agent), the finding table (did the same mistake get flagged or
+Firing counts measure *exposure*: a surface returned or injected the pin.
+The `pin outcomes` block measures *effect*: did the pin's mistake recur
+after its first firing? For every applied pin, seamark joins three
+things it already stores — the firing log (the first firing of the pin
+on any surface), the finding table (did the same mistake get flagged or
 fixed again after that), and mined history (how many commits touched
 the pin's regions since, so silence in a quiet region is never read as
 success). Everything is recomputed on each run; there is no model
 call, no score, and no new state.
 
 With `once-per-context`, outcome sentences continue to start exposure at the
-first actual delivery, but also show total matches when repeats were suppressed
-(for example, `delivered 1×; matched 4×`). This keeps “reached the agent” distinct
+first delivered firing, but also show total matches when repeats were suppressed
+(for example, `delivered 1×; matched 4×`). This keeps “delivered” distinct
 from “the edited region matched the pin.”
 
 Three verdicts, each a sentence you can check against your own repo:
@@ -1123,8 +1133,14 @@ Three verdicts, each a sentence you can check against your own repo:
   index --reviews` or `seamark index --fixes-only`), or every cited finding has aged out of the
   mining window.
 
-The exposure clock starts at a pin's **first firing**, not its apply
-date — a pin no agent ever saw cannot have changed behavior. Rewording
+The exposure clock starts at a pin's **first firing** on any surface,
+not its apply date: a pin that no surface ever returned cannot have
+changed behavior. The edit hook and the exploration hook inject a pin
+into an agent context. Preparation, `change_set`, and `check` return it
+and name no receiver. So a CI `check` or a `lessons --prepare` run that
+no agent reads also starts the clock, and a pin that the edit hook never
+delivered can read `working` or `not landing`. The `fired N×` count adds
+the firings of every surface. Rewording
 a pin's note restarts its clock (a different reminder is a different
 treatment); reordering its regions or retouching case does not.
 

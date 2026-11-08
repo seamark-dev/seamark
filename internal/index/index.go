@@ -1949,20 +1949,24 @@ func originRank(origin string) int {
 // Production callers never resolve into test files — test doubles (fake
 // engines, stub clients) carry generic names (set, begin, fetchone) that
 // are often the only repo-declared occurrence, and every such edge is a
-// fabrication.
+// fabrication. A Go caller also skips a method in a _test.go file of
+// another directory. Go compiles a _test.go file only into the test binary
+// of its own directory, so such a method can never be the target. The rule
+// is Go only: Python and ECMA test files can import helpers from any
+// directory.
 func (g *graph) uniqueMethod(fam, name, callerFile string) (dst *model.Symbol, origin string) {
-	candidates := g.methodsByName[fam][name]
+	var candidates []*model.Symbol
 
-	if !isTestPath(callerFile) {
-		var prod []*model.Symbol
-
-		for _, c := range candidates {
-			if !isTestPath(c.File) {
-				prod = append(prod, c)
-			}
+	for _, c := range g.methodsByName[fam][name] {
+		if !isTestPath(callerFile) && isTestPath(c.File) {
+			continue
 		}
 
-		candidates = prod
+		if fam == "go" && !goTestVisible(callerFile, c.File) {
+			continue
+		}
+
+		candidates = append(candidates, c)
 	}
 
 	if len(candidates) == 1 {
@@ -1970,6 +1974,18 @@ func (g *graph) uniqueMethod(fam, name, callerFile string) (dst *model.Symbol, o
 	}
 
 	return nil, ""
+}
+
+// goTestVisible reports whether Go code in callerFile can call a method
+// declared in candidateFile. A method in a _test.go file is visible only to
+// _test.go files of the same directory. path.Dir gives "." for a root file,
+// so two root files count as one directory.
+func goTestVisible(callerFile, candidateFile string) bool {
+	if !strings.HasSuffix(candidateFile, "_test.go") {
+		return true
+	}
+
+	return strings.HasSuffix(callerFile, "_test.go") && path.Dir(callerFile) == path.Dir(candidateFile)
 }
 
 // isTestPath reports whether a file is test code, by each language's

@@ -209,3 +209,81 @@ func TestDeliverReleasesTheLockBeforeTheAuditAppend(t *testing.T) {
 		})
 	}
 }
+
+// TestResetWaitsForLeasesOfAnotherContext holds each state lock from another
+// context while a compaction resets this context. A lease of a parallel
+// session or subagent can hold a lock for some hundred milliseconds. A reset
+// that misses the lock keeps the delivered pin hidden until the TTL ends.
+func TestResetWaitsForLeasesOfAnotherContext(t *testing.T) {
+	// hold is longer than 200 ms and shorter than the reset wait. The
+	// exploration lock stays held for two holds, so the exploration reset
+	// also waits after the edit reset ends.
+	const hold = 500 * time.Millisecond
+
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := writeConfig(t, root, "hook_delivery: once-per-context\n"+apiPin)
+	identity := t.TempDir()
+
+	readReq := exploreRequest(root, cfg, readEvent(root, "session-1", "", "toolu", "api/handler.go", true))
+	editReq := claudeRequest(root, cfg, claudeEvent(root, "session-1", "", "toolu", "p", "api/handler.go"))
+
+	edit := func() []string {
+		t.Helper()
+
+		var got capture
+
+		_, err := Deliver(context.Background(), st, editReq, got.emit)
+		require.NoError(t, err)
+
+		return got.advice
+	}
+
+	_, advice := explore(t, st, readReq)
+	require.Len(t, advice, 1)
+	require.Len(t, edit(), 1)
+
+	_, advice = explore(t, st, readReq)
+	require.Empty(t, advice, "the read pin is delivered once")
+	require.Empty(t, edit(), "the edit pin is delivered once")
+
+	other := reviews.DeliveryContext{ClientID: integration.ClaudeID, ReceiverID: "another-session"}
+
+	editLease, err := reviews.OpenContextDelivery(root, other)
+	require.NoError(t, err)
+
+	exploreLease, err := reviews.BeginExploreDelivery(root, other, nil)
+	require.NoError(t, err)
+
+	done := make(chan error, 2)
+
+	go func() {
+		time.Sleep(hold)
+		done <- editLease.Close()
+	}()
+
+	go func() {
+		time.Sleep(2 * hold)
+		done <- exploreLease.Close()
+	}()
+
+	rootContext := *integration.ReceivingContextOf(integration.ClaudeID, "session-1", "")
+	resetErr := Reset(ResetRequest{
+		Root: root, IdentityRoot: identity, ClientID: integration.ClaudeID, RecordEvaluations: true,
+		Event: integration.ResetEvent{Context: rootContext, SessionID: "session-1"},
+	})
+
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+	require.NoError(t, resetErr, "the reset waits for both leases")
+
+	records := firings(t, identity)
+	require.Len(t, records, 1)
+	assert.Equal(t, reviews.DeliveryReset, records[0].Delivery)
+	assert.Equal(t, uint64(2), records[0].Generation)
+	assert.Equal(t, uint64(2), records[0].ExploreGeneration)
+
+	_, advice = explore(t, st, readReq)
+	assert.Len(t, advice, 1, "the next read delivers the pin again")
+	assert.Len(t, edit(), 1, "the next edit delivers the pin again")
+}

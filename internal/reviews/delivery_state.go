@@ -26,10 +26,13 @@ const (
 	// deliveryResetLockWait bounds the wait of a reset for the state lock.
 	// One lock covers every context, so a lease of another session can
 	// hold it. A failed reset keeps the delivered pins hidden after a
-	// compaction until the TTL ends. A failed lease only repeats advice,
-	// so a lease never waits. The value equals exploreResetLockWait, so
-	// both resets of one compaction follow one rule.
-	deliveryResetLockWait = 200 * time.Millisecond
+	// compaction until the TTL ends. A series of subagent leases can hold
+	// the lock for longer than 200 ms, so the reset waits 2 s. The reset
+	// hook runs this reset and the exploration reset one after the other,
+	// and two waits of 2 s stay inside the 10 s hook timeout. A failed
+	// lease only repeats advice, so a lease never waits. The value equals
+	// exploreResetLockWait, so both resets of one compaction follow one rule.
+	deliveryResetLockWait = 2 * time.Second
 )
 
 // deliveredPinScheme labels the delivered key of a pin. The label keeps

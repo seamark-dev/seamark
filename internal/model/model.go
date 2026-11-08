@@ -61,6 +61,26 @@ const (
 	OriginParse = "parse"
 )
 
+// OriginConfidence ranks a CALLS edge origin for display, from 4 for the
+// most trusted tier to 1 for a name match. Any other origin, "" and parse
+// included, gives 0, so an unknown edge sorts after every known tier.
+// The index dedup keeps its own rank because it only needs to tell a
+// resolved edge from a guess: the resolved tiers reach disjoint targets.
+func OriginConfidence(origin string) int {
+	switch origin {
+	case OriginQualified:
+		return 4
+	case OriginSameClass:
+		return 3
+	case OriginSamePackage:
+		return 2
+	case OriginUniqueName:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // Span is a half-open source range in 1-based lines and 0-based columns.
 type Span struct {
 	StartLine uint32

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -441,6 +442,7 @@ pin:
 			assert.Contains(t, text, "· restated · boundary-validation: "+inspect+"\n", form)
 			assert.Contains(t, text, "· over-total · cache-invalidation: "+inspect+"\n", form)
 			assert.Contains(t, text, "- lesson api · over-total · RUF001: "+inspect+"\n", form)
+			assert.NotContains(t, text, "more:", form)
 		}
 	})
 
@@ -451,6 +453,152 @@ pin:
 		assert.NotContains(t, text, "Every retried call must be idempotent.")
 		assert.Contains(t, preparationText(p, FormFull), "Every retried call must be idempotent.")
 	})
+}
+
+// pinTopics holds one distinct word for each pin of manyPins. Rules with
+// shared words can restate each other, and a restated pin has another
+// omission reason.
+var pinTopics = []string{
+	"apple", "bridge", "candle", "desert", "engine", "forest", "garden",
+	"harbor", "island", "jacket", "kettle", "ladder", "marble", "needle",
+	"orange", "pepper", "quartz", "ribbon", "saddle", "tunnel", "violin",
+}
+
+// manyPins returns a configuration with change_budget 1 and n pins in the
+// api region. Each pin has its own topic, so no pin restates another.
+func manyPins(n int) string {
+	var b strings.Builder
+
+	b.WriteString("change_budget: 1\npin:\n")
+
+	for _, topic := range pinTopics[:n] {
+		fmt.Fprintf(&b, "  - rule: %s\n    region: api\n    note: %s.\n", topic, topic)
+	}
+
+	return b.String()
+}
+
+// omissionLines returns the omission lines of a text form.
+func omissionLines(text string) []string {
+	_, section, _ := strings.Cut(text, "\nomitted\n")
+
+	var lines []string
+
+	for _, line := range strings.Split(section, "\n") {
+		if strings.HasPrefix(line, "- pin ") || strings.HasPrefix(line, "- lesson ") {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
+}
+
+func TestPrepareCapsTheOmittedTextAndKeepsTheFullResult(t *testing.T) {
+	t.Run("many pins print five lines and a count", func(t *testing.T) {
+		root := workspace(t)
+		writeWorkspaceFile(t, root, "api/handler.go")
+
+		cfg := writeConfig(t, root, manyPins(21))
+		p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, cfg, "api/handler.go"))
+
+		require.Len(t, p.Omitted, 20, "the structured result keeps every omission")
+
+		for _, o := range p.Omitted {
+			assert.Equal(t, reviews.CauseOverTotal, o.Reason, o.Rule)
+		}
+
+		for _, form := range []string{FormFull, FormSupplement} {
+			text := preparationText(p, form)
+			lines := omissionLines(text)
+
+			require.Len(t, lines, maxOmittedShown, form)
+
+			for i, line := range lines {
+				assert.Contains(t, line, " · "+p.Omitted[i].Rule+": ", "%s keeps document order", form)
+			}
+
+			assert.Contains(t, text, "(+15 more: `seamark lessons --file <path>` shows a file's full view)\n", form)
+			assert.NotContains(t, text, " · "+p.Omitted[maxOmittedShown].Rule+": ", form)
+		}
+	})
+
+	t.Run("one omission over the cap prints five lines and one more", func(t *testing.T) {
+		// Six omissions are the smallest list that the cap shortens. One
+		// line too many or a missing count line shows only at this size.
+		root := workspace(t)
+		writeWorkspaceFile(t, root, "api/handler.go")
+
+		cfg := writeConfig(t, root, manyPins(7))
+		p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, cfg, "api/handler.go"))
+
+		require.Len(t, p.Omitted, maxOmittedShown+1)
+
+		for _, form := range []string{FormFull, FormSupplement} {
+			text := preparationText(p, form)
+
+			assert.Len(t, omissionLines(text), maxOmittedShown, form)
+			assert.Contains(t, text, "(+1 more: `seamark lessons --file <path>` shows a file's full view)\n", form)
+			assert.NotContains(t, text, " · "+p.Omitted[maxOmittedShown].Rule+": ", form)
+		}
+	})
+
+	t.Run("the cap counts pins and mined lessons together", func(t *testing.T) {
+		root := workspace(t)
+		writeWorkspaceFile(t, root, "api/handler.go")
+
+		cfg := writeConfig(t, root, manyPins(7))
+		p := mustPrepare(t, lessonStore(t, root), prepareRequest(root, cfg, "api/handler.go"))
+
+		require.Len(t, p.Omitted, 7)
+		assert.Equal(t, omittedPin, p.Omitted[5].Kind)
+		assert.Equal(t, "lesson", p.Omitted[6].Kind, "the mined lesson comes after the pins")
+
+		for _, form := range []string{FormFull, FormSupplement} {
+			text := preparationText(p, form)
+
+			for _, line := range omissionLines(text) {
+				assert.True(t, strings.HasPrefix(line, "- pin "), "%s shows pins first: %s", form, line)
+			}
+
+			assert.Contains(t, text, "(+2 more: ", form)
+			assert.NotContains(t, text, "RUF001", form)
+		}
+	})
+}
+
+// TestRenderPreparationSanitizesEveryOmissionValue proves that the
+// renderer itself removes control runes from each value of an omission
+// line. Prepare already sanitizes the rule, so this test sets the
+// omissions directly. A decoded document reaches the renderer the same way.
+func TestRenderPreparationSanitizesEveryOmissionValue(t *testing.T) {
+	root := workspace(t)
+	writeWorkspaceFile(t, root, "api/handler.go")
+
+	cfg := writeConfig(t, root, manyPins(1))
+	p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, cfg, "api/handler.go"))
+
+	// An escape sequence, a one-byte CSI, and a bidirectional override:
+	// a terminal acts on each one instead of showing it.
+	const unsafe = "\x1b[31m\u009b\u202e"
+
+	p.Omitted = []Omission{
+		{
+			Kind: omittedPin, PinRef: "ref" + unsafe, PinVersion: "abc",
+			Rule: "rule" + unsafe, Reason: "reason" + unsafe, Inspect: "inspect" + unsafe,
+		},
+		{
+			Kind: omittedLesson, ClusterKey: "api" + unsafe + "\x00symptom",
+			Rule: "symptom" + unsafe, Reason: reviews.CauseOverTotal, Inspect: "inspect",
+		},
+	}
+
+	for _, form := range []string{FormFull, FormSupplement} {
+		text := preparationText(p, form)
+
+		assert.Contains(t, text, "- pin ref[31m · version abc · reason[31m · rule[31m: inspect[31m\n", form)
+		assert.Contains(t, text, "- lesson api[31m · over-total · symptom[31m: inspect\n", form)
+		assert.NotContains(t, text, "\x1b", form)
+	}
 }
 
 func TestPrepareRefreshesWhenScopeOrDefinitionsChange(t *testing.T) {

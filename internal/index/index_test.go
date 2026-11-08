@@ -1956,3 +1956,186 @@ func TestSourceModeNames(t *testing.T) {
 	assert.Equal(t, "reviews-and-local", SourcesReviewsAndLocal.String())
 	assert.Equal(t, "SourceMode(7)", SourceMode(7).String())
 }
+
+// writeTree writes each file of files under root.
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+}
+
+// calleeFQNs lists the FQNs that the symbol found by query calls.
+func calleeFQNs(t *testing.T, st *store.Store, query string) map[string]string {
+	t.Helper()
+
+	callees, err := st.Callees(mustFind(t, st, query).ID)
+	require.NoError(t, err)
+
+	out := make(map[string]string, len(callees))
+	for _, c := range callees {
+		out[c.FQN] = c.Origin
+	}
+
+	return out
+}
+
+// TestGoTestCallerSkipsTestMethodsOfOtherDirectories proves the Go test
+// visibility rule of the name-match tier. A _test.go method of another
+// directory can never be the target, so it must not make a call ambiguous.
+func TestGoTestCallerSkipsTestMethodsOfOtherDirectories(t *testing.T) {
+	snapFiles := map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"snap/snap.go": `package snap
+
+type Snapshot struct{}
+
+func (s *Snapshot) Err() error { return nil }
+`,
+		"snap/snap_test.go": `package snap
+
+import "testing"
+
+func TestErr(t *testing.T) {
+	s := &Snapshot{}
+	_ = s.Err()
+}
+`,
+		"fake/fake_test.go": `package fake
+
+type fakeCtx struct{}
+
+func (fakeCtx) Err() error { return nil }
+`,
+	}
+
+	t.Run("other directory test method is skipped", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, snapFiles)
+		writeTree(t, root, map[string]string{
+			// Root files share the directory ".", so the edge must exist.
+			"a_test.go": `package m
+
+import "testing"
+
+func TestPing(t *testing.T) {
+	var x pinger
+	x.Ping()
+}
+`,
+			"b_test.go": `package m
+
+type pinger struct{}
+
+func (pinger) Ping() {}
+`,
+			// The rule limits test methods only. A production method stays
+			// visible to a test file of any directory.
+			"other/other_test.go": `package other
+
+import (
+	"testing"
+
+	"example.com/m/snap"
+)
+
+func TestOtherErr(t *testing.T) {
+	s := &snap.Snapshot{}
+	_ = s.Err()
+}
+`,
+		})
+
+		_, st := runIndex(t, root)
+
+		callees := calleeFQNs(t, st, "snap.TestErr")
+		assert.Equal(t, model.OriginUniqueName, callees["snap.Snapshot.Err"], "callees: %v", callees)
+
+		fakeErr := mustFind(t, st, "fake.fakeCtx.Err")
+		callers, err := st.Callers(fakeErr.ID)
+		require.NoError(t, err)
+		assert.Empty(t, callers, "a test method of another directory is never the target")
+
+		assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "TestPing")["pinger.Ping"],
+			"root test files count as one directory")
+
+		otherCallees := calleeFQNs(t, st, "TestOtherErr")
+		assert.Equal(t, model.OriginUniqueName, otherCallees["snap.Snapshot.Err"],
+			"a test caller of another directory still resolves to the production method: %v", otherCallees)
+	})
+
+	t.Run("non-test file in a test directory skips test methods", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, snapFiles)
+		writeTree(t, root, map[string]string{
+			// helpers.go is test code by its directory, but Go builds it
+			// without the _test.go files beside it. So the method of
+			// double_test.go is never its target.
+			"test/e2e/helpers.go": `package e2e
+
+import "example.com/m/snap"
+
+func CheckErr(s *snap.Snapshot) error {
+	return s.Err()
+}
+`,
+			"test/e2e/double_test.go": `package e2e
+
+type double struct{}
+
+func (double) Err() error { return nil }
+`,
+		})
+
+		_, st := runIndex(t, root)
+
+		callees := calleeFQNs(t, st, "CheckErr")
+		assert.Equal(t, model.OriginUniqueName, callees["snap.Snapshot.Err"], "callees: %v", callees)
+	})
+
+	t.Run("same directory test double keeps the call ambiguous", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, snapFiles)
+		writeTree(t, root, map[string]string{
+			"snap/double_test.go": `package snap
+
+type double struct{}
+
+func (double) Err() error { return nil }
+`,
+		})
+
+		_, st := runIndex(t, root)
+
+		for fqn := range calleeFQNs(t, st, "snap.TestErr") {
+			assert.NotContains(t, fqn, ".Err", "two visible Err methods give no edge")
+		}
+	})
+}
+
+// TestPythonTestCallerKeepsTestMethodsOfOtherDirectories proves that the
+// Go visibility rule stays Go only. A Python test file can import a helper
+// from another test directory, so that helper still makes a call ambiguous.
+func TestPythonTestCallerKeepsTestMethodsOfOtherDirectories(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"tests/a/test_x.py": `def test_ping(obj):
+    obj.ping()
+`,
+		"api/svc.py": `class Service:
+    def ping(self):
+        return 1
+`,
+		"tests/b/test_y.py": `class Helper:
+    def ping(self):
+        return 2
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Empty(t, calleeFQNs(t, st, "tests/a/test_x.test_ping"), "two ping methods give no edge")
+}

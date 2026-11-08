@@ -142,6 +142,13 @@ model-boundary delivery.
   A copy in .claude/settings.local.json that equals the managed handler
   is accepted, because Claude Code runs it once, and doctor no longer
   says that it runs twice.
+- **Reset after a compaction.** The context reset waits up to 2 s, not
+  200 ms, for a state lock that another hook holds, so a compaction less
+  often leaves delivered lessons hidden.
+- **Short omitted lists.** The text of `lessons --prepare` and the second
+  `change_set` text part list the first five omitted pins and lessons and
+  then a `+N more` line. `--json` and `structuredContent` still list every
+  omission.
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`
@@ -185,6 +192,18 @@ model-boundary delivery.
 - **Ignored MCP arguments.** A tool call with an argument key that the
   tool does not take still runs, and its reply now opens with a note that
   names each ignored key and the keys the tool takes.
+- **Go test callers.** A method call in a Go `_test.go` file no longer
+  counts methods in `_test.go` files of other directories, which Go
+  never compiles into its test binary, so many test calls now get a
+  `[unique-name]` edge. `status` shares and the effects of test symbols
+  change at the next index run that rebuilds; `seamark index --force`
+  applies the change at once.
+- **Pin outcome wording.** The lessons guide now says that a pin's first
+  firing on any surface starts its outcome clock, also on
+  `lessons --prepare`, `change_set`, or `check`, which name no receiver.
+  A firing does not show that an agent read the pin. The `lessons --help`
+  entry of `--stats` now says that it counts the lessons that every
+  surface returned or injected, not only those of the edit hook.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

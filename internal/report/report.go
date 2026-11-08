@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -117,9 +118,16 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, sym model.S
 		return err
 	}
 
-	if len(callers) > 0 {
+	switch {
+	case len(callers) > 0:
 		fmt.Fprintf(w, "\ncallers (%d)%s\n", len(callers), originSummary(callers))
 		printCallEdges(w, callers)
+	case sym.Kind == model.KindFunction || sym.Kind == model.KindMethod:
+		// Silence reads as "nothing calls this", but the index skips
+		// ambiguous calls. Only functions and methods get CALLS edges in,
+		// so other kinds stay silent. The text is fixed and needs no sanitizing.
+		fmt.Fprintf(w, "\ncallers (0)  — none resolved\n")
+		fmt.Fprintf(w, "  a call by a method name that several methods share, or through a function value, gets no edge\n")
 	}
 
 	if len(callees) > 0 {
@@ -650,10 +658,11 @@ func writeLessonLines(w io.Writer, lessons []model.Lesson) {
 	}
 }
 
-// PrintFiringSummary renders the edit-hook firing log: how often lessons
-// actually reached an agent, and which would surface but never have — the
-// decay signal (a lesson whose region no edit touches is a pruning
-// candidate). All lesson text is untrusted, hence sanitized.
+// PrintFiringSummary renders the firing log of all surfaces: how often a
+// surface returned or injected each lesson, and which lessons would surface
+// but never have. A firing does not show that an agent read the lesson.
+// The never-fired list is the decay signal: a lesson whose region no edit
+// touches is a pruning candidate. All lesson text is untrusted, hence sanitized.
 func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	if s.Total == 0 {
 		if s.SuppressedHookFirings > 0 {
@@ -1305,7 +1314,10 @@ func printDecisions(w io.Writer, decisions []model.Decision) {
 // test edges collapse to one count line: a hot constructor has a
 // hundred TestXxx callers, and they bury the fourteen that matter —
 // the same production-surface stance orient takes. A symbol referenced
-// only from tests still shows its test edges rather than nothing.
+// only from tests still shows its test edges rather than nothing. The
+// shown list sorts by origin confidence before the 15-line cut. The store
+// returns edges in FQN order, so without the sort the cut can drop
+// resolved edges and keep name-match guesses.
 func printCallEdges(w io.Writer, edges []store.CallEdge) {
 	var prod, tests []store.CallEdge
 
@@ -1322,6 +1334,8 @@ func printCallEdges(w io.Writer, edges []store.CallEdge) {
 	if len(prod) == 0 {
 		shown, tests = tests, nil
 	}
+
+	sortByConfidence(shown)
 
 	overflow := 0
 
@@ -1342,6 +1356,29 @@ func printCallEdges(w io.Writer, edges []store.CallEdge) {
 	if len(tests) > 0 {
 		fmt.Fprintf(w, "  (+%d in tests)\n", len(tests))
 	}
+}
+
+// sortByConfidence orders edges from the most trusted origin to the least.
+// FQN, file, and start line break ties, so the order is the same on each run.
+// The slice is sorted in place: printCallEdges owns it after the split.
+func sortByConfidence(edges []store.CallEdge) {
+	sort.SliceStable(edges, func(i, j int) bool {
+		a, b := edges[i], edges[j]
+
+		if ca, cb := model.OriginConfidence(a.Origin), model.OriginConfidence(b.Origin); ca != cb {
+			return ca > cb
+		}
+
+		if a.FQN != b.FQN {
+			return a.FQN < b.FQN
+		}
+
+		if a.File != b.File {
+			return a.File < b.File
+		}
+
+		return a.Span.StartLine < b.Span.StartLine
+	})
 }
 
 // originSummary flags edge lists dominated by the name-guess tier.
