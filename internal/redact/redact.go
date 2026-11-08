@@ -37,8 +37,21 @@ const secretValue = `('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|[^\s=]\S*)`
 // secret-bearing. colonNames drops AUTH: an assignment (`AUTH=x`) is
 // unambiguous, but review prose opens sentences with "auth:" all the
 // time, and mangling a comment corrupts the very text a lesson needs.
+//
+// authName is the AUTH fragment. It matches AUTH, AUTHZ, OAUTH,
+// AUTHORIZE, and AUTHORIZATION, but not AUTHOR, AUTHORS, or AUTHORITY.
+// Author names hold git identity text, and an authority holds a host or
+// a CA path. These values are not secrets, and hiding them removes text
+// that a lesson needs. Authorize names still match, because a payment
+// gateway key such as AUTHORIZE_NET_TRANSACTION_KEY has no other secret
+// fragment. A name such as `authorized` then loses its value too, but
+// that costs less than a leaked key. RE2 has no lookahead, so the
+// alternatives spell out "AUTH not followed by OR, or AUTHORIZ or
+// AUTHORIS". The classes list upper case only, because the patterns
+// compile with (?i).
 const (
-	secretNames = `(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIALS?|AUTH|ACCESS_?KEY|PRIVATE_?KEY)`
+	authName    = `AUTH(?:\b|[0-9_A-NP-Z]|O\b|O[0-9_A-QS-Z]|ORI[SZ])`
+	secretNames = `(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIALS?|` + authName + `|ACCESS_?KEY|PRIVATE_?KEY)`
 	colonNames  = `(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|CREDENTIALS?|ACCESS_?KEY|PRIVATE_?KEY)`
 )
 
