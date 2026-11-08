@@ -101,6 +101,10 @@ model-boundary delivery.
   pair count leave out deleted and renamed-away files from the next
   index run. `seamark index --force` applies this at once to an older
   index.
+- **Check says why no companion is listed.** `seamark check`, `check
+  --lessons`, and the MCP `check` tool print one `companions` line when
+  they list no partner: every partner is in the diff, the index holds
+  none, or the co-change read failed.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.

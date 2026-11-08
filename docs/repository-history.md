@@ -53,8 +53,11 @@ several methods share, or through a function value, gets no edge. The
 names the functions git's hunk headers show actually moved in the shared
 commits — a factual report, not a statistical claim. Hunk headers
 describe each old commit, so `mostly` leaves out a name that a parsed
-partner no longer defines. On a repo with real history, this section is
-where the surprises live.
+partner no longer defines. `seamark check` lists the partners that the
+diff leaves out; when it lists none, one `companions` line says why:
+every partner is in the diff, the index holds no partner, or the read
+failed. On a repo with real history, this section is where the
+surprises live.
 
 ### Languages
 

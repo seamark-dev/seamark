@@ -1,6 +1,7 @@
 package report
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -941,17 +942,69 @@ func TestCheckCompanionsListsOnlyFilesAbsentFromTheDiff(t *testing.T) {
 	assert.Contains(t, out, "last fix here")
 	assert.NotContains(t, out, "  server/presenters.py", "a file in the diff is not a companion")
 
+	// A diff that carries every partner gets no list, but one line that
+	// says so. The line names no path and does not start with the title,
+	// so a reader of the list finds no path in it.
 	b.Reset()
 	CheckCompanions(&b, st, root, []string{"server/schema.py", "web/src/api/generated.ts", "server/presenters.py"})
-	assert.Empty(t, b.String(), "a diff that carries every partner gets no section")
+	assert.Equal(t, "\ncompanions  none outside this diff (co-change partners in the diff: 3)\n", b.String())
 
 	b.Reset()
 	CheckCompanions(&b, st, root, nil)
-	assert.Empty(t, b.String())
+	assert.Empty(t, b.String(), "an empty file list stays silent")
 
 	b.Reset()
 	CheckCompanions(&b, st, root, []string{"docs/new.md"})
-	assert.Empty(t, b.String(), "an unindexed file has no partners and prints nothing")
+	assert.Equal(t, "\ncompanions  none (the index holds no co-change partner for the diff's files)\n", b.String(),
+		"an unindexed file has no commits, so it has no partner")
+}
+
+func TestCheckCompanionsSaysWhyNoneIsListed(t *testing.T) {
+	st, root := seedCompanions(t)
+
+	// scripts/task.py has a symbol but no co-change pair. pkg/gone.go is
+	// a deleted file: its commits stay, but the index stores no pair for
+	// a file that the workspace no longer has.
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		sym := model.Symbol{FQN: "scripts/task.run", Name: "run", Kind: model.KindFunction,
+			File: "scripts/task.py", Span: model.Span{StartLine: 1, EndLine: 3}}
+		if err := tx.InsertSymbol(&sym); err != nil {
+			return err
+		}
+
+		d := model.Decision{Kind: model.DecisionCommit, Ref: strings.Repeat("d", 40), TS: 100,
+			Title: "Add the gone helper", Files: []string{"pkg/gone.go"}}
+
+		return tx.InsertDecision(&d)
+	}))
+
+	none := "\ncompanions  none (the index holds no co-change partner for the diff's files)\n"
+
+	var b strings.Builder
+	CheckCompanions(&b, st, root, []string{"scripts/task.py"})
+	assert.Equal(t, none, b.String())
+	assert.NotContains(t, b.String(), CompanionsTitle)
+
+	// History can show partners of the deleted file, but the index keeps
+	// none of them. The line must not claim that history shows none.
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"pkg/gone.go"})
+	assert.Equal(t, none, b.String())
+	assert.NotContains(t, b.String(), "history")
+
+	// A failed read is not the same as no partner, so it gets its own
+	// line. The error text stays out, because it can carry paths.
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+
+	_, err = raw.Exec("DROP TABLE cochange")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"scripts/task.py"})
+	assert.Equal(t, "\ncompanions  not shown (the co-change read failed)\n", b.String())
+	assert.NotContains(t, b.String(), "scripts/task.py")
 }
 
 func TestRankCompanionsOrdersByEvidenceThenModule(t *testing.T) {
