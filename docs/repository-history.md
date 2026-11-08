@@ -45,7 +45,10 @@ a count instead of burying it), and here is the commit trail. Every call
 edge declares how it was derived (`[qualified]`, `[same-package]`,
 `[same-class]`, or the low-confidence `[unique-name]`), so you always
 know how much to trust an edge. Resolved edges lead each list and
-name-match guesses follow, so the 15-line cut drops guesses first. The
+name-match guesses follow, so the 15-line cut drops guesses first. A
+function or method with no resolved caller prints
+`callers (0)  — none resolved` and a note: a call by a method name that
+several methods share, or through a function value, gets no edge. The
 `usually changed with` lines carry **function grain**: `· mostly …`
 names the functions git's hunk headers show actually moved in the shared
 commits — a factual report, not a statistical claim. On a repo with real
@@ -164,6 +167,10 @@ table in [Data flow](data-flow.md).
   game. Low-confidence edges are labeled `[unique-name]`. A production
   caller never resolves into a test file in that tier, and a Go test
   caller resolves into a test file only in its own directory.
+- A method call whose name several methods share, and a call through a
+  function value, get no edge. `why` then can print
+  `callers (0)  — none resolved` for a method that has real callers, so
+  read the call sites before you treat it as unused.
 - A local variable shadowing an import alias can produce a wrong edge
   (declared as such via its origin label). Scope tracking is future work.
 - Python's DB-API has no syntactic read/write split, so `cursor.execute`

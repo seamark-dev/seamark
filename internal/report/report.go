@@ -118,9 +118,16 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, sym model.S
 		return err
 	}
 
-	if len(callers) > 0 {
+	switch {
+	case len(callers) > 0:
 		fmt.Fprintf(w, "\ncallers (%d)%s\n", len(callers), originSummary(callers))
 		printCallEdges(w, callers)
+	case sym.Kind == model.KindFunction || sym.Kind == model.KindMethod:
+		// Silence reads as "nothing calls this", but the index skips
+		// ambiguous calls. Only functions and methods get CALLS edges in,
+		// so other kinds stay silent. The text is fixed and needs no sanitizing.
+		fmt.Fprintf(w, "\ncallers (0)  — none resolved\n")
+		fmt.Fprintf(w, "  a call by a method name that several methods share, or through a function value, gets no edge\n")
 	}
 
 	if len(callees) > 0 {

@@ -1504,3 +1504,59 @@ func TestWhyOrdersMixedOriginTiers(t *testing.T) {
 		assert.True(t, strings.HasPrefix(strings.TrimSpace(lines[i]), tag+" "), "line %d is %q, want tag %s", i+1, lines[i], tag)
 	}
 }
+
+// TestWhyNamesMissingCallers proves that why says so when a function or a
+// method has no resolved callers. Silence read as "nothing calls this",
+// but the index gives no edge to an ambiguous call.
+func TestWhyNamesMissingCallers(t *testing.T) {
+	why := func(t *testing.T, target model.Symbol, callers []store.CallEdge) string {
+		t.Helper()
+
+		st := seedCallGraph(t, target, callers, nil)
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, t.TempDir(), target.FQN))
+
+		return b.String()
+	}
+
+	// Both callable kinds get the note: a call through a function value
+	// leaves a function without an edge, as a shared name does for a method.
+	for _, target := range []model.Symbol{
+		{
+			FQN: "delivery.HookDeliveryLease.Commit", Name: "Commit", Kind: model.KindMethod,
+			File: "delivery/lease.go", Span: model.Span{StartLine: 3, EndLine: 9},
+		},
+		{
+			FQN: "delivery.commitLease", Name: "commitLease", Kind: model.KindFunction,
+			File: "delivery/lease.go", Span: model.Span{StartLine: 11, EndLine: 15},
+		},
+	} {
+		t.Run(string(target.Kind)+" with no callers", func(t *testing.T) {
+			out := why(t, target, nil)
+
+			assert.Contains(t, out, "\ncallers (0)  — none resolved\n"+
+				"  a call by a method name that several methods share, or through a function value, gets no edge\n")
+		})
+	}
+
+	t.Run("type gets no callers line", func(t *testing.T) {
+		out := why(t, model.Symbol{
+			FQN: "delivery.HookDeliveryLease", Name: "HookDeliveryLease", Kind: model.KindType,
+			File: "delivery/lease.go", Span: model.Span{StartLine: 1, EndLine: 2},
+		}, nil)
+
+		assert.NotContains(t, out, "callers")
+	})
+
+	t.Run("function with callers keeps the normal header", func(t *testing.T) {
+		out := why(t, model.Symbol{
+			FQN: "pkg.Helper", Name: "Helper", Kind: model.KindFunction,
+			File: "pkg/helper.go", Span: model.Span{StartLine: 1, EndLine: 4},
+		}, []store.CallEdge{callEdge("pkg.main", model.OriginSamePackage)})
+
+		assert.Contains(t, out, "\ncallers (1)\n")
+		assert.NotContains(t, out, "none resolved")
+		assert.NotContains(t, out, "gets no edge")
+	})
+}
