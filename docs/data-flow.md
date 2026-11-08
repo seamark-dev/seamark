@@ -27,8 +27,8 @@ optional.
 | Pin apply (`lessons --apply`) | your decision | `.seamark/lessons.yaml` (committed file; only with `distill.write`) | none | yes |
 | Gate hook (`gate --hook`) | the agent's proposed command | verdict on stdout/exit code; `.seamark/audit.jsonl` | none | audit entries |
 | Edit hook (`lessons --hook`, for Codex `lessons --hook --client codex`) | edited file paths and provider session ID; for Codex the `apply_patch` text, which is parsed for paths and never run | lesson reminders on stdout | none | firing log plus optional local, digest-only once-per-context state |
-| Diff check (`seamark check`) | a unified diff | verdict; audit entry; index self-repair, which stops the check on any failure (exit 1, no audit entry) | none | audit entries, refreshed index |
-| MCP server (`seamark mcp`) | `index.db` | the connected agent client, per request (stdio) | none | index self-repair; when it fails, reads open with a one-line note and `check` refuses. One `.seamark/mcp-usage.jsonl` line per tool call: tool, client name, time, latency, reply size, result; no argument, path, symbol, query, or reply text. The file stays local |
+| Diff check (`seamark check`) | a unified diff | verdict; audit entry; index self-repair, which stops the check on any failure (exit 1, no audit entry); under enforce, input that names no changed file blocks with exit 2 and writes no audit entry | none | `audit.jsonl` entries, refreshed index, a `lessons-audit.jsonl` firing record when the advisory prints lessons, and with `--lessons` a `lesson-check-audit.jsonl` record |
+| MCP server (`seamark mcp`) | `index.db` | the connected agent client, per request (stdio) | none | index self-repair; when it fails, reads open with a one-line note and `check` refuses. The `check` tool writes what `seamark check` writes: `audit.jsonl`, `lessons-audit.jsonl`, and with `lesson_checks` `lesson-check-audit.jsonl`. `change_set` writes a `lessons-audit.jsonl` firing record. One `.seamark/mcp-usage.jsonl` line per tool call: tool, client name, time, latency, reply size, result; no argument, path, symbol, query, or reply text. The file stays local |
 | LSP server (`seamark lsp`) | source tree, `index.db` | your editor (stdio) | none | refreshed index, except under a database of another repository, where a save does not rebuild |
 | Report (`seamark report`) | `index.db` | a local HTML file | none | yes |
 | State (`seamark state export`/`import`) | durable tables in `index.db` | a local JSON file, or stdin/stdout | none | yes |
@@ -115,8 +115,8 @@ delivery scopes; evidence coverage is the fallback when none verify.
 | `lessons` | no | `--distill` and `--extract-triggers`: your agent CLI | proposals, trigger paths in `index.db`; firing log | `lessons.yaml`, only via `--apply`/`--prune`/`--retarget` with `distill.write` | no | the agent CLI's own |
 | `report` | no | no | the HTML file | no | no | no |
 | `gate` | no | no | `audit.jsonl` | no | exit 2 under enforce | no |
-| `check` | no | no | `audit.jsonl`, index refresh | no | exit 2 under enforce | no |
-| `mcp` | no | the connected agent client | index refresh, `audit.jsonl` (check tool), `mcp-usage.jsonl` | no | no | no |
+| `check` | no | no | `audit.jsonl`, index refresh, the `lessons-audit.jsonl` firing record, `lesson-check-audit.jsonl` with `--lessons` | no | exit 2 under enforce | no |
+| `mcp` | no | the connected agent client | index refresh, `audit.jsonl`, `lessons-audit.jsonl` and `lesson-check-audit.jsonl` (check tool), `lessons-audit.jsonl` (change_set), `mcp-usage.jsonl` | no | no | no |
 | `lsp` | no | your editor | index refresh | no | no | no |
 | `state` | no | no | `index.db` on import | no | no | no |
 | `status` | no | no | no | no | no | no |

@@ -50,9 +50,13 @@ var toolDefs = []map[string]any{
 		}, []string{"files"}),
 	},
 	{
+		// The description names every write of a normal run, because an
+		// agent can call check as a probe and expect it to change nothing.
 		"name": "check",
 		"description": "Evaluate a unified diff's reachable effects against workspace policy " +
-			"(.seamark/policy.yaml). Omit diff to use `git diff HEAD`.",
+			"(.seamark/policy.yaml). Omit diff to use `git diff HEAD`. Not read-only: it refreshes " +
+			"the index, appends to .seamark/audit.jsonl, writes a lessons-audit.jsonl firing record " +
+			"when it prints lessons, and with lesson_checks appends to lesson-check-audit.jsonl.",
 		"inputSchema": objSchema(map[string]any{
 			"diff": map[string]any{
 				"type":        "string",

@@ -151,6 +151,10 @@ model-boundary delivery.
   database from a newer seamark, its reply adds a line that names the
   running version and says to restart the agent if a newer seamark is
   installed. The CLI text does not change.
+- **The MCP `check` tool names its writes.** Its description says that a
+  call refreshes the index, appends to `audit.jsonl`, and can write
+  `lessons-audit.jsonl` and `lesson-check-audit.jsonl`. The data-flow
+  tables name the same writes for `check` and `mcp`.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
