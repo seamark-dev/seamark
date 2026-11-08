@@ -544,7 +544,8 @@ func unknownGate(g integration.GateSummary) string {
 
 // originSummary renders the call-edge confidence distribution as
 // percentages of the CALL edges (the only kind with resolution
-// uncertainty), largest share first.
+// uncertainty), largest share first. Each share has one decimal, and the
+// shares sum to 100.0 (see shareTenths).
 func originSummary(origins map[string]int) string {
 	calls := 0
 	for _, n := range origins {
@@ -568,12 +569,51 @@ func originSummary(origins map[string]int) string {
 		return keys[i] < keys[j] // deterministic order for equal counts
 	})
 
+	counts := make([]int, len(keys))
+	for i, k := range keys {
+		counts[i] = origins[k]
+	}
+
+	tenths := shareTenths(counts, calls)
+
 	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%d%% %s", origins[k]*100/calls, k))
+	for i, k := range keys {
+		parts = append(parts, fmt.Sprintf("%d.%d%% %s", tenths[i]/10, tenths[i]%10, k))
 	}
 
 	return strings.Join(parts, " · ") + fmt.Sprintf(" (%d calls)", calls)
+}
+
+// shareTenths turns counts into shares in tenths of a percent that sum to
+// exactly 1000. Truncation alone loses up to one tenth per origin, so the
+// printed line would not sum to 100.0. The largest-remainder method gives
+// the lost tenths to the counts with the largest remainders. Equal
+// remainders go in slice order, which is the display order, so a share
+// never rises along the line. Integer math keeps the result exact on
+// every platform. The caller passes counts in display order and their
+// sum as total, which must be above zero.
+func shareTenths(counts []int, total int) []int {
+	tenths := make([]int, len(counts))
+	order := make([]int, len(counts))
+	given := 0
+
+	for i, n := range counts {
+		tenths[i] = n * 1000 / total
+		given += tenths[i]
+		order[i] = i
+	}
+
+	remainder := func(i int) int { return counts[i] * 1000 % total }
+
+	sort.SliceStable(order, func(a, b int) bool {
+		return remainder(order[a]) > remainder(order[b])
+	})
+
+	for _, i := range order[:1000-given] {
+		tenths[i]++
+	}
+
+	return tenths
 }
 
 // age renders a Unix timestamp as a coarse relative age.

@@ -3,9 +3,13 @@ package status
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -773,5 +777,90 @@ func TestGatherReadsTheClaudeManagedGateModeByTheInspectionRule(t *testing.T) {
 			Print(&b, s)
 			assert.Contains(t, b.String(), "gate           enforce (claude hook carries --enforce; blocking verdicts exit 2)")
 		})
+	}
+}
+
+// TestOriginSummaryRoundsSharesToOneDecimal proves that the call-resolution
+// shares have one decimal and sum to 100.0. Truncated whole percents lost up
+// to one point per origin, so the old line summed to 98 on a real index.
+func TestOriginSummaryRoundsSharesToOneDecimal(t *testing.T) {
+	cases := []struct {
+		origins map[string]int
+		want    string
+	}{
+		{
+			map[string]int{"qualified": 1, "same-class": 1, "same-package": 1},
+			"33.4% qualified · 33.3% same-class · 33.3% same-package (3 calls)",
+		},
+		{
+			map[string]int{"unique-name": 103, "qualified": 99, "same-class": 99, "same-package": 99},
+			"25.8% unique-name · 24.8% qualified · 24.7% same-class · 24.7% same-package (400 calls)",
+		},
+		{
+			map[string]int{"qualified": 3907, "same-class": 2664, "same-package": 21597, "unique-name": 4888},
+			"65.3% same-package · 14.8% unique-name · 11.8% qualified · 8.1% same-class (33056 calls)",
+		},
+		{
+			// A count that rounds to zero prints 0.0%, so the line still sums to 100.0.
+			map[string]int{"same-package": 29999, "unique-name": 1},
+			"100.0% same-package · 0.0% unique-name (30000 calls)",
+		},
+		{map[string]int{}, "none"},
+		{map[string]int{"qualified": 0}, "none"},
+	}
+
+	for _, c := range cases {
+		assert.Equal(t, c.want, originSummary(c.origins))
+	}
+}
+
+// TestOriginSummarySharesAlwaysSumTo100 checks random maps from a fixed
+// seed. Each line must sum to 1000 tenths, and a share must never rise
+// along the display order.
+func TestOriginSummarySharesAlwaysSumTo100(t *testing.T) {
+	names := []string{"qualified", "same-class", "same-package", "unique-name", "parse", "other"}
+	share := regexp.MustCompile(`^(\d+)\.(\d)% \S+$`)
+	rng := rand.New(rand.NewPCG(1, 2))
+
+	for run := range 200 {
+		origins := map[string]int{}
+		calls := 0
+
+		for _, name := range names[:1+rng.IntN(len(names))] {
+			origins[name] = rng.IntN(50001)
+			calls += origins[name]
+		}
+
+		line := originSummary(origins)
+
+		if calls == 0 {
+			assert.Equal(t, "none", line, "run %d", run)
+
+			continue
+		}
+
+		body, ok := strings.CutSuffix(line, fmt.Sprintf(" (%d calls)", calls))
+		require.True(t, ok, "run %d: %q", run, line)
+
+		sum, prev := 0, 1001
+
+		for _, part := range strings.Split(body, " · ") {
+			m := share.FindStringSubmatch(part)
+			require.NotNil(t, m, "run %d: part %q", run, part)
+
+			whole, err := strconv.Atoi(m[1])
+			require.NoError(t, err)
+
+			tenth, err := strconv.Atoi(m[2])
+			require.NoError(t, err)
+
+			value := whole*10 + tenth
+			assert.LessOrEqual(t, value, prev, "run %d: %q", run, line)
+
+			sum += value
+			prev = value
+		}
+
+		assert.Equal(t, 1000, sum, "run %d: %q", run, line)
 	}
 }
