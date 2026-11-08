@@ -73,6 +73,12 @@ appears only when Seamark has a relevant lesson for the edited files.
 
 For Claude Code, check that no project settings file sets
 `disableAllHooks: true`.
+`seamark init`, `seamark doctor`, and `seamark status` read only
+`.claude/settings.json` and `.claude/settings.local.json`. They do not read
+your user settings (`~/.claude/settings.json`), settings passed with
+`claude --settings`, or the Claude Code policy file
+(`managed-settings.json`), so a hook or a `disableAllHooks: true` there is
+not in their reports.
 
 Doctor warns when a seamark hook command names a binary that does not
 exist, or that is not an executable file. The client cannot start such a
