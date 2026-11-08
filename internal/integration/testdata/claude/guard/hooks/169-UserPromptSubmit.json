@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000023",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000023.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000027",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use the Write tool once to create the new file sentinel/locked/new.txt with the single line: locked\nThe directory sentinel/locked already exists. Do not read it and do not create it. If the call fails, do not retry it and do not try another way.\nThen reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came."
+}

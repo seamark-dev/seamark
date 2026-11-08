@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000003",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000003.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000003",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use the Read tool to read the file notes/multi.txt.\n2. Use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.\nIf you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: absent.\nIf a tool call is blocked or fails, do not retry it and do not try another tool or another way.\nThen reply with the single word: done, or with the single word: blocked when a tool call was blocked or failed."
+}

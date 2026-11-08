@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 // sameClientVersion reports whether evidence names the client version of
 // a recording manifest. The evidence may put the client name before the
-// version, as claudeRecordedVersion does.
+// version, as claudeEvidenceVersion does.
 func sameClientVersion(evidence, recorded string) bool {
 	return recorded != "" && (evidence == recorded || strings.HasSuffix(evidence, " "+recorded))
 }
@@ -259,9 +260,10 @@ func withSyntheticFailOpen(t *testing.T, paths ...guardPath) {
 // a slow proof of the same path: the slow-guard case, or an in-budget
 // slow case. One verified level removes both reasons
 // native-deny-unverified and native-timeout-unverified, so it needs both
-// cases. Without a recording, every pre-write path stays pending. The
-// test reads the recordings in every run and never skips, so a skip of
-// the replay never hides a claim.
+// cases. A verified path of a client that lets the write run after its
+// timeout must name that limit. Without a recording, every pre-write
+// path stays pending. The test reads the recordings in every run and
+// never skips, so a skip of the replay never hides a claim.
 func TestGuardEvidenceMatchesRecordings(t *testing.T) {
 	for _, client := range slices.Sorted(maps.Keys(guardTools)) {
 		rec, recorded := readGuardRecording(t, client)
@@ -307,6 +309,17 @@ func TestGuardEvidenceMatchesRecordings(t *testing.T) {
 				if proof.slow == slowInBudget {
 					assert.Contains(t, timeoutRecorded, clientVersion{client: client, version: evidence.ClientVersion},
 						"%s: an in-budget proof needs the timeout outcome of its client version", label)
+				}
+
+				// A client that lets the write run after its timeout can only
+				// give an in-budget proof. Its verified path carries the limit,
+				// so each surface that shows the claim also shows the gap.
+				outcome := timeoutRecorded[clientVersion{client: client, version: evidence.ClientVersion}]
+				if outcome.outcome == timeoutFailOpen {
+					assert.Equal(t, slowInBudget, proof.slow,
+						"%s: a client that fails open at its timeout gives an in-budget slow proof only", label)
+					assert.Contains(t, evidence.Limit, fmt.Sprintf("after its %d s hook timeout", outcome.seconds),
+						"%s: a verified path of a fail-open client names its limit", label)
 				}
 			}
 		}

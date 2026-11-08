@@ -66,17 +66,19 @@ below remains distinct from required-before-release work.
 | Capability | Current state and native limits |
 | --- | --- |
 | Preparation (`lessons --prepare`, MCP `change_set`) | **Unreleased**; versioned guidance/check listing, no model call, no repeat-state change; receiver-unknown, not proof of before-construction delivery |
-| Claude `Read` exploration | **Unreleased**; opt-in setup, independent repeat state; native model-visible reply evidence pending; Codex structured Read unsupported |
+| Claude `Read` exploration | **Unreleased**; opt-in setup, independent repeat state; a Claude Code 2.1.319 recording shows the reply in the next model request, but the report keeps the path unverified because its evidence names no client version; Codex structured Read unsupported |
 | Executable lesson configuration | **Unreleased**; advisory/check/enforce modes and two versioned predicates; mode/check and definition editors, validation and explicit working-tree verification implemented; arbitrary prose is not checkable |
 | Verification (`lessons --verify`, `check --lessons`, MCP `lesson_checks`) | **Unreleased**; shared bounded snapshot and result, CLI/TUI/MCP fixture coverage; default internal audit/lock exclusions apply and `not covered` names them |
-| Baseline, guard and post-edit hooks | **Unreleased**; Claude Edit/Write/MultiEdit and Codex apply_patch handlers, separate root/child paths; native denial, timeout and reply evidence pending; installed does not mean active or verified |
+| Baseline, guard and post-edit hooks | **Unreleased**; Claude Edit/Write/MultiEdit and Codex apply_patch handlers, separate root/child paths; Claude Code 2.1.319 recordings verify the Write and Edit deny and in-budget slow deny in root and child, so those paths read `active` with the limit "the client lets the write run after its 10 s hook timeout"; MultiEdit, the post-edit reply and every Codex path stay pending or unverified; installed does not mean active or verified |
 | Codex Update projection | **Unreleased, incomplete**; content predicate gives unknown and an armed guard requests denial; verified before/after oracle and implementation required before release |
 | Setup and capability report | **Unreleased**; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust; Claude and Codex setup refuse a certain second lesson-check handler and warn about an uncertain one; doctor, status and TUI summaries name an unreadable hook document |
-| Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only delivery records of each pin version from the audit logs, separate check and guard counts, selection budgets; every observation window reads incomplete; fields without a source keep fixed values in the `delivery/1` format; current `prevented: 0` |
+| Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only delivery records of each pin version from the audit logs, separate check and guard counts, selection budgets; every observation window reads incomplete; fields without a source keep fixed values in the `delivery/1` format; `prevented` counts only a written deny on a verified native path (today Claude Code Write and Edit) with no later execution record |
 | TUI Pins checks | **Unreleased**; linked-pin mode/check editing, manual scope edit of a linked pin (console only, one save in both stores; a computed scope then reads as a suggestion), `M` definitions, `V` verification; native evidence unchanged |
 
-Timeout candidates and the benchmark script-timeout flake remain
-open in the same checklist. None is
+Claude Code 2.1.319 validates the 10 s pre-edit timeout for Write and
+Edit in root and child: it honors an in-budget slow deny and lets the
+write run after 10 s. The other timeout candidates and the benchmark
+script-timeout flake remain open in the same checklist. None is
 completed by documenting it. Doctor keeps all-client coverage and
 warnings.
 
@@ -131,10 +133,13 @@ future work; editor integrations remain experimental.
 
 - Unreleased lesson checks and delivery: `make lesson-check` and
   `make lesson-check-race` run offline with fake invokers; `make tui-test`
-  and `make tui-race` cover Pins/service integration. The release still
-  needs the [native timing and guard recordings](agent-integrations.md#release-checklist),
-  reviewed per client/tool/context. These test targets supply no native
-  compatibility or prevention evidence.
+  and `make tui-race` cover Pins/service integration. These test targets
+  supply no native compatibility or prevention evidence. The reviewed
+  Claude Code 2.1.319 timing and guard recordings replay offline with
+  `make native-replay CLIENT=claude`. The release still needs the Codex
+  [native timing and guard recordings](agent-integrations.md#release-checklist),
+  reviewed per client/tool/context, and the Claude MultiEdit path has
+  no recorded call.
 - Delivery report cost: `make report-bench` measures the report build over
   synthetic audit logs of 1k, 10k and 100k records, offline. It reads no
   real audit log, and its numbers say nothing about real logs or efficacy.

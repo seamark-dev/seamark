@@ -155,8 +155,11 @@ A pin's `enforce` mode requests the separate pre-write guard. It is not
 policy enforcement and does not prove native denial. The ordinary edit
 hook still fails open. Its reminder arrives after the agent constructed
 the call; use preparation before construction rather than claiming the
-hook can reshape the pending arguments. Current native guard denial,
-timeout and reply evidence remain pending; v0.9.0 cannot ship without
+hook can reshape the pending arguments. A reviewed Claude Code 2.1.319
+recording verifies native guard denial of `Write` and `Edit`, with the
+limit that the client lets the write run after its 10 s hook timeout.
+Native denial of `MultiEdit` and of Codex `apply_patch`, and the reply
+evidence, remain pending; v0.9.0 cannot ship without
 [reviewed native evidence and the required fixes](agent-integrations.md#release-checklist).
 
 What Guard can and cannot defend against is stated plainly in

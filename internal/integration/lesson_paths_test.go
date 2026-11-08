@@ -369,8 +369,11 @@ func TestLessonCheckPathsIdentifiesHookBinary(t *testing.T) {
 
 		claudeCap, _ := report.Client(ClaudeID)
 		assert.Equal(t, lessoncheck.InstalledEnforce, claudeCap.Installed)
-		assert.Equal(t, "pre-write Edit, Write, MultiEdit inactive (capability-version-old, native-deny-unverified, "+
-			"native-timeout-unverified, other-binary)", claudeCap.StageText(lessoncheck.StagePreWrite))
+		// The reviewed recording verifies Write and Edit, so only MultiEdit
+		// keeps the reasons of a missing native recording.
+		assert.Equal(t, "pre-write Edit, Write inactive (capability-version-old, other-binary); MultiEdit inactive "+
+			"(capability-version-old, native-deny-unverified, native-timeout-unverified, other-binary)",
+			claudeCap.StageText(lessoncheck.StagePreWrite))
 	})
 
 	t.Run("one report reads a hook binary of several clients once", func(t *testing.T) {
@@ -705,7 +708,9 @@ func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 }
 
 // TestLessonCheckPathsAttributions proves the attributions, one per
-// item and context. No attribution is verified, because no reviewed
+// item and context. Only the items of the reviewed Claude Code timing
+// recording are verified: the call and the lane in both contexts, and
+// the turn and the model step in the root context. No reviewed Codex
 // recording exists. The identity items are unsupported for the Codex
 // child lane. The turn items are unsupported for a payload without a
 // turn identity (prompt_id). context-reset copies the evidence of the
@@ -725,8 +730,6 @@ func TestLessonCheckPathsAttributions(t *testing.T) {
 		for _, a := range list {
 			label := clientID + " " + string(a.Item) + " " + string(a.Context)
 
-			assert.NotEqual(t, lessoncheck.AttrVerified, a.State, "%s: no reviewed recording exists", label)
-
 			if a.Item == lessoncheck.ItemContextReset {
 				assert.Equal(t, capVerification(resets.Verification), a.Verification, "%s copies the resets evidence", label)
 			} else {
@@ -737,19 +740,36 @@ func TestLessonCheckPathsAttributions(t *testing.T) {
 				clientID == CodexID && a.Context == lessoncheck.ContextChild &&
 					(a.Item == lessoncheck.ItemMatchIdentity || a.Item == lessoncheck.ItemLaneIdentity)
 
+			// The only child case of the Claude Code recording is a
+			// subagent read. It shows the call and the lane of the child,
+			// but no turn or model step of the child.
+			identity := a.Item == lessoncheck.ItemMatchIdentity || a.Item == lessoncheck.ItemLaneIdentity
+			turn := a.Item == lessoncheck.ItemTurnBoundary || a.Item == lessoncheck.ItemModelBoundary
+			verified := clientID == ClaudeID && (identity || turn && a.Context == lessoncheck.ContextRoot)
+
 			want := lessoncheck.AttrUnverified
-			if unsupported {
+
+			switch {
+			case unsupported:
 				want = lessoncheck.AttrUnsupported
+			case verified:
+				want = lessoncheck.AttrVerified
 			}
 
 			assert.Equal(t, want, a.State, label)
 		}
 	}
 
-	t.Run("timing evidence is pending without a client version", func(t *testing.T) {
+	t.Run("only verified timing evidence names a client version", func(t *testing.T) {
 		e := TimingEvidence(ClaudeID, lessoncheck.ItemTurnBoundary, lessoncheck.ContextRoot)
-		assert.Equal(t, VerificationPending, e.Level)
-		assert.Empty(t, e.ClientVersion, "the reviewed recording sets the version it ran against")
+		assert.Equal(t, VerificationVerified, e.Level)
+		assert.Equal(t, "Claude Code 2.1.319", e.ClientVersion, "the reviewed recording names the version it ran against")
+		assert.Contains(t, e.Surface, string(lessoncheck.ItemTurnBoundary))
+		require.NoError(t, e.Validate())
+
+		e = TimingEvidence(ClaudeID, lessoncheck.ItemTurnBoundary, lessoncheck.ContextChild)
+		assert.Equal(t, VerificationPending, e.Level, "no case of the recording shows the turn of a child")
+		assert.Empty(t, e.ClientVersion, "a recording sets the version it ran against")
 		assert.NotEmpty(t, e.Surface)
 		require.NoError(t, e.Validate())
 

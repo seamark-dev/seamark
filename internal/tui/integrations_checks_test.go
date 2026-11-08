@@ -55,7 +55,10 @@ func TestTUILessonChecksSetupView(t *testing.T) {
 
 		for _, want := range []string{
 			"LESSON CHECKS Installed enforce Config config valid",
-			"pre-write Edit in root: active-unverified (native-deny-unverified, native-timeout-unverified)",
+			// The reviewed Claude Code recording verifies Edit and Write, not
+			// MultiEdit, and names the timeout limit of the client.
+			"pre-write Edit in root: active (limit: the client lets the write run after its 10 s hook timeout)",
+			"pre-write Write in child: active (limit: the client lets the write run after its 10 s hook timeout)",
 			"pre-write MultiEdit in child: active-unverified (native-deny-unverified, native-timeout-unverified)",
 			"post-edit Write in root: active-unverified",
 			"Binary test · this seamark binary",

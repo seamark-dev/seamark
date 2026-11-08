@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000005",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000005.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000008",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use the Read tool to read the file timing/missing.txt. The file does not exist, so the read fails. Do not create the file.\n2. Write one line: the code word of the seamark review lesson that you got for timing/missing.txt, or the word none.\nThen reply with the single word: done"
+}

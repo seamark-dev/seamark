@@ -1,0 +1,19 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000005",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000005.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000008",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/workspace/native/timing/missing.txt"
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000011",
+  "error": "File does not exist. Note: your current working directory is /workspace/native.",
+  "is_interrupt": false,
+  "duration_ms": 2
+}

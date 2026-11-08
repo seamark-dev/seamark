@@ -756,7 +756,10 @@ one theme never spend two slots:
   read event, so `--client codex` writes nothing. Install it explicitly
   with `seamark init --client claude --lesson-exploration on`; turn it
   off with `--lesson-exploration off`. Omission preserves the installed
-  choice. Native model-visible exploration delivery remains unverified.
+  choice. A recording of Claude Code 2.1.319 shows the exploration reply
+  in the next model request, in the main conversation and in a subagent.
+  The capability report still reads the exploration path unverified,
+  because its evidence names no client version.
 - **`check`** (CLI and MCP): after the policy verdict, the touched
   files' lessons as a clearly-marked advisory — printed even when the
   verdict blocks, because a deny is exactly when they matter; `--json`
@@ -852,9 +855,12 @@ checks separately with `seamark init --client claude --lesson-checks check`
 or the selected client's `enforce` mode. The advisory edit hook remains
 fail-open and never becomes a guard.
 
-The current guard can request denial, but native denial, timeout and
-reply behavior remain unverified. Codex Update content is currently
-unprojectable for a content predicate, so an armed guard denies that
+The guard requests denial. A reviewed recording of Claude Code 2.1.319
+verifies native denial of `Write` and `Edit` in the root and child
+contexts, with one limit: the client lets the write run after its 10 s
+hook timeout. Native denial of `MultiEdit` and of Codex `apply_patch`,
+and the post-edit reply, remain unverified. Codex Update content is
+currently unprojectable for a content predicate, so an armed guard denies that
 unknown result. Verified Update projection and native evidence are
 required before v0.9.0 can ship. See the
 [integration guide](agent-integrations.md#lesson-checks-and-exploration-unreleased).
@@ -924,8 +930,11 @@ units of the fixed fields.
 A requested deny is not a prevented write. The report separately shows
 requested denies, later execution, no execution observed and verified
 native paths. `prevented` additionally needs a written deny reply, no
-later execution record and a verified native deny path. Current native
-evidence supports **`prevented: 0`**, not a prevention claim.
+later execution record and a verified native deny path. Today only the
+Claude Code `Write` and `Edit` paths are verified, from a recording of
+Claude Code 2.1.319, so a deny of `MultiEdit` or of Codex `apply_patch`
+never counts as prevented. That recording also shows the limit of these
+paths: Claude Code lets the write run after its 10 s hook timeout.
 
 After the totals, the report states what selection applied:
 

@@ -1,0 +1,31 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000022",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000022.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000025",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Edit notes/multi.txt with MultiEdit",
+    "prompt": "Read the file notes/multi.txt (relative to the working directory /workspace/native). Then use the MultiEdit tool exactly once on notes/multi.txt with these two edits, in this order:\n1. Replace the line `alpha` with the line `beta`.\n2. Replace the line `gamma` with the line `GATE5-MARKER`.\nMake no other changes. When finished, reply with a single word only.",
+    "subagent_type": "editor",
+    "run_in_background": true
+  },
+  "tool_response": {
+    "isAsync": true,
+    "status": "async_launched",
+    "agentId": "a0000000000000007",
+    "description": "Edit notes/multi.txt with MultiEdit",
+    "resolvedModel": "claude-haiku-5-5",
+    "prompt": "Read the file notes/multi.txt (relative to the working directory /workspace/native). Then use the MultiEdit tool exactly once on notes/multi.txt with these two edits, in this order:\n1. Replace the line `alpha` with the line `beta`.\n2. Replace the line `gamma` with the line `GATE5-MARKER`.\nMake no other changes. When finished, reply with a single word only.",
+    "outputFile": "/tmp/claude-tasks/-workspace-native/10000000-0000-4000-8000-000000000022/tasks/a0000000000000007.output",
+    "canReadOutputFile": true,
+    "canContinueAgent": true
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000032",
+  "duration_ms": 5
+}

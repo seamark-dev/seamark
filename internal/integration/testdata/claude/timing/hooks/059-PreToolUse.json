@@ -1,0 +1,19 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000006",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000006.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000009",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Read timing/child.txt",
+    "prompt": "Read the file timing/child.txt (relative to /workspace/native) and report its first line.",
+    "subagent_type": "reader",
+    "run_in_background": true
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000012"
+}

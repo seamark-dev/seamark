@@ -33,6 +33,15 @@ func TestSecretsPatterns(t *testing.T) {
 		// Comparisons are not assignments; prose colons stay prose.
 		"if password == provided": "if password == provided",
 		"auth: needs a refactor":  "auth: needs a refactor",
+		"author: x":               "author: x",
+		"Co-Authored-By: A <a@b>": "Co-Authored-By: A <a@b>",
+		// The flag rule takes auth and authorization, never author words.
+		// The space form needs the flag rule, because the assignment rule
+		// also hides "--authorization=x".
+		"--auth x":          "--auth [REDACTED]",
+		"--authorization x": "--authorization [REDACTED]",
+		"--author x":        "--author x",
+		"--authority x":     "--authority x",
 		// host:port followed by a path with an "@" is not userinfo —
 		// the password class stops at "/" (RFC 3986 encodes it there).
 		"see https://example.com:8080/mail@host for details": "see https://example.com:8080/mail@host for details",
@@ -89,6 +98,70 @@ func TestSecretsRedactsOtherPatternsAfterTerminalEscape(t *testing.T) {
 	}
 }
 
+// The AUTH fragment once matched inside AUTHOR, so git identity text
+// lost its value. Author and authority names are not secrets, so they
+// keep their value.
+func TestSecretsKeepsAuthorNames(t *testing.T) {
+	for _, input := range []string{
+		"GIT_AUTHOR_DATE=2026-01-01 git commit",
+		"GIT_AUTHOR_NAME=t",
+		"deps.Author = x",
+		"authorBefore = x",
+		"author := c.Author",
+		"AUTHORS=a,b",
+		"AUTHORED_BY=x",
+		"CO_AUTHORED_BY=x",
+		"--author=x",
+		"\x1b[31mGIT_AUTHOR_NAME=t",
+		"AUTHORITY=x",
+		"CERT_AUTHORITY=/etc/ca.pem",
+		"authority := u.Host",
+		"--authority x",
+	} {
+		assert.Equal(t, input, Secrets(input), "input: %q", input)
+	}
+}
+
+// Auth names still hide their value. A name with an auth word and an
+// author word also hides it, because any secret fragment is enough. An
+// authorize name hides it too, because a payment gateway key such as
+// AUTHORIZE_NET_TRANSACTION_KEY has no other secret fragment.
+func TestSecretsRedactsAuthNames(t *testing.T) {
+	for input, want := range map[string]string{
+		"AUTH=x":                 "AUTH=[REDACTED]",
+		"auth=x":                 "auth=[REDACTED]",
+		"Auth = x":               "Auth = [REDACTED]",
+		"X_AUTH=x":               "X_AUTH=[REDACTED]",
+		"AUTH_TOKEN=x":           "AUTH_TOKEN=[REDACTED]",
+		"BASIC_AUTH=x":           "BASIC_AUTH=[REDACTED]",
+		"OAUTH=x":                "OAUTH=[REDACTED]",
+		"AUTHORIZATION=x":        "AUTHORIZATION=[REDACTED]",
+		`authorization = "x"`:    "authorization = [REDACTED]",
+		"AUTHORISATION=x":        "AUTHORISATION=[REDACTED]",
+		"AUTHORIZATION_HEADER=x": "AUTHORIZATION_HEADER=[REDACTED]",
+		`authHeader := "x"`:      "authHeader := [REDACTED]",
+		"authz=x":                "authz=[REDACTED]",
+		"AUTHN=x":                "AUTHN=[REDACTED]",
+		"AUTHENTICATION=x":       "AUTHENTICATION=[REDACTED]",
+		"AUTH0_DOMAIN=x":         "AUTH0_DOMAIN=[REDACTED]",
+		"AUTHO=x":                "AUTHO=[REDACTED]",
+		"AUTHO_X=x":              "AUTHO_X=[REDACTED]",
+		"AUTHO1=x":               "AUTHO1=[REDACTED]",
+		"AUTHOK=x":               "AUTHOK=[REDACTED]",
+		"\x1b[31mAUTH=x":         "\x1b[31mAUTH=[REDACTED]",
+		"OAUTH_AUTHOR=x":         "OAUTH_AUTHOR=[REDACTED]",
+		"AUTHOR_TOKEN=x":         "AUTHOR_TOKEN=[REDACTED]",
+		// Authorize names: payment gateway keys and OAuth codes.
+		"AUTHORIZE_NET_TRANSACTION_KEY=x":   "AUTHORIZE_NET_TRANSACTION_KEY=[REDACTED]",
+		"AUTHORIZENET_SIGNATURE_KEY=x":      "AUTHORIZENET_SIGNATURE_KEY=[REDACTED]",
+		`authorizeNetTransactionKey := "x"`: "authorizeNetTransactionKey := [REDACTED]",
+		"authorize_code=x":                  "authorize_code=[REDACTED]",
+		"AUTHORISE_CODE=x":                  "AUTHORISE_CODE=[REDACTED]",
+	} {
+		assert.Equal(t, want, Secrets(input), "input: %q", input)
+	}
+}
+
 func TestSecretsExceptMatchesSecretsWhenItKeepsNothing(t *testing.T) {
 	never := func(string) bool { return false }
 
@@ -96,6 +169,7 @@ func TestSecretsExceptMatchesSecretsWhenItKeepsNothing(t *testing.T) {
 		"A=1 ls", "MY_TOKEN=abc ls", "--password=x --port 5432", "http://u:p@h/x", "Authorization: Bearer tok",
 		"--password 'a b c' -h x", `PASSWORD="ab\"cd" deploy`, `API_TOKEN = "abc"`, `"password": "hunter2"`,
 		"MY_TOKEN=a OTHER_SECRET=b --token c", "\x1b[31mBearer abc.def-123", "",
+		"GIT_AUTHOR_DATE=2026-01-01 git commit", "deps.Author = x", "AUTH_TOKEN=x", "authHeader := \"x\"",
 	} {
 		assert.Equal(t, Secrets(input), SecretsExcept(input, never), "input: %s", input)
 	}

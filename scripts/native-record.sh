@@ -10,8 +10,9 @@
 #           turns off the advisor tool of Claude Code for each Claude
 #           run, and records the advisor state of each run. A run with
 #           the advisor on or unknown prints FAIL (see claude_print). A
-#           Codex run at a usage or account limit prints FAIL and stops
-#           the call before the next run (see codex_verdict).
+#           Claude or Codex run at a usage or account limit prints FAIL
+#           and stops the call before the next run (see claude_print and
+#           codex_verdict).
 #
 # The script has no offline mode. The Go tests replay a reviewed
 # recording offline (make native-replay).
@@ -314,6 +315,18 @@ record = {
 if os.path.isfile(os.path.join(out, "advisor.jsonl")):
     record["extras"]["advisor.jsonl"] = os.path.join(out, "advisor.jsonl")
 
+# A compaction summary can name a shortened path of the scratch
+# repository, which the path pairs of the sanitizer do not match. So the
+# distinctive names of the scratch directories go on the deny list. The
+# sanitizer replaces each of them with one fixed word, and its deny check
+# proves that none is left. A distinctive name has 8 or more characters
+# and a digit or a hyphen. Thus a common word such as projects never
+# changes, and a name of the home path stays out too.
+if client == "claude":
+    own = set(home.split(os.sep))
+    names = (set(os.path.dirname(repo).split(os.sep)) | set(out.split(os.sep))) - own
+    record["deny"] = sorted(n for n in names if len(n) >= 8 and any(c.isdigit() or c == "-" for c in n))
+
 with open(os.path.join(out, "record.json"), "w") as f:
     json.dump(record, f, indent=1)
 PY
@@ -323,8 +336,16 @@ PY
         guard)  guard_extras ;;
     esac
 
-    if python3 -I "$SCRIPTS/native-record-sanitize.py" "$OUT/record.json" "$OUT/sanitized"; then
+    # The ID pass of a Claude Code recording writes its map from real to
+    # synthetic IDs beside the raw recording. The map holds the real IDs,
+    # so it stays outside the sanitized copy. The reviewer reads it to
+    # check that the pass changed only IDs.
+    id_map=
+    [ "$CLIENT" != claude ] || id_map=$OUT/id-map.json
+
+    if python3 -I "$SCRIPTS/native-record-sanitize.py" ${id_map:+--id-map "$id_map"} "$OUT/record.json" "$OUT/sanitized"; then
         ok "sanitized copy in $OUT/sanitized; compare it with $DATA before you replace the evidence"
+        [ -z "$id_map" ] || note "the ID map is $id_map; it holds the real IDs, so it never goes into testdata"
     else
         fail "the sanitizer refused the recording; nothing in $OUT/sanitized is safe to commit"
     fi
@@ -347,7 +368,8 @@ PY
 # in the scratch repository. The prompt comes from prompt-<run>.txt. The
 # result goes to run-<run>.json, and stderr goes to run-<run>-stderr.txt.
 # It returns the exit status of claude. Each paid Claude run goes through
-# this function, so each run gets the same advisor switch.
+# this function, so each run gets the same advisor switch and the same
+# limit stop.
 #
 # Claude Code 2.1.314 has a server-side advisor tool that calls a stronger
 # model. So a run can call a model that --model does not name. The client
@@ -364,6 +386,13 @@ PY
 # Without the removal, claude_advisor can read the advisor line of that
 # earlier run. The function then records the advisor state of the run,
 # also after a failed run.
+#
+# At a usage or account limit the function prints FAIL and stops the
+# record call, whatever the exit status of claude. Every later run fails
+# the same way, and the stop must not depend on an operator who watches
+# the output. For any other run it sets print_reason, which the runners
+# print when the run failed: the error result text, else the last stderr
+# line, else the exit status.
 claude_print() {
     print_run=$1
     shift
@@ -372,7 +401,107 @@ claude_print() {
     (cd "$REPO" && CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 claude -p "$@" < "$OUT/prompt-$print_run.txt" \
         > "$OUT/run-$print_run.json" 2> "$OUT/run-$print_run-stderr.txt") || print_status=$?
     claude_advisor "$print_run"
+
+    print_verdict=0
+    print_reason=$(claude_failure "$OUT/run-$print_run.json" "$OUT/run-$print_run-stderr.txt") || print_verdict=$?
+
+    if [ "$print_verdict" = 2 ]; then
+        fail "run $print_run stopped at a Claude Code usage or account limit: $print_reason"
+        limit_stop
+    fi
+
+    [ -n "$print_reason" ] || print_reason="claude exited with status $print_status and printed no message"
     return "$print_status"
+}
+
+# claude_failure <result> [<stderr>] reads the --output-format json result
+# of one Claude run. It prints the failure text on one line. Its exit
+# status is the verdict, with the codes of codex_failure:
+#   0  no error result: a missing file, no JSON object, or is_error is not
+#      true; the line is empty
+#   1  an error result with no limit text; the line holds its result text,
+#      or nothing
+#   2  an error result whose text reports a usage or account limit; the
+#      line holds that text
+# With a stderr file, an empty line takes the last non-empty stderr line
+# instead. The verdict does not change, because stderr only names the
+# failure.
+#
+# The limit test copies the one of Claude Code 2.1.319. That client marks
+# a result as a usage limit in two cases. In the first case, the text
+# starts with one prefix of its own list or matches its one pattern. In
+# the second case, the limit response pauses the usage of the whole
+# organization. The client then sends one fixed text, which its list does
+# not hold. So the list here holds the client prefixes in the client
+# order, and then the start of that fixed text. To compare a later
+# client, search its binary for "You've reached your" and "Usage is
+# paused for your organization", and read the code around them.
+#
+# The client also sends the text "API Error: Server is temporarily
+# limiting requests (not your usage limit)". That error is transient, so
+# it does not stop the call. Its prefix is in no list, so it reads 1.
+# The line drops control characters, because the text goes to the
+# terminal.
+claude_failure() {
+    python3 -I - "$1" "${2:-}" <<'PY'
+import json, re, sys
+
+LIMIT_PREFIXES = (
+    "You've hit your",
+    "You've reached your",
+    "You're out of usage credits",
+    "Your org is out of usage · add funds to continue",
+    "Your org is out of usage · contact your admin",
+    "Your seat type doesn't include usage credits",
+    "Your seat type doesn't include usage",
+    "Your usage allocation has been disabled by your admin",
+    "Your group's usage limit is set to $0",
+    "Fable 5 requires usage credits",
+    "You're out of extra usage",
+    "Your seat type doesn't include extra usage",
+    "Usage is paused for your organization",
+)
+
+LIMIT_PATTERN = re.compile(r"^(?:Fable|Haiku|Mythos|Opus|Sonnet)(?: [^·\n]{1,40})? requires usage credits\.")
+
+
+def one_line(text):
+    text = "".join(c if c.isprintable() else " " for c in text)
+    text = " ".join(text.split())
+    return text if len(text) <= 400 else text[:397] + "..."
+
+
+def last_stderr_line(path):
+    # A missing stderr file gives no line, as an empty one does.
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = [one_line(line) for line in f.read().splitlines()]
+    except OSError:
+        return ""
+    lines = [line for line in lines if line]
+    return lines[-1] if lines else ""
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+        result = json.load(f)
+except (OSError, ValueError):
+    result = None
+
+verdict, text = 0, ""
+if isinstance(result, dict) and result.get("is_error") is True:
+    verdict = 1
+    if isinstance(result.get("result"), str):
+        text = one_line(result["result"])
+    if text.startswith(LIMIT_PREFIXES) or LIMIT_PATTERN.match(text):
+        verdict = 2
+
+if not text and sys.argv[2]:
+    text = last_stderr_line(sys.argv[2])
+
+print(text)
+sys.exit(verdict)
+PY
 }
 
 # claude_advisor <run> prints the advisor state of one Claude run, and
@@ -516,9 +645,9 @@ codex_verdict() {
     return 1
 }
 
-# limit_stop ends the record call after a Codex limit, before the next
-# run. The guard scenario first puts back the enforce setup, so the
-# reused repository keeps the hook document that the operator trusted.
+# limit_stop ends the record call after a Claude or Codex limit, before
+# the next run. The guard scenario first puts back the enforce setup, so
+# the reused repository keeps the hook document that the operator trusted.
 # The summary exits with status 1, because the limit line counts as FAIL.
 limit_stop() {
     [ "$SCENARIO" != guard ] || guard_restore
@@ -537,8 +666,10 @@ limit_stop() {
 # TestNativeRecordCodexTimingRecording decode it.
 
 # timing_setup creates the scratch repository of the timing scenario.
-# Three committed fixture files lie under timing/, and one advisory pin
-# with a check covers that region. The pin note holds a code word, so a
+# Four committed fixture files lie under timing/, and one advisory pin
+# with a check covers that region. No run reads timing/after.txt before
+# the after-compact case, for the reason in the comment of
+# record_claude_timing. The pin note holds a code word, so a
 # reviewer can find the advice in the transcripts. `seamark init`
 # installs the lesson hooks of the round binary there. The paid runs set
 # the recording switch, because only then do the hooks write the turn and
@@ -548,7 +679,7 @@ timing_setup() {
     new_repo "$REPO"
     mkdir -p "$REPO/timing"
 
-    for f in prior intra child; do
+    for f in prior intra child after; do
         printf 'alpha\n' > "$REPO/timing/$f.txt"
     done
 
@@ -686,15 +817,45 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
         fi
     else
         SESSION=
-        fail "run $RUN ($tcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
+        fail "run $RUN ($tcase) failed: $print_reason"
     fi
 }
 
-# record_claude_timing runs the seven Claude Code timing cases. Each case
-# starts a new session, except new-model-step: it resumes the session of
-# prior-result, so its edit comes one turn after the read. The reader
-# subagent has only the Read tool.
+# record_claude_timing runs the nine Claude Code timing cases. Each case
+# starts a new session, except new-model-step, compact-reset, and
+# after-compact. Each of these three resumes the session of the run before
+# it. new-model-step resumes the session of prior-result, so its edit
+# comes one turn after the read. compact-reset compacts the session of
+# new-model-step. That context then holds an exploration injection and an
+# edit injection, so the reset record shows that both kinds of delivery
+# state start a new generation. after-compact reads and edits
+# timing/after.txt in the compacted session. That file lies in the region
+# of the same pin, and the delivery state keys a pin by its version, not
+# by its file. So without the reset, both hooks suppress that advice as a
+# repeat. The reader subagent has only the Read tool.
+#
+# after-compact uses a file that no earlier run reads. The compaction
+# restores the content of files that the session read or changed. A model
+# that has the content can skip the Read, and then no exploration hook
+# runs. The compaction cannot restore a file that no run has read or
+# changed. Claude Code does not refuse an Edit of an unread file for every
+# model, so the prompt does not name the line of the file. The model then
+# reads the file to know the text that the Edit replaces.
+#
+# The /compact instruction keeps the summary short and free of paths,
+# because the summary goes into hook payloads and transcripts. Claude Code
+# builds the PreCompact payload from the typed text, and the observer
+# prints nothing on PreCompact, so the summary instruction stays equal to
+# that text.
 record_claude_timing() {
+    # Claude Code turns /compact off when DISABLE_COMPACT is set. The
+    # compaction case would then give no reset record, and the runs before
+    # it would cost money for nothing. So the scenario stops before run 1.
+    if [ -n "${DISABLE_COMPACT:-}" ]; then
+        blocked "DISABLE_COMPACT is set, so /compact cannot run; unset it to record the Claude timing scenario"
+        summary
+    fi
+
     model=${NATIVE_RECORD_CLAUDE_MODEL:-haiku}
     agents='{"reader":{"description":"Reads the one file it is given and reports its first line.","prompt":"Use the Read tool exactly once on the file that you are given, and reply with its first line only.","model":"'"$model"'","tools":["Read"]}}'
     steps='Do exactly these steps in order, and do not add steps.'
@@ -706,6 +867,13 @@ Then reply with the single word: done"
     timing_claude new-model-step resume "$steps
 1. Before any tool call, write one line: the code word of the seamark review lesson that you got for timing/prior.txt, or the word none.
 2. Use the Edit tool to replace the line alpha with the line beta in timing/prior.txt.
+Then reply with the single word: done"
+
+    timing_claude compact-reset resume "/compact Keep the summary to one short sentence and name no file path."
+
+    timing_claude after-compact resume "$steps
+1. Use the Read tool to read the file timing/after.txt.
+2. Use the Edit tool to replace the only line of timing/after.txt with the line beta.
 Then reply with the single word: done"
 
     timing_claude read-then-edit new "$steps
@@ -727,8 +895,10 @@ Then reply with the single word: done"
 2. Write one line: the code word of the seamark review lesson that you got for timing/missing.txt, or the word none.
 Then reply with the single word: done"
 
+    # The prompt sets the background shape of the Agent call, for the
+    # reason in the comment of record_claude_guard.
     timing_claude subagent-read new "$steps
-1. Use the Agent tool with subagent_type \"reader\" and ask it to read the file timing/child.txt.
+1. Use the Agent tool with subagent_type \"reader\" and run_in_background set to true, and ask it to read the file timing/child.txt.
 Then reply with the single word: done"
 }
 
@@ -1346,10 +1516,28 @@ guard_phase() {
 }
 
 # guard_reset puts the fixture directories back to the commit, so each
-# case starts from the same files.
+# case starts from the same files. It first makes the read-only directory
+# of guard_fixture writable again, because git clean cannot remove a file
+# inside a directory without write permission.
 guard_reset() {
+    [ ! -d "$REPO/sentinel/locked" ] || chmod 0755 "$REPO/sentinel/locked"
     git -C "$REPO" checkout -q -- sentinel notes free
     git -C "$REPO" clean -fdq -- sentinel notes free
+}
+
+# guard_fixture <case> adds the fixture files of one case after the reset.
+# The execution-failure case gets the empty directory sentinel/locked with
+# mode 0555. Claude Code checks a new Write target only for its absence
+# before the hooks. So the Write runs PreToolUse, then fails when it opens
+# its temporary file in that directory, and that failure fires
+# PostToolUseFailure. An empty directory changes no file hash and no git
+# status line, so the state of the case stays comparable.
+guard_fixture() {
+    case "$1" in
+        execution-failure)
+            mkdir -p "$REPO/sentinel/locked"
+            chmod 0555 "$REPO/sentinel/locked" ;;
+    esac
 }
 
 # guard_state <file> writes the state of the fixture directories: the
@@ -1428,12 +1616,14 @@ guard_begin() {
 }
 
 # guard_run <phase> <case> <prompt> runs one case. It sets up the phase,
-# resets the fixture, notes the state, runs one paid client session,
-# notes the state again, and appends the case line to guard-cases.jsonl.
-# The start time of the run assigns each later hook payload to it.
+# resets the fixture, adds the fixture files of the case, notes the state,
+# runs one paid client session, notes the state again, and appends the
+# case line to guard-cases.jsonl. The start time of the run assigns each
+# later hook payload to it.
 guard_run() {
     guard_phase "$1"
     guard_reset
+    guard_fixture "$2"
     guard_state "$OUT/state-before.json"
     audit_from=$(guard_lines "$REPO/.seamark/lesson-check-audit.jsonl")
     log_from=$(guard_lines "$INSTR/pre-write.log")
@@ -1470,7 +1660,7 @@ if os.path.isfile(log):
         lines = [line.strip() for line in f][log_from:]
 
 # The reply is a corroboration only. A single word stays, for example
-# done, blocked, no-multiedit, or a check id. Other text does not.
+# done, blocked, absent, or a check id. Other text does not.
 with open(os.path.join(out, "reply-%d.txt" % run), encoding="utf-8") as f:
     reply = f.read().strip().strip(".").lower()
 
@@ -1511,7 +1701,7 @@ print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "
             ok "run $RUN ($gcase) finished (session $SESSION)"
         fi
     else
-        fail "run $RUN ($gcase) failed: $(tail -1 "$OUT/run-$RUN-stderr.txt")"
+        fail "run $RUN ($gcase) failed: $print_reason"
     fi
 }
 
@@ -1563,11 +1753,21 @@ GUARD_REPORT='Then reply with one line: the check id that a seamark post-edit me
 # replay reads the reply of the child from its SubagentStop payload.
 GUARD_RELAY='Do not use any tool yourself. Then reply with the single word that the subagent replied.'
 
-# record_claude_guard runs the twenty-two Claude Code guard cases, each
+# record_claude_guard runs the twenty-four Claude Code guard cases, each
 # in a new session. The writer subagent has only the Write tool. The
 # phases that change the hook document run last among the first thirteen
-# cases. The nine later cases add child denies, a child post-edit reply,
-# and the in-budget slow deny of each tool and lane.
+# cases. The eleven later cases add child denies, a child post-edit reply,
+# the in-budget slow deny of each tool and lane, a write that fails during
+# its execution, and a foreground in-budget child slow deny.
+#
+# Each child prompt sets run_in_background of the Agent call. Claude Code
+# 2.1.314 starts an agent in the background when the field is not set, and
+# another build can change that default. A fixed shape per case gives the
+# Write and the Edit child a deny in each shape: a foreground deny in
+# subagent-violation and subagent-edit-violation, and a background deny
+# after the in-budget wait in slow-deny-subagent-write and
+# slow-deny-subagent-edit. slow-deny-subagent-write-foreground gives the
+# Write child the foreground deny after the in-budget wait too.
 record_claude_guard() {
     model=${NATIVE_RECORD_CLAUDE_MODEL:-haiku}
     agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]}}'
@@ -1584,11 +1784,11 @@ $GUARD_STOP"
     guard_run enforce multiedit-violation "$GUARD_STEPS
 1. Use the Read tool to read the file notes/multi.txt.
 2. Use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
-If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: no-multiedit.
+If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: absent.
 $GUARD_STOP"
 
     guard_run enforce subagent-violation "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"writer\" and ask it to create the new file sentinel/child.txt with the single line: child
+1. Use the Agent tool with subagent_type \"writer\" and run_in_background set to false, and ask it to create the new file sentinel/child.txt with the single line: child
 $GUARD_STOP"
 
     guard_run enforce unknown-edit "$GUARD_STEPS
@@ -1634,19 +1834,19 @@ $GUARD_STOP"
     # agent list of their first recordings. The editor reads before it
     # edits, because Edit and MultiEdit need a read of the file first.
     agents='{"writer":{"description":"Creates the one file it is given with the given content.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Write"]},'
-    agents=$agents'"editor":{"description":"Reads the one file it is given, then makes the one edit it is given.","prompt":"Use the Read tool once on the file that you are given. Then make the edit that you are given with exactly the tool that you are given, once. If you do not have that tool, use no other tool and reply with the single word no-multiedit. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Read","Edit","MultiEdit"]},'
+    agents=$agents'"editor":{"description":"Reads the one file it is given, then makes the one edit it is given.","prompt":"Use the Read tool once on the file that you are given. Then make the edit that you are given with exactly the tool that you are given, once. If you do not have that tool, use no other tool and reply with the single word absent. If the call is blocked or fails, do not retry it and do not try another way. Reply with the single word done or blocked.","model":"'"$model"'","tools":["Read","Edit","MultiEdit"]},'
     agents=$agents'"reporter":{"description":"Creates the one file it is given, then reports the post-edit message.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. Do not retry it. Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.","model":"'"$model"'","tools":["Write"]}}'
 
     guard_run enforce subagent-edit-violation "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"editor\" and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to false, and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
 $GUARD_RELAY"
 
     guard_run enforce subagent-multiedit-violation "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"editor\" and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to false, and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
 $GUARD_RELAY"
 
     guard_run check-pins subagent-check-only "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"reporter\" and ask it to create the new file sentinel/child-checked.txt with the single line: checked
+1. Use the Agent tool with subagent_type \"reporter\" and run_in_background set to true, and ask it to create the new file sentinel/child-checked.txt with the single line: checked
 Do not use any tool yourself. Then reply with the one line that the subagent replied."
 
     guard_run slow-deny slow-deny-write "$GUARD_STEPS
@@ -1661,19 +1861,37 @@ $GUARD_STOP"
     guard_run slow-deny slow-deny-multiedit "$GUARD_STEPS
 1. Use the Read tool to read the file notes/multi.txt.
 2. Use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
-If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: no-multiedit.
+If you have no MultiEdit tool, use no other tool for step 2 and reply with the single word: absent.
 $GUARD_STOP"
 
     guard_run slow-deny slow-deny-subagent-write "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"writer\" and ask it to create the new file sentinel/slow-child.txt with the single line: child
+1. Use the Agent tool with subagent_type \"writer\" and run_in_background set to true, and ask it to create the new file sentinel/slow-child.txt with the single line: child
 $GUARD_RELAY"
 
     guard_run slow-deny slow-deny-subagent-edit "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"editor\" and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to true, and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
 $GUARD_RELAY"
 
     guard_run slow-deny slow-deny-subagent-multiedit "$GUARD_STEPS
-1. Use the Agent tool with subagent_type \"editor\" and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to true, and ask it to read notes/multi.txt and then use the MultiEdit tool once on notes/multi.txt with two edits in this order: replace the line alpha with the line beta, then replace the line gamma with the line GATE5-MARKER.
+$GUARD_RELAY"
+
+    # The Write targets a new file in the read-only directory that
+    # guard_fixture makes. An Edit with a wrong old_string cannot show this
+    # path, because the client refuses it before any hook. The phase has no
+    # baseline, so the post-edit hook reports the failed write as
+    # incomplete and replies.
+    guard_run post-only execution-failure "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/locked/new.txt with the single line: locked
+The directory sentinel/locked already exists. Do not read it and do not create it. If the call fails, do not retry it and do not try another way.
+$GUARD_REPORT"
+
+    # The case comes last, so the earlier cases keep the run numbers of
+    # their reviewed recordings. It costs one more phase change. Its own
+    # path tells its payloads and hook results apart from
+    # slow-deny-subagent-write without the run number.
+    guard_run slow-deny slow-deny-subagent-write-foreground "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"writer\" and run_in_background set to false, and ask it to create the new file sentinel/slow-child-foreground.txt with the single line: child
 $GUARD_RELAY"
 
     guard_restore
@@ -1898,7 +2116,7 @@ PY
 # mismatch refuses collection; no alternate identity or hash is tried.
 guard_identities() {
     python3 -I - "$OUT/record.json" <<'PY'
-import glob, hashlib, json, os, sqlite3, subprocess, sys
+import collections, glob, hashlib, json, os, sqlite3, subprocess, sys
 from pathlib import Path
 
 with open(sys.argv[1], encoding="utf-8") as f:
@@ -1925,9 +2143,19 @@ for path in glob.glob(os.path.join(observed, "*.meta.json")):
         meta = json.load(f)
     meta["file"] = os.path.basename(path)[:-len(".meta.json")] + ".json"
     metas.append(meta)
-metas.sort(key=lambda m: m["start_ns"])
-if len({m["start_ns"] for m in metas}) != len(metas):
-    sys.exit("guard identity metadata requires distinct observer timestamps")
+
+# On macOS the observer clock counts whole microseconds, so two hooks that
+# start together can tie, for example PostToolUse and SubagentStart of a
+# background Agent launch. The payload file name breaks a tie, as in
+# observed_metas of the sanitizer, so both steps number the payloads alike.
+# The file number of a PreToolUse payload is its identity, but inside a
+# tie it follows the file name and not the real hook order. So a tie that
+# holds a PreToolUse payload refuses the record. A tie of other events
+# changes no PreToolUse number.
+metas.sort(key=lambda m: (m["start_ns"], m["file"]))
+starts = collections.Counter(m["start_ns"] for m in metas)
+if any(m["event"] == "PreToolUse" and starts[m["start_ns"]] > 1 for m in metas):
+    sys.exit("guard identity metadata requires a PreToolUse payload with an observer timestamp of its own")
 
 def compose(parts):
     return "".join("%d:%s" % (len(p.encode("utf-8")), p) for p in parts)

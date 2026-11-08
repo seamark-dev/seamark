@@ -82,7 +82,12 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 	assert.Contains(t, out, "  updated .claude/settings.json (lesson-check hooks)\n")
 	assert.Contains(t, out, "          PreToolUse Edit|Write|MultiEdit "+binary+" lessons --baseline --hook\n")
 	assert.Contains(t, out, "          PostToolUseFailure Edit|Write|MultiEdit "+binary+" lessons --verify --hook\n")
-	assert.Contains(t, out, "  lesson checks  claude check — pre-write Edit active-unverified; pre-write Write active-unverified; "+
+	// The reviewed Claude Code recording shows that the client waits for
+	// a slow pre-write hook of Edit and Write. So the baseline paths of
+	// these tools read active, with the timeout limit of the client.
+	assert.Contains(t, out, "  lesson checks  claude check — "+
+		"pre-write Edit active (limit: the client lets the write run after its 10 s hook timeout); "+
+		"pre-write Write active (limit: the client lets the write run after its 10 s hook timeout); "+
 		"pre-write MultiEdit active-unverified; post-edit Edit active-unverified; post-edit Write active-unverified; "+
 		"post-edit MultiEdit active-unverified\n")
 	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks")
@@ -104,7 +109,9 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 	out = initLessons(t, root, binary, hooks.LessonChecksEnforce, "", integration.ClaudeID)
 	assert.Equal(t, hooks.LessonChecksEnforce, lessonMode(t, root, integration.ClaudeID))
 	assert.Equal(t, gateModeEnforce, installedGateMode(readSettings(t, root)))
-	assert.Contains(t, out, "  lesson checks  claude enforce — pre-write Edit active-unverified (native-deny-unverified, ")
+	assert.Contains(t, out, "  lesson checks  claude enforce — pre-write Edit active (limit: the client lets the write run "+
+		"after its 10 s hook timeout); pre-write Write active (limit: ")
+	assert.Contains(t, out, "pre-write MultiEdit active-unverified (native-deny-unverified, ")
 	assert.Contains(t, out, "  gate    enforce — ")
 
 	_, err = initLessonRun(t, root, binary, initRun{gateMode: gateModeWarn})

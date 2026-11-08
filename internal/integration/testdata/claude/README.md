@@ -6,9 +6,11 @@ Seamark's existing Claude hook already reads (`session_id`, `tool_name`,
 `tool_input.file_path`, `tool_use_id`). Local CLI at capture time:
 Claude Code 2.1.270. Values are **synthetic**: paths, session ids, and
 transcript paths are placeholders. No fixture is a raw capture from a
-live session. The `native/` directory is the one exception: it holds
-sanitized native payloads of Claude Code 2.1.300, and its README names
-their provenance.
+live session. Three directories are the exceptions, and the README of
+each names its provenance: `native/` holds sanitized native payloads of
+Claude Code 2.1.300, and `timing/` and `guard/` hold the sanitized
+native timing and guard recordings of Claude Code 2.1.319, which the
+replay tests read.
 
 Files:
 
@@ -30,8 +32,9 @@ Files:
   Claude Code 2.1.310. They are an `Edit` with
   `replace_all: true`; a `MultiEdit` on a file that does not exist yet,
   whose first edit has an empty `old_string`; a `Write` of a new file
-  inside a subagent (`agent_id`). No native run produced them. A native
-  guard run on Claude Code 2.1.314 showed that one `Edit` with an empty
+  inside a subagent (`agent_id`). No native run produced them. The
+  native guard recording of Claude Code 2.1.319 (`guard/`, case
+  `n1-absent-edit`) shows that one `Edit` with an empty
   `old_string` creates an absent file with `new_string`, so the guard
   projects such an edit as an add. No native run made a `MultiEdit`
   call, so a first `MultiEdit` step with an empty `old_string` follows

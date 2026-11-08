@@ -1,0 +1,15 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000022",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000022.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000026",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "The subagent finished, but its completion notification has no result text, so I don't have the one word it replied with. I won't guess it.\n\nThe notification reports 1 tool use and about 3 seconds of work, which suggests the MultiEdit call ran. I haven't checked `notes/multi.txt` to confirm the two replacements (`alpha` to `beta`, then `gamma` to `GATE5-MARKER`) landed. You asked for no extra steps, so I stopped here.",
+  "background_tasks": [],
+  "session_crons": []
+}

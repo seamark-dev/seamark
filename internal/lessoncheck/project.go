@@ -295,7 +295,7 @@ func (p *projector) write(fop FileOp) Change {
 // unprojectable, because the native call is atomic.
 //
 // An absent file gets an add when the first step has an empty
-// old_string. A native Edit run on Claude Code 2.1.314 shows that the
+// old_string. A native Edit run on Claude Code 2.1.319 shows that the
 // client creates the absent file with new_string. No native run shows a
 // MultiEdit that creates a file, so its first step follows the Edit
 // result by analogy. Any other edit of an absent file stays

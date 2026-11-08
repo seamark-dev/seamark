@@ -120,7 +120,10 @@ func TestStatusLessonChecksBlockAndJSON(t *testing.T) {
 		s, text, doc := statusText(t, st, root)
 		require.NotNil(t, s.LessonChecks)
 
-		block := "lesson checks  claude  enforce · pre-write Edit, Write, MultiEdit active-unverified · " +
+		// The reviewed Claude Code recording verifies the Edit and Write
+		// paths, so they read active with the timeout limit of the client.
+		block := "lesson checks  claude  enforce · pre-write Edit, Write active (limit: the client lets the write run " +
+			"after its 10 s hook timeout); MultiEdit active-unverified · " +
 			"post-edit active-unverified · exploration active-unverified\n" +
 			"               codex   off · exploration inactive (no structured Read path)\n" +
 			"               pins    1 enforce (requested-inactive on codex), 0 check, 4 advisory · config valid\n"
@@ -220,7 +223,8 @@ func TestStatusLessonChecksUnreadableDocument(t *testing.T) {
 		statusInstall(t, root, seamark, enforce)
 
 		_, text, _ := statusText(t, st, root)
-		assert.Contains(t, text, "lesson checks  claude  enforce · pre-write Edit, Write, MultiEdit active-unverified · ")
+		assert.Contains(t, text, "lesson checks  claude  enforce · pre-write Edit, Write active (limit: the client lets "+
+			"the write run after its 10 s hook timeout); MultiEdit active-unverified · ")
 		assert.NotContains(t, text, "unreadable")
 	})
 
@@ -320,7 +324,10 @@ func TestStatusLessonChecksOlderBinary(t *testing.T) {
 
 	s, text, _ := statusText(t, st, root)
 
-	assert.Contains(t, text, "lesson checks  claude  enforce · pre-write Edit, Write, MultiEdit inactive "+
+	// The reviewed recording verifies Edit and Write, so only MultiEdit
+	// keeps the reasons of a missing native recording.
+	assert.Contains(t, text, "lesson checks  claude  enforce · pre-write Edit, Write inactive "+
+		"(capability-version-old, other-binary); MultiEdit inactive "+
 		"(capability-version-old, native-deny-unverified, native-timeout-unverified, other-binary) · "+
 		"post-edit inactive (capability-version-old, other-binary) · ")
 	assert.Contains(t, text, "1 enforce (requested-inactive on claude, codex)", "an inactive path serves no enforce pin")

@@ -1,0 +1,16 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000005",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000005.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000005",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/workspace/native/notes/unknown.txt"
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000007"
+}

@@ -52,9 +52,41 @@ type timingPath struct {
 // recording verifies. A reviewer adds an entry only after a review of
 // the recording in testdata/<client>/timing.
 // TestTimingEvidenceMatchesRecordings checks each entry against the
-// cases of the recording. The map is empty, because no reviewed
-// recording exists yet.
-var timingRecorded = map[timingPath]recordedEvidence{}
+// cases of the recording.
+//
+// The Claude Code recording verifies the call and the lane in the root
+// and the child context, and the turn and the model step in the root
+// context. Its only child case is a subagent read, which shows no turn
+// or model step of the child, so those two child items stay pending.
+// Codex has no entry, because no reviewed Codex recording exists yet.
+var timingRecorded = map[timingPath]recordedEvidence{
+	{client: ClaudeID, item: lessoncheck.ItemMatchIdentity, context: lessoncheck.ContextRoot}: claudeTimingProof(
+		lessoncheck.ItemMatchIdentity, lessoncheck.ContextRoot),
+	{client: ClaudeID, item: lessoncheck.ItemMatchIdentity, context: lessoncheck.ContextChild}: claudeTimingProof(
+		lessoncheck.ItemMatchIdentity, lessoncheck.ContextChild),
+	{client: ClaudeID, item: lessoncheck.ItemLaneIdentity, context: lessoncheck.ContextRoot}: claudeTimingProof(
+		lessoncheck.ItemLaneIdentity, lessoncheck.ContextRoot),
+	{client: ClaudeID, item: lessoncheck.ItemLaneIdentity, context: lessoncheck.ContextChild}: claudeTimingProof(
+		lessoncheck.ItemLaneIdentity, lessoncheck.ContextChild),
+	{client: ClaudeID, item: lessoncheck.ItemTurnBoundary, context: lessoncheck.ContextRoot}: claudeTimingProof(
+		lessoncheck.ItemTurnBoundary, lessoncheck.ContextRoot),
+	{client: ClaudeID, item: lessoncheck.ItemModelBoundary, context: lessoncheck.ContextRoot}: claudeTimingProof(
+		lessoncheck.ItemModelBoundary, lessoncheck.ContextRoot),
+}
+
+// claudeTimingProof returns the proof of one Claude Code attribution.
+// The surface is the surface of the pending evidence of the item, so a
+// review changes the level and the version of an item, not the surface
+// that it names.
+func claudeTimingProof(item lessoncheck.AttributionItem, context lessoncheck.PathContext) recordedEvidence {
+	return recordedEvidence{clientVersion: claudeEvidenceVersion, surface: timingSurface(item, context)}
+}
+
+// timingSurface names the native surface of one attribution: the timing
+// recording, the item, and the context.
+func timingSurface(item lessoncheck.AttributionItem, context lessoncheck.PathContext) string {
+	return "native timing recording, " + string(item) + " in the " + string(context) + " context"
+}
 
 // TimingEvidence returns the native evidence of one identity or timing
 // item for one client and context path. It is the timing analog of
@@ -77,10 +109,7 @@ func TimingEvidence(clientID string, item lessoncheck.AttributionItem, context l
 		return mustVerifiedEvidence(r.clientVersion, r.surface)
 	}
 
-	return VerificationEvidence{
-		Level:   VerificationPending,
-		Surface: "native timing recording, " + string(item) + " in the " + string(context) + " context",
-	}
+	return VerificationEvidence{Level: VerificationPending, Surface: timingSurface(item, context)}
 }
 
 // attributionsOf returns the attributions of one client: one per item

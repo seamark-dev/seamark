@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000005",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000005.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000005",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use the Read tool to read the file notes/unknown.txt.\n2. Use the Edit tool once on notes/unknown.txt with the old_string gamma and the new_string delta. The text gamma does not occur in the file; make the call anyway.\nIf a tool call is blocked or fails, do not retry it and do not try another tool or another way.\nThen reply with the single word: done, or with the single word: blocked when a tool call was blocked or failed."
+}

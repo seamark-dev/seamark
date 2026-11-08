@@ -1020,11 +1020,13 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		assert.Contains(t, findings, codexTrustFinding, "setup never grants trust")
 
 		// Claude Code has no trust review, and no pattern pin limits it.
+		// The reviewed recording verifies Write and Edit, so these paths
+		// are active and name the timeout limit of the client.
 		root = t.TempDir()
 		out, _ = applyLessonSetupWithBinary(t, root, binary, enforce(ClaudeID))
 		assert.Contains(t, out, "  lesson checks  claude enforce — "+
-			"pre-write Edit active-unverified (native-deny-unverified, native-timeout-unverified); "+
-			"pre-write Write active-unverified (native-deny-unverified, native-timeout-unverified); "+
+			"pre-write Edit active (limit: the client lets the write run after its 10 s hook timeout); "+
+			"pre-write Write active (limit: the client lets the write run after its 10 s hook timeout); "+
 			"pre-write MultiEdit active-unverified (native-deny-unverified, native-timeout-unverified); "+
 			"post-edit Edit active-unverified; post-edit Write active-unverified; post-edit MultiEdit active-unverified\n")
 		assert.NotContains(t, out, "trust-unknown")

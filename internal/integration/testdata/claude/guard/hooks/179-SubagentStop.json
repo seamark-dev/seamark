@@ -1,0 +1,18 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000024",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000024.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000028",
+  "permission_mode": "default",
+  "agent_id": "a0000000000000008",
+  "agent_type": "writer",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000024/subagents/agent-a0000000000000008.jsonl",
+  "last_assistant_message": "blocked",
+  "background_tasks": [],
+  "session_crons": []
+}

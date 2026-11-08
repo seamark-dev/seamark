@@ -612,8 +612,11 @@ func verifiedGuardPaths(client string) []lessoncheck.InstalledPath {
 // step of scripts/native-record.sh over a synthetic observer directory.
 // It proves that the collector writes the digests of the production
 // derivations and no raw ID, and that it refuses a fixture whose roots
-// disagree. The step needs python3, git, and its sqlite3 module; without
-// them the test skips, and a skip proves nothing.
+// disagree. It also proves the rule for a tie of observer times: a tie
+// without a PreToolUse payload passes, and the collector and the sanitizer
+// give each payload the same file number; a tie with a PreToolUse payload
+// refuses the record. The step needs python3, git, and its sqlite3 module;
+// without them the test skips, and a skip proves nothing.
 func TestGuardIdentityCollectorMatchesProduction(t *testing.T) {
 	for _, tool := range []string{"python3", "git", "sh", "sed"} {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -648,7 +651,40 @@ func TestGuardIdentityCollectorMatchesProduction(t *testing.T) {
 	}
 
 	type fixture struct {
-		out, repo string
+		out, repo, observed string
+	}
+
+	// write adds one payload and its observer meta file. The meta file
+	// names the process directory, because the sanitizer reads it.
+	write := func(t *testing.T, observed, name, event string, start int64, payload map[string]any) {
+		t.Helper()
+
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(observed, name+".json"), data, 0o600))
+
+		meta, err := json.Marshal(map[string]any{"event": event, "start_ns": start, "process_cwd": "/fixture"})
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join(observed, name+".meta.json"), meta, 0o600))
+	}
+
+	// readRows decodes the guard-identities.jsonl file of a fixture.
+	readRows := func(t *testing.T, out string) (string, []guardIdentity) {
+		t.Helper()
+
+		data, err := os.ReadFile(filepath.Join(out, "guard-identities.jsonl"))
+		require.NoError(t, err)
+
+		var rows []guardIdentity
+
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			var row guardIdentity
+			require.NoError(t, json.Unmarshal([]byte(line), &row))
+
+			rows = append(rows, row)
+		}
+
+		return string(data), rows
 	}
 
 	// build writes one fixture: a git repository, an index database whose
@@ -683,24 +719,14 @@ db.commit()
 		observed := filepath.Join(out, "observed")
 		require.NoError(t, os.MkdirAll(observed, 0o755))
 
-		write := func(name, event string, start int64, payload map[string]any) {
-			data, err := json.Marshal(payload)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(filepath.Join(observed, name+".json"), data, 0o600))
-
-			meta, err := json.Marshal(map[string]any{"event": event, "start_ns": start})
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(filepath.Join(observed, name+".meta.json"), meta, 0o600))
-		}
-
-		write("001-SessionStart", "SessionStart", 100, map[string]any{"session_id": "raw-session"})
-		write("002-PreToolUse", "PreToolUse", 200, map[string]any{
+		write(t, observed, "001-SessionStart", "SessionStart", 100, map[string]any{"session_id": "raw-session"})
+		write(t, observed, "002-PreToolUse", "PreToolUse", 200, map[string]any{
 			"session_id": "raw-session", "tool_use_id": "raw-call-root", "tool_name": "Write",
 		})
-		write("003-PreToolUse", "PreToolUse", 300, map[string]any{
+		write(t, observed, "003-PreToolUse", "PreToolUse", 300, map[string]any{
 			"session_id": "raw-session", "agent_id": "raw-agent", "tool_use_id": "raw-call-child", "tool_name": "Write",
 		})
-		write("004-PreToolUse", "PreToolUse", 400, map[string]any{
+		write(t, observed, "004-PreToolUse", "PreToolUse", 400, map[string]any{
 			"session_id": "raw-session", "tool_use_id": "raw-call-bash", "tool_name": "Bash",
 		})
 
@@ -712,7 +738,7 @@ db.commit()
 		require.NoError(t, os.WriteFile(filepath.Join(out, "guard-cases.jsonl"),
 			[]byte(`{"run":1,"case":"edit-violation"}`+"\n"), 0o600))
 
-		return fixture{out: out, repo: repo}
+		return fixture{out: out, repo: repo, observed: observed}
 	}
 
 	t.Run("it writes the production digests and no raw ID", func(t *testing.T) {
@@ -721,17 +747,7 @@ db.commit()
 		got, err := run(t, f.out)
 		require.NoError(t, err, got)
 
-		data, err := os.ReadFile(filepath.Join(f.out, "guard-identities.jsonl"))
-		require.NoError(t, err)
-
-		var rows []guardIdentity
-
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-			var row guardIdentity
-			require.NoError(t, json.Unmarshal([]byte(line), &row))
-
-			rows = append(rows, row)
-		}
+		data, rows := readRows(t, f.out)
 
 		root, child := ReceivingContextOf(ClaudeID, "raw-session", ""), ReceivingContextOf(ClaudeID, "raw-session", "raw-agent")
 		require.Equal(t, []guardIdentity{
@@ -752,7 +768,7 @@ db.commit()
 		}, rows, "the Bash call and the SessionStart payload get no row")
 
 		for _, raw := range []string{"raw-session", "raw-agent", "raw-call", f.repo} {
-			assert.NotContains(t, string(data), raw, "the file stores no raw ID or root")
+			assert.NotContains(t, data, raw, "the file stores no raw ID or root")
 		}
 
 		record, err := os.ReadFile(filepath.Join(f.out, "record.json"))
@@ -766,6 +782,72 @@ db.commit()
 		got, err := run(t, f.out)
 		require.Error(t, err)
 		assert.Contains(t, got, "canonical fixture git/index root")
+		assert.NoFileExists(t, filepath.Join(f.out, "guard-identities.jsonl"), "no partial promotion")
+	})
+
+	t.Run("it accepts a tie without a PreToolUse payload and numbers it as the sanitizer", func(t *testing.T) {
+		f := build(t, func(repo string) string { return repo })
+
+		// A background Agent launch can fire PostToolUse and SubagentStart
+		// at one observer time. The test writes the tied payloads in the
+		// reverse file name order, so a sort that keeps the directory
+		// listing order gives other numbers.
+		write(t, f.observed, "001-SubagentStart", "SubagentStart", 250, map[string]any{"session_id": "raw-session", "agent_id": "raw-agent"})
+		write(t, f.observed, "001-PostToolUse", "PostToolUse", 250, map[string]any{"session_id": "raw-session", "tool_name": "Agent"})
+		write(t, f.observed, "001-Notification", "Notification", 250, map[string]any{"session_id": "raw-session"})
+
+		got, err := run(t, f.out)
+		require.NoError(t, err, got)
+
+		_, rows := readRows(t, f.out)
+		require.Len(t, rows, 2)
+		assert.Equal(t, "hooks/002-PreToolUse.json", rows[0].File, "the root Write comes before the tie")
+		assert.Equal(t, "hooks/006-PreToolUse.json", rows[1].File, "the child Write comes after the three tied payloads")
+
+		// The sanitizer reads the same observer directory into a copy.
+		root := filepath.Join(f.out, "sanitize")
+		require.NoError(t, os.MkdirAll(root, 0o755))
+
+		s := writeSanitizeRecord(t, root, map[string]any{
+			"client": ClaudeID, "client_version": "2.1.314", "repo": f.repo, "home": filepath.Join(f.out, "operator-q7"),
+			"seamark": filepath.Join(f.out, "bin", "seamark"), "instrumentation": filepath.Join(f.repo, ".native-instrumentation"),
+			"observed": f.observed, "runs": []int64{150}, "transcripts": []string{}, "extras": map[string]string{},
+		})
+
+		got, err = s.sanitize(t, s.out)
+		require.NoError(t, err, got)
+
+		data, err := os.ReadFile(filepath.Join(s.out, "manifest.json"))
+		require.NoError(t, err)
+
+		var manifest nativeManifest
+		require.NoError(t, json.Unmarshal(data, &manifest))
+
+		var files []string
+		for _, h := range manifest.Hooks {
+			files = append(files, h.File)
+		}
+
+		assert.Equal(t, []string{
+			"hooks/001-SessionStart.json", "hooks/002-PreToolUse.json", "hooks/003-Notification.json",
+			"hooks/004-PostToolUse.json", "hooks/005-SubagentStart.json", "hooks/006-PreToolUse.json",
+			"hooks/007-PreToolUse.json",
+		}, files, "the file name breaks the tie")
+
+		for _, row := range rows {
+			payload := readJSON(t, filepath.Join(s.out, filepath.FromSlash(row.File)))
+			assert.Equal(t, row.Tool, payload["tool_name"], row.File)
+			assert.Equal(t, row.Lane == LaneChild, payload["agent_id"] != nil, "the copy holds the payload of the identity row under its number")
+		}
+	})
+
+	t.Run("it refuses a tie that holds a PreToolUse payload", func(t *testing.T) {
+		f := build(t, func(repo string) string { return repo })
+		write(t, f.observed, "001-PostToolUse", "PostToolUse", 300, map[string]any{"session_id": "raw-session", "tool_name": "Bash"})
+
+		got, err := run(t, f.out)
+		require.Error(t, err)
+		assert.Contains(t, got, "requires a PreToolUse payload with an observer timestamp of its own")
 		assert.NoFileExists(t, filepath.Join(f.out, "guard-identities.jsonl"), "no partial promotion")
 	})
 }
