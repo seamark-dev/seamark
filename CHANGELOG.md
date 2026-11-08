@@ -31,7 +31,8 @@ model-boundary delivery.
   field set, and the fields without a source in this build hold fixed
   values. `prevented` counts only a written deny on a natively verified
   path with no later execution record; today that is Claude Code `Write`
-  and `Edit`, from a recording of Claude Code 2.1.319.
+  and `Edit`, from a recording of Claude Code 2.1.319. These paths carry
+  one limit: the client lets the write run after its 10 s hook timeout.
 - **Selection reading.** `lessons --delivery` shows requested and
   effective budgets and splits held-back records by surface and cause. A
   hook record now reads `over-total`, not `over-pin-cap`, when
