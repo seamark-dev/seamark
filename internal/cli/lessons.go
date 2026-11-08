@@ -73,8 +73,9 @@ func newLessonsCmd(opts *options) *cobra.Command {
                    and its ancestors' — the raw material (including
                    below-threshold one-offs) for spotting a pattern the
                    per-file counters cannot see. Implies --list.
-  --stats          which lessons the edit hook actually surfaced to agents,
-                   and which would surface but never have (decay candidates)
+  --stats          which lessons the surfaces returned or injected, split
+                   by surface in the first line, and which would surface
+                   but never have (decay candidates)
   --distill        send NEW groups of raw findings to your agent CLI and
                    turn recurring patterns into proposed pins — the plan
                    half of plan/apply; nothing touches lessons.yaml here.
@@ -1245,8 +1246,9 @@ func lessonsHookClient(cmd *cobra.Command, clientID string) (integration.Client,
 	return client, ok
 }
 
-// runLessonsStats prints the firing-log summary: which lessons actually
-// reach agents, and which would surface but never have (decay signal).
+// runLessonsStats prints the firing-log summary: which lessons the
+// surfaces returned or injected, and which would surface but never have
+// (decay signal). A firing does not show that an agent read the lesson.
 // It reads through lessonstats.Gather, the reader of the console's Stats
 // view, so both surfaces count the same records by the same rules.
 func runLessonsStats(cmd *cobra.Command, opts *options) error {

@@ -198,6 +198,12 @@ model-boundary delivery.
   `[unique-name]` edge. `status` shares and the effects of test symbols
   change at the next index run that rebuilds; `seamark index --force`
   applies the change at once.
+- **Pin outcome wording.** The lessons guide now says that a pin's first
+  firing on any surface starts its outcome clock, also on
+  `lessons --prepare`, `change_set`, or `check`, which name no receiver.
+  A firing does not show that an agent read the pin. The `lessons --help`
+  entry of `--stats` now says that it counts the lessons that every
+  surface returned or injected, not only those of the edit hook.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

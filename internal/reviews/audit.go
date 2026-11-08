@@ -121,8 +121,11 @@ type Firing struct {
 	PinsOmitted       int         `json:"pins_omitted,omitempty"`
 }
 
-// Delivered reports whether the record represents context that reached the
-// agent. Legacy records have no status and are treated as delivered.
+// Delivered reports whether a surface returned or injected the record's
+// lessons. A record with no status counts as delivered. A legacy edit-hook
+// record has no status. A check, preparation, or change_set record also has
+// no status, because it names no receiver. Delivered does not show that an
+// agent read the lessons.
 func (f Firing) Delivered() bool {
 	return f.Delivery == "" || f.Delivery == DeliveryInjected
 }
@@ -625,10 +628,11 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	}
 }
 
-// Exposure is one lesson's firing history: when it first reached an
-// agent, and how many times in total. The first firing — not the pin's
-// apply date — starts the outcome loop's exposure clock, because a pin
-// that never surfaced cannot have changed behavior.
+// Exposure is one lesson's firing history: its first firing on any surface,
+// and how many times in total. A firing shows that a surface returned or
+// injected the lesson, not that an agent read it. The first firing, not the
+// pin's apply date, starts the exposure clock of the outcome loop. A pin that
+// no surface returned cannot have changed behavior.
 type Exposure struct {
 	First   time.Time // earliest delivered firing with a parseable timestamp, UTC
 	Count   int       // delivered firing records naming this lesson, all surfaces

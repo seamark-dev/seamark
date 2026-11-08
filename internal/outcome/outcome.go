@@ -1,8 +1,9 @@
 // Package outcome implements the passive loop: for each
 // applied pin that has fired at least once, it checks whether the
-// pin's mistake recurred after agents started seeing it. Everything is
-// recomputed on every call from the firing log, the finding table, and
-// mined history; nothing is stored.
+// pin's mistake recurred after its first firing on any surface. A firing
+// shows that a surface returned or injected the pin, not that an agent
+// read it. Everything is recomputed on every call from the firing log,
+// the finding table, and mined history; nothing is stored.
 package outcome
 
 import (

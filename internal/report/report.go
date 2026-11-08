@@ -658,10 +658,11 @@ func writeLessonLines(w io.Writer, lessons []model.Lesson) {
 	}
 }
 
-// PrintFiringSummary renders the edit-hook firing log: how often lessons
-// actually reached an agent, and which would surface but never have — the
-// decay signal (a lesson whose region no edit touches is a pruning
-// candidate). All lesson text is untrusted, hence sanitized.
+// PrintFiringSummary renders the firing log of all surfaces: how often a
+// surface returned or injected each lesson, and which lessons would surface
+// but never have. A firing does not show that an agent read the lesson.
+// The never-fired list is the decay signal: a lesson whose region no edit
+// touches is a pruning candidate. All lesson text is untrusted, hence sanitized.
 func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 	if s.Total == 0 {
 		if s.SuppressedHookFirings > 0 {

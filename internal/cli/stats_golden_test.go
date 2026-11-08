@@ -245,6 +245,20 @@ pin outcomes — 4 measured: 1 working, 1 not landing, 2 untested
 `, stdout)
 }
 
+// The --stats help names every surface, as the golden above counts the
+// change_set and check firings too. The test pins the whole entry,
+// because a part of it can still say that only the edit hook counts.
+func TestLessonsHelpSaysStatsCountsEverySurface(t *testing.T) {
+	want := "  --stats          which lessons the surfaces returned or injected, split\n" +
+		"                   by surface in the first line, and which would surface\n" +
+		"                   but never have (decay candidates)\n"
+
+	long := newLessonsCmd(&options{}).Long
+
+	assert.Contains(t, long, want)
+	assert.NotContains(t, long, "to agents", "a firing does not show that an agent read the lesson")
+}
+
 func TestLessonsStatsGoldenWithoutDelivery(t *testing.T) {
 	t.Run("no firing log", func(t *testing.T) {
 		root := statsWorkspace(t)
