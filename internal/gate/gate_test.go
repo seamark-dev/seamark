@@ -314,4 +314,20 @@ deny:
 	assert.Contains(t, err.Error(), "broken")
 }
 
+func TestEvalCommandSortsEffects(t *testing.T) {
+	p, c, root := testSetup(t)
+
+	cmd := "curl -s https://x.example | psql prod; rm -rf /tmp/x"
+	want := []string{"db:write", "fs:write", "net:egress"}
+
+	// Map order in Go changes between runs, so one run can pass by chance.
+	for run := range 20 {
+		assert.Equal(t, want, evalCmd(t, p, c, root, cmd).Effects, "run %d", run)
+	}
+
+	// The audit entry stores the effects of the decision in the same order.
+	require.NoError(t, Audit(root, "gate", cmd, p, evalCmd(t, p, c, root, cmd)))
+	assert.Equal(t, []any{"db:write", "fs:write", "net:egress"}, lastEntry(t, root)["effects"])
+}
+
 // Audit log behaviour is covered in audit_test.go.

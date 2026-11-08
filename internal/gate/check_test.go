@@ -18,8 +18,7 @@ import (
 func checkFixture(t *testing.T) (st *store.Store, root string) {
 	t.Helper()
 
-	root = t.TempDir()
-	files := map[string]string{
+	return indexedWorkspace(t, map[string]string{
 		"go.mod": "module example.com/cx\n",
 		"main.go": `package main
 
@@ -37,7 +36,17 @@ func deploy() {
 	exec.Command("kubectl", "apply").Run()
 }
 `,
-	}
+	})
+}
+
+// indexedWorkspace writes files into a new root and indexes it. An
+// overlay marks every os/exec Command call as infra:mutate, so the
+// default diff rule can fire on a change that reaches exec.
+func indexedWorkspace(t *testing.T, files map[string]string) (st *store.Store, root string) {
+	t.Helper()
+
+	root = t.TempDir()
+
 	for rel, content := range files {
 		p := filepath.Join(root, rel)
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -158,4 +167,79 @@ func TestChangedPaths(t *testing.T) {
 	// old path (what vanished must not look like an empty diff).
 	assert.Equal(t, []string{"api/a.go", "new.go", "gone.go", "gone2.go"}, got,
 		"edits, renames, and whole-file deletions all register")
+}
+
+func TestEvalDiffSortsEffects(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{
+		"go.mod": "module example.com/cx\n",
+		"main.go": `package main
+
+import (
+	"net/http"
+	"os"
+	"os/exec"
+)
+
+func main() {
+	exec.Command("kubectl", "apply").Run()
+	_ = os.WriteFile("out.txt", nil, 0o644)
+	_, _ = http.Get("https://x.example")
+}
+`,
+	})
+
+	// The rule indexes diff.effects. It matches only when CEL sees the
+	// sorted list, the same order as the decision.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: first-effect-is-fs-write
+    when: 'diff.effects[0] == "fs:write"'
+    message: the first effect is fs:write
+`), 0o644))
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	diff := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -10,1 +10,2 @@
+ 	exec.Command("kubectl", "apply").Run()
++	// touched
+`
+
+	// Map order in Go changes between runs, so one run can pass by chance.
+	for run := range 20 {
+		d, err := EvalDiff(p, st, diff)
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"fs:write", "infra:mutate", "net:egress", "proc:exec"}, d.Effects, "run %d", run)
+		assert.Equal(t, VerdictApproval, d.Verdict, "run %d: CEL sees the sorted effects", run)
+	}
+}
+
+func TestEvalDiffSortsFiles(t *testing.T) {
+	st, root := checkFixture(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: first-file-is-a
+    when: 'diff.files[0] == "a.go"'
+    message: the first file is a.go
+`), 0o644))
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	// The diff names b.go first. The rule matches only when diff.files
+	// is sorted.
+	diff := "diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -1 +1 @@\n-x\n+y\n" +
+		"diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-x\n+y\n"
+
+	for run := range 20 {
+		d, err := EvalDiff(p, st, diff)
+		require.NoError(t, err)
+
+		assert.Equal(t, VerdictApproval, d.Verdict, "run %d: diff.files is sorted", run)
+	}
 }

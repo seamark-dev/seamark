@@ -147,6 +147,10 @@ func EvalDiff(p *Policy, st *store.Store, diffText string) (*Decision, error) {
 		}
 	}
 
+	// The loop above reads a map, so its order changes between runs. A
+	// rule that indexes diff.files must see the same list on every run.
+	sort.Strings(files)
+
 	tags := make([]string, 0, len(tagSet))
 	for t := range tagSet {
 		tags = append(tags, t)

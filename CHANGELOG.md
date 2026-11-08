@@ -130,6 +130,10 @@ model-boundary delivery.
 - **Author names keep their text.** Author, authority, and `GIT_AUTHOR_*`
   values now keep their text in audit records and mined text. Auth,
   OAuth, authorize, and authorization names still redact.
+- **Stable effect order.** `gate`, `check`, the hooks, and MCP `check`
+  list effects in sorted order on every run, in the text, the JSON, the
+  audit entry, and the policy input. `diff.files` is sorted too, so a
+  rule that indexes either list gives the same verdict on every run.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
