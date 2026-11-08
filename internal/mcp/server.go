@@ -54,6 +54,9 @@ type Server struct {
 	// and usageErr holds the last failure. Serve logs them when it ends.
 	usageFailed int
 	usageErr    error
+	// binary compares the seamark binary on disk with the binary that
+	// this server started from. callTool reads it on every call.
+	binary binaryWatch
 }
 
 // New builds a server for the workspace at root; logf receives
@@ -63,7 +66,7 @@ func New(root, dbPath, version string, logf func(format string, a ...any)) *Serv
 		logf = func(string, ...any) {}
 	}
 
-	return &Server{root: root, dbPath: dbPath, version: version, logf: logf}
+	return &Server{root: root, dbPath: dbPath, version: version, logf: logf, binary: startBinaryWatch(logf)}
 }
 
 type request struct {
@@ -367,13 +370,21 @@ func (s *Server) callTool(params json.RawMessage) (any, *rpcError) {
 	}
 
 	out, err := run(s, p.Arguments)
+
+	// The call notes open every result, also an error. An agent acts on
+	// the reply, and the log of the server does not reach it.
+	notes := s.binary.note(s.version, s.logf)
+
 	if err != nil {
 		// Tool failures travel in-band (isError), not as protocol errors:
 		// the model should see "nothing matches X" and correct course.
-		return toolResult(err.Error(), true), nil
+		return toolResult(notes+err.Error(), true), nil
 	}
 
-	return s.outputResult(out), nil
+	result := s.outputResult(out)
+	prefixNotes(result, notes)
+
+	return result, nil
 }
 
 func toolResult(text string, isErr bool) map[string]any {

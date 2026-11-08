@@ -143,6 +143,10 @@ model-boundary delivery.
   comment edit next to an effectful function no longer reaches its
   effects. An added or removed line whose text starts with `++ ` or
   `-- ` no longer reads as a file header.
+- **MCP server after an upgrade.** A running MCP server keeps the
+  binary it started with. When the seamark binary at its launch path
+  changes or goes away, each tool reply opens with a note to restart the
+  agent or reconnect the MCP server.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

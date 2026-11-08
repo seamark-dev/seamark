@@ -17,6 +17,10 @@ func newMCPCmd(opts *options) *cobra.Command {
 (orient, why, change_set, check, expand), an orientation resource, and an
 onboarding prompt. Every tool call self-repairs index freshness first.
 
+A running server keeps the binary it started with. After you replace or
+upgrade seamark, each tool reply opens with a note until the agent
+restarts or reconnects its MCP server.
+
 Register in Claude Code via .mcp.json:
   {"mcpServers": {"seamark": {"command": "seamark", "args": ["mcp"]}}}`,
 		Args: cobra.NoArgs,
