@@ -33,8 +33,11 @@ const (
 	// lock. One lock covers every context, so a lease of another root
 	// session can hold it. A lease holds it for about 5 ms. A failed reset
 	// keeps the delivered items, so advice stays hidden after a compaction.
-	// A failed lease only repeats advice, so a lease never waits.
-	exploreResetLockWait = 200 * time.Millisecond
+	// A series of subagent leases can hold the lock for longer than 200 ms,
+	// so the reset waits 2 s. It runs after the edit reset, and two waits
+	// of 2 s stay inside the 10 s hook timeout. A failed lease only repeats
+	// advice, so a lease never waits.
+	exploreResetLockWait = 2 * time.Second
 )
 
 // ExploreSurface is the delivery surface of exploration advice. It is

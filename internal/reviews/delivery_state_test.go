@@ -521,7 +521,7 @@ func TestContextDeliveryOpenReadsTheDeliveredSet(t *testing.T) {
 		start := time.Now()
 		_, err = OpenContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "other"})
 		require.Error(t, err, "lock contention must return so the hook can fail open")
-		assert.Less(t, time.Since(start), deliveryResetLockWait, "a lease never takes the wait of a reset")
+		assert.Less(t, time.Since(start), 200*time.Millisecond, "a lease never takes the wait of a reset")
 	})
 
 	t.Run("a partial identity opens nothing", func(t *testing.T) {
@@ -533,10 +533,15 @@ func TestContextDeliveryOpenReadsTheDeliveredSet(t *testing.T) {
 	})
 }
 
-// TestContextDeliveryResetWaitsForALease shows that a reset waits a short
-// time for a lease of another context. One lock covers every context of
-// the file. A reset that fails keeps the delivered pins hidden after a
-// compaction until the TTL ends.
+// leaseHold is the time that a lease of another context holds the lock in
+// the wait tests. It is longer than 200 ms and shorter than the reset wait.
+// A series of subagent leases can hold the lock this long.
+const leaseHold = 500 * time.Millisecond
+
+// TestContextDeliveryResetWaitsForALease shows that a reset waits for a
+// lease of another context. One lock covers every context of the file. A
+// reset that fails keeps the delivered pins hidden after a compaction until
+// the TTL ends.
 func TestContextDeliveryResetWaitsForALease(t *testing.T) {
 	root := t.TempDir()
 	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session-one"}
@@ -546,7 +551,7 @@ func TestContextDeliveryResetWaitsForALease(t *testing.T) {
 	deliverItems(t, root, dc, []DeliveryItem{pin})
 
 	// The other context holds its lease as a parallel root session does:
-	// begin, a short emit, commit, and close.
+	// begin, an emit, commit, and close.
 	held := make(chan struct{})
 	done := make(chan error, 1)
 
@@ -560,7 +565,7 @@ func TestContextDeliveryResetWaitsForALease(t *testing.T) {
 			return
 		}
 
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(leaseHold)
 
 		commitErr := lease.Commit()
 		done <- errors.Join(commitErr, lease.Close())
@@ -570,7 +575,7 @@ func TestContextDeliveryResetWaitsForALease(t *testing.T) {
 
 	generation, resetErr := ResetContextGeneration(root, dc)
 	require.NoError(t, <-done, "the other context commits its lease")
-	require.NoError(t, resetErr, "a reset waits for a short lease of another context")
+	require.NoError(t, resetErr, "a reset waits for a lease of another context")
 	assert.Equal(t, uint64(2), generation)
 
 	lease, err := OpenContextDelivery(root, dc)
@@ -624,7 +629,7 @@ func TestContextDeliveryResetFailsAfterTheWait(t *testing.T) {
 // each state runs one case. The bound is a literal, because a bound that a
 // test reads from the constant cannot show the value of the constant.
 func TestResetWaitsMatchInBothStates(t *testing.T) {
-	const wait = 200 * time.Millisecond
+	const wait = 2 * time.Second
 
 	assert.Equal(t, wait, deliveryResetLockWait)
 	assert.Equal(t, exploreResetLockWait, deliveryResetLockWait)

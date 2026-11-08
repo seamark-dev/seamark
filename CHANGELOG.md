@@ -142,6 +142,9 @@ model-boundary delivery.
   A copy in .claude/settings.local.json that equals the managed handler
   is accepted, because Claude Code runs it once, and doctor no longer
   says that it runs twice.
+- **Reset after a compaction.** The context reset waits up to 2 s, not
+  200 ms, for a state lock that another hook holds, so a compaction less
+  often leaves delivered lessons hidden.
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`

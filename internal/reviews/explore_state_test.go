@@ -333,7 +333,7 @@ func TestExploreLeaseCommitsOnlyAfterEmitAndIsExclusive(t *testing.T) {
 	start := time.Now()
 	_, err = BeginExploreDelivery(root, exploreTestContext, items)
 	require.Error(t, err, "lock contention must return so the hook can fail open")
-	assert.Less(t, time.Since(start), exploreResetLockWait, "a lease never takes the wait of a reset")
+	assert.Less(t, time.Since(start), 200*time.Millisecond, "a lease never takes the wait of a reset")
 
 	_, err = BeginExploreDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "3:s-2"}, items)
 	require.Error(t, err, "one lock covers every context of the file")
@@ -625,8 +625,8 @@ func TestResetExploreDeliveryCreatesNoFile(t *testing.T) {
 	})
 }
 
-// TestResetExploreDeliveryWaitsForALease shows that a reset waits a short
-// time for a lease of another context. One lock covers every context of
+// TestResetExploreDeliveryWaitsForALease shows that a reset waits for a
+// lease of another context. One lock covers every context of
 // the file. A reset that fails keeps the old delivered items, so advice
 // stays hidden after a compaction.
 func TestResetExploreDeliveryWaitsForALease(t *testing.T) {
@@ -635,7 +635,7 @@ func TestResetExploreDeliveryWaitsForALease(t *testing.T) {
 	commitExplore(t, root, exploreTestContext, items)
 
 	// The other context holds its lease as a parallel root session does:
-	// begin, a short emit, commit, and close.
+	// begin, an emit, commit, and close.
 	other := DeliveryContext{ClientID: "claude", ReceiverID: "3:s-2"}
 	held := make(chan struct{})
 	done := make(chan error, 1)
@@ -650,7 +650,7 @@ func TestResetExploreDeliveryWaitsForALease(t *testing.T) {
 			return
 		}
 
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(leaseHold)
 
 		commitErr := lease.Commit()
 		done <- errors.Join(commitErr, lease.Close())
@@ -660,7 +660,7 @@ func TestResetExploreDeliveryWaitsForALease(t *testing.T) {
 
 	generation, resetErr := ResetExploreDelivery(root, exploreTestContext)
 	require.NoError(t, <-done, "the other context commits its lease")
-	require.NoError(t, resetErr, "a reset waits for a short lease of another context")
+	require.NoError(t, resetErr, "a reset waits for a lease of another context")
 	assert.Equal(t, uint64(2), generation)
 
 	state := readExploreFile(t, root)

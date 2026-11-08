@@ -204,6 +204,9 @@ local state, or a state-lock failure causes normal injection rather than
 silently hiding a lesson. Only repository-scoped digests of the receiving
 context and of the lessons are stored in the gitignored
 `.seamark/lessons-hook-state.json`; entries expire after 24 hours.
+A reset after a compaction waits up to 2 s for the state lock. When another
+hook holds the lock for longer, the context keeps its delivered lessons until
+the 24-hour expiry.
 
 A receiving context is the client plus the conversation that the client's
 adapter reports as the receiver. Two clients that report the same session
