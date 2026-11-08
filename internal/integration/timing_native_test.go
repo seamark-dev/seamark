@@ -813,6 +813,22 @@ func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 		name := timingAfterCompact
 		events := r.events[r.runs[name]]
 
+		// The compaction restores the content of files that the session
+		// read or changed. A run of the session before the compaction must
+		// not name the file, or the model can edit it without a Read. This
+		// check runs first and does not stop the subtest, because a skipped
+		// Read is the failure that it explains, and the required Read below
+		// stops the subtest.
+		for _, earlier := range []string{timingPriorResult, timingNewModelStep, timingCompactReset} {
+			for _, e := range r.events[r.runs[earlier]] {
+				input, _ := e.raw["tool_input"].(map[string]any)
+				if p := nativeString(input, "file_path"); p != "" {
+					assert.NotEqual(t, timingAfterCompactFile, r.rel(nativeString(e.raw, "cwd"), p),
+						"%s: case %s names the file before the compaction; record the case again", e.hook.File, earlier)
+				}
+			}
+		}
+
 		// Claude Code answers some calls before any hook, for example an
 		// Edit whose old text is not in the file. The replay cannot tell
 		// that answer from a model that made no call, so it names both.
@@ -834,19 +850,6 @@ func TestNativeRecordClaudeTimingRecording(t *testing.T) {
 		for _, e := range events {
 			assert.NotContains(t, []string{claudeEventPreCompact, claudeEventPostCompact}, e.hook.Event,
 				"%s: the run compacts again", e.hook.File)
-		}
-
-		// The compaction restores the content of files that the session
-		// read or changed. A run of the session before the compaction must
-		// not name the file, or the model can edit it without a Read.
-		for _, earlier := range []string{timingPriorResult, timingNewModelStep, timingCompactReset} {
-			for _, e := range r.events[r.runs[earlier]] {
-				input, _ := e.raw["tool_input"].(map[string]any)
-				if p := nativeString(input, "file_path"); p != "" {
-					assert.NotEqual(t, timingAfterCompactFile, r.rel(nativeString(e.raw, "cwd"), p),
-						"%s: case %s names the file before the compaction; record the case again", e.hook.File, earlier)
-				}
-			}
 		}
 
 		post := r.sequence(t, timingCompactReset, claudeEventPostCompact)[0]
