@@ -51,8 +51,10 @@ function or method with no resolved caller prints
 several methods share, or through a function value, gets no edge. The
 `usually changed with` lines carry **function grain**: `· mostly …`
 names the functions git's hunk headers show actually moved in the shared
-commits — a factual report, not a statistical claim. On a repo with real
-history, this section is where the surprises live.
+commits — a factual report, not a statistical claim. Hunk headers
+describe each old commit, so `mostly` leaves out a name that a parsed
+partner no longer defines. On a repo with real history, this section is
+where the surprises live.
 
 ### Languages
 

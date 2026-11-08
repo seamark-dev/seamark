@@ -204,7 +204,9 @@ func partnerFunctions(root string, list []companion) [][]string {
 				go func() {
 					defer diffs.Done()
 
-					funcs[i] = history.PartnerFunctions(ctx, root, list[i].file, commits, 3)
+					// Every name comes back, because liveFunctions drops the
+					// removed ones before the cut to reasonFunctions.
+					funcs[i] = history.PartnerFunctions(ctx, root, list[i].file, commits, 0)
 				}()
 			}
 
@@ -217,6 +219,52 @@ func partnerFunctions(root string, list []companion) [][]string {
 	return funcs
 }
 
+// reasonFunctions is how many function names a "mostly" reason shows.
+const reasonFunctions = 3
+
+// liveFunctions keeps the names in funcs that file still defines, in
+// order, and cuts the result to reasonFunctions. Hunk headers describe the
+// file as it was in each commit, so a renamed or removed function can
+// appear there. An agent cannot open such a name in the current file.
+// The match is exact, because a symbol's Name is the bare identifier that
+// the hunk-header reader also gives.
+//
+// A file with no indexed symbols keeps every name. The index does not
+// parse every language, so an empty list says nothing about the names. A
+// store error keeps every name too, because the reason is only a hint.
+// The store reads run here, after the git goroutines finish.
+func liveFunctions(st *store.Store, file string, funcs []string) []string {
+	if len(funcs) == 0 {
+		return nil
+	}
+
+	syms, err := st.SymbolsInFile(file)
+	if err != nil || len(syms) == 0 {
+		return funcs[:min(len(funcs), reasonFunctions)]
+	}
+
+	defined := make(map[string]bool, len(syms))
+	for _, s := range syms {
+		defined[s.Name] = true
+	}
+
+	live := make([]string, 0, reasonFunctions)
+
+	for _, name := range funcs {
+		if !defined[name] {
+			continue
+		}
+
+		live = append(live, name)
+
+		if len(live) == reasonFunctions {
+			break
+		}
+	}
+
+	return live
+}
+
 // companionReason joins what the shared commits touched in the partner and
 // the latest correction recorded on it. The first comes from git and is
 // computed for the whole list at once; the second needs only the index, so
@@ -224,7 +272,7 @@ func partnerFunctions(root string, list []companion) [][]string {
 func companionReason(st *store.Store, c companion, funcs []string) string {
 	var parts []string
 
-	if len(funcs) > 0 {
+	if funcs = liveFunctions(st, c.file, funcs); len(funcs) > 0 {
 		parts = append(parts, "mostly "+render.Sanitize(strings.Join(funcs, ", ")))
 	}
 

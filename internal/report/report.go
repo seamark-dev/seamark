@@ -173,9 +173,10 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 	if len(partners) > 0 {
 		fmt.Fprintf(w, "\nusually changed with  (empirical, lift > 1 means beyond chance)\n")
 
-		// Function grain (RFC-001 §2.5): name the functions of each partner
-		// that the shared commits actually touched — a factual report from
-		// git's hunk headers, not a statistical claim. Best-effort: skipped
+		// Function grain: name the functions of each partner that the
+		// shared commits actually touched — a factual report from git's
+		// hunk headers, not a statistical claim. liveFunctions drops the
+		// names that the partner no longer defines. Best-effort: skipped
 		// when there is no git repo or root.
 		ctx, cancel := context.WithTimeout(context.Background(), historyBudget)
 		defer cancel()
@@ -190,7 +191,8 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 			fmt.Fprintf(w, "  %2d/%-3d commits  lift %-5.1f %s",
 				p.Together, p.Total, p.Lift, p.File)
 
-			if funcs := history.PartnerFunctions(ctx, root, p.File, shared, 3); len(funcs) > 0 {
+			funcs := liveFunctions(st, p.File, history.PartnerFunctions(ctx, root, p.File, shared, 0))
+			if len(funcs) > 0 {
 				fmt.Fprintf(w, "  · mostly %s", render.Sanitize(strings.Join(funcs, ", ")))
 			}
 
