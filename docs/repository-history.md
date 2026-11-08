@@ -161,8 +161,9 @@ table in [Data flow](data-flow.md).
 
 - Call resolution is syntactic, not type-checked. gopls will always be
   better at _find references_ within one language — that is not the
-  game. Low-confidence edges are labeled `[unique-name]` and test
-  doubles are excluded from that tier.
+  game. Low-confidence edges are labeled `[unique-name]`. A production
+  caller never resolves into a test file in that tier, and a Go test
+  caller resolves into a test file only in its own directory.
 - A local variable shadowing an import alias can produce a wrong edge
   (declared as such via its origin label). Scope tracking is future work.
 - Python's DB-API has no syntactic read/write split, so `cursor.execute`

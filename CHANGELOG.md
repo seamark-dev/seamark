@@ -185,6 +185,12 @@ model-boundary delivery.
 - **Ignored MCP arguments.** A tool call with an argument key that the
   tool does not take still runs, and its reply now opens with a note that
   names each ignored key and the keys the tool takes.
+- **Go test callers.** A method call in a Go `_test.go` file no longer
+  counts methods in `_test.go` files of other directories, which Go
+  never compiles into its test binary, so many test calls now get a
+  `[unique-name]` edge. `status` shares and the effects of test symbols
+  change at the next index run that rebuilds; `seamark index --force`
+  applies the change at once.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
