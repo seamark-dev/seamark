@@ -1285,3 +1285,222 @@ func TestProposalLedgerNamesOnlyAChosenRowWithAnAdvisory(t *testing.T) {
 
 	assert.Contains(t, sb.String(), "\nchosen scope: p5 — a person chose these regions;")
 }
+
+// seedCallGraph stores target and one symbol per edge, and links each
+// edge symbol to target with a CALLS edge of the given origin. A caller
+// edge points at target, and a callee edge leaves it.
+func seedCallGraph(t *testing.T, target model.Symbol, callers, callees []store.CallEdge) *store.Store {
+	t.Helper()
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		if err := tx.InsertSymbol(&target); err != nil {
+			return err
+		}
+
+		link := func(edges []store.CallEdge, in bool) error {
+			for _, e := range edges {
+				sym := e.Symbol
+				if err := tx.InsertSymbol(&sym); err != nil {
+					return err
+				}
+
+				edge := model.Edge{Src: target.ID, Dst: sym.ID, Kind: model.EdgeCalls, Origin: e.Origin}
+				if in {
+					edge.Src, edge.Dst = sym.ID, target.ID
+				}
+
+				if err := tx.InsertEdge(edge); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		}
+
+		if err := link(callers, true); err != nil {
+			return err
+		}
+
+		return link(callees, false)
+	}))
+
+	return st
+}
+
+// callEdge builds one production edge symbol for seedCallGraph.
+func callEdge(fqn, origin string) store.CallEdge {
+	return store.CallEdge{
+		Symbol: model.Symbol{
+			FQN: fqn, Name: fqn, Kind: model.KindFunction,
+			File: "pkg/" + strings.ReplaceAll(fqn, ".", "_") + ".go", Span: model.Span{StartLine: 1, EndLine: 2},
+		},
+		Origin: origin,
+	}
+}
+
+// testCallEdge builds one edge symbol in a test file for seedCallGraph.
+func testCallEdge(fqn, origin string) store.CallEdge {
+	e := callEdge(fqn, origin)
+	e.File = strings.TrimSuffix(e.File, ".go") + "_test.go"
+
+	return e
+}
+
+// sectionLines returns the lines under the header that starts with
+// prefix, up to the next blank line.
+func sectionLines(out, prefix string) []string {
+	var lines []string
+
+	inside := false
+
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, prefix):
+			inside = true
+		case inside && line == "":
+			return lines
+		case inside:
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
+}
+
+// TestWhyListsResolvedEdgesBeforeGuesses proves that the 15-line cut drops
+// name-match guesses before resolved edges. The guess FQNs sort first, so a
+// list in store order would show only guesses. A list of test edges alone
+// takes the place of the production list, so it must sort the same way.
+func TestWhyListsResolvedEdgesBeforeGuesses(t *testing.T) {
+	target := model.Symbol{
+		FQN: "pkg.Theme.ToneStyle", Name: "ToneStyle", Kind: model.KindMethod,
+		File: "pkg/theme.go", Span: model.Span{StartLine: 10, EndLine: 20},
+	}
+
+	cases := []struct {
+		name string
+		edge func(fqn, origin string) store.CallEdge
+	}{
+		{"production edges", callEdge},
+		{"test edges only", testCallEdge},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var callers, callees []store.CallEdge
+
+			for i := range 10 {
+				callers = append(callers,
+					tc.edge(fmt.Sprintf("a.guessIn%02d", i), model.OriginUniqueName),
+					tc.edge(fmt.Sprintf("z.resolvedIn%02d", i), model.OriginSameClass))
+				callees = append(callees,
+					tc.edge(fmt.Sprintf("a.guessOut%02d", i), model.OriginUniqueName),
+					tc.edge(fmt.Sprintf("z.resolvedOut%02d", i), model.OriginSameClass))
+			}
+
+			st := seedCallGraph(t, target, callers, callees)
+
+			var b strings.Builder
+			require.NoError(t, Why(&b, st, t.TempDir(), target.FQN))
+
+			out := b.String()
+
+			// A test-only list prints no "(+N in tests)" line, so both
+			// cases end with the overflow line.
+			for _, header := range []string{"callers (20)", "calls (20)"} {
+				lines := sectionLines(out, header)
+				require.Len(t, lines, 16, "%s: 15 edges and the overflow line\n%s", header, out)
+
+				for i, line := range lines[:10] {
+					assert.Contains(t, line, "[same-class]", "%s line %d", header, i+1)
+				}
+
+				for i, line := range lines[10:15] {
+					assert.Contains(t, line, "[unique-name]", "%s line %d", header, i+11)
+				}
+
+				assert.Equal(t, "  … 5 more", lines[15], header)
+			}
+		})
+	}
+}
+
+// TestCallEdgesBreakTiesByFQNFileAndLine proves the order inside one tier:
+// FQN, then file, then start line. Two symbols can share an FQN, for example
+// build-tag variants. The input reverses each key, so a sort that skips a
+// key prints another order.
+func TestCallEdgesBreakTiesByFQNFileAndLine(t *testing.T) {
+	edge := func(fqn, file string, line uint32) store.CallEdge {
+		return store.CallEdge{
+			Symbol: model.Symbol{
+				FQN: fqn, Name: fqn, Kind: model.KindFunction,
+				File: file, Span: model.Span{StartLine: line, EndLine: line + 1},
+			},
+			Origin: model.OriginSamePackage,
+		}
+	}
+
+	var b strings.Builder
+	printCallEdges(&b, []store.CallEdge{
+		edge("d.g", "a/g.go", 30),
+		edge("d.g", "a/g.go", 5),
+		edge("c.f", "b/f.go", 5),
+		edge("c.f", "a/f.go", 20),
+		edge("b.y", "a/y.go", 1),
+		edge("a.x", "z/x.go", 1),
+	})
+
+	var got []string
+
+	for line := range strings.Lines(b.String()) {
+		fields := strings.Fields(line)
+		require.Len(t, fields, 3, line)
+
+		got = append(got, fields[1]+" "+fields[2])
+	}
+
+	assert.Equal(t, []string{
+		"a.x z/x.go:1",
+		"b.y a/y.go:1",
+		"c.f a/f.go:20",
+		"c.f b/f.go:5",
+		"d.g a/g.go:5",
+		"d.g a/g.go:30",
+	}, got)
+}
+
+// TestWhyOrdersMixedOriginTiers proves the tier order of the edge list:
+// qualified, same-class, same-package, unique-name, then an empty origin.
+// The FQNs sort in the reverse order, so only the tier sort can pass.
+func TestWhyOrdersMixedOriginTiers(t *testing.T) {
+	target := model.Symbol{
+		FQN: "pkg.Mixed", Name: "Mixed", Kind: model.KindFunction,
+		File: "pkg/mixed.go", Span: model.Span{StartLine: 1, EndLine: 5},
+	}
+
+	callers := []store.CallEdge{
+		callEdge("a.empty", ""),
+		callEdge("b.guess", model.OriginUniqueName),
+		callEdge("c.pkg", model.OriginSamePackage),
+		callEdge("d.class", model.OriginSameClass),
+		callEdge("e.qualified", model.OriginQualified),
+	}
+
+	st := seedCallGraph(t, target, callers, nil)
+
+	var b strings.Builder
+	require.NoError(t, Why(&b, st, t.TempDir(), target.FQN))
+
+	out := b.String()
+	lines := sectionLines(out, "callers (5)")
+	require.Len(t, lines, 5, out)
+
+	want := []string{"[qualified]", "[same-class]", "[same-package]", "[unique-name]", "[]"}
+	for i, tag := range want {
+		assert.True(t, strings.HasPrefix(strings.TrimSpace(lines[i]), tag+" "), "line %d is %q, want tag %s", i+1, lines[i], tag)
+	}
+}

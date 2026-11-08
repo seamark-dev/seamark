@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -1305,7 +1306,10 @@ func printDecisions(w io.Writer, decisions []model.Decision) {
 // test edges collapse to one count line: a hot constructor has a
 // hundred TestXxx callers, and they bury the fourteen that matter —
 // the same production-surface stance orient takes. A symbol referenced
-// only from tests still shows its test edges rather than nothing.
+// only from tests still shows its test edges rather than nothing. The
+// shown list sorts by origin confidence before the 15-line cut. The store
+// returns edges in FQN order, so without the sort the cut can drop
+// resolved edges and keep name-match guesses.
 func printCallEdges(w io.Writer, edges []store.CallEdge) {
 	var prod, tests []store.CallEdge
 
@@ -1322,6 +1326,8 @@ func printCallEdges(w io.Writer, edges []store.CallEdge) {
 	if len(prod) == 0 {
 		shown, tests = tests, nil
 	}
+
+	sortByConfidence(shown)
 
 	overflow := 0
 
@@ -1342,6 +1348,29 @@ func printCallEdges(w io.Writer, edges []store.CallEdge) {
 	if len(tests) > 0 {
 		fmt.Fprintf(w, "  (+%d in tests)\n", len(tests))
 	}
+}
+
+// sortByConfidence orders edges from the most trusted origin to the least.
+// FQN, file, and start line break ties, so the order is the same on each run.
+// The slice is sorted in place: printCallEdges owns it after the split.
+func sortByConfidence(edges []store.CallEdge) {
+	sort.SliceStable(edges, func(i, j int) bool {
+		a, b := edges[i], edges[j]
+
+		if ca, cb := model.OriginConfidence(a.Origin), model.OriginConfidence(b.Origin); ca != cb {
+			return ca > cb
+		}
+
+		if a.FQN != b.FQN {
+			return a.FQN < b.FQN
+		}
+
+		if a.File != b.File {
+			return a.File < b.File
+		}
+
+		return a.Span.StartLine < b.Span.StartLine
+	})
 }
 
 // originSummary flags edge lists dominated by the name-guess tier.

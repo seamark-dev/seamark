@@ -29,8 +29,8 @@ callers (4)
   (+3 in tests)
 
 calls (8)  — 3 resolved by name match only
-  [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
   [same-package]  internal/gate.gitPush                        internal/gate/gate.go:388
+  [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
   ...
 
 usually changed with  (empirical, lift > 1 means beyond chance)
@@ -44,11 +44,12 @@ Read it top to bottom: this function _can ultimately spawn a process_
 a count instead of burying it), and here is the commit trail. Every call
 edge declares how it was derived (`[qualified]`, `[same-package]`,
 `[same-class]`, or the low-confidence `[unique-name]`), so you always
-know how much to trust an edge. The `usually changed with` lines carry
-**function grain**: `· mostly …` names the functions git's hunk headers
-show actually moved in the shared commits — a factual report, not a
-statistical claim. On a repo with real history, this section is where
-the surprises live.
+know how much to trust an edge. Resolved edges lead each list and
+name-match guesses follow, so the 15-line cut drops guesses first. The
+`usually changed with` lines carry **function grain**: `· mostly …`
+names the functions git's hunk headers show actually moved in the shared
+commits — a factual report, not a statistical claim. On a repo with real
+history, this section is where the surprises live.
 
 ### Languages
 
