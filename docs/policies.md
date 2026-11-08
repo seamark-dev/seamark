@@ -130,6 +130,12 @@ slow diff to a file first
 (`gh pr diff 42 > pr.diff; seamark check --enforce < pr.diff`), or run
 `seamark check </dev/null` to check `git diff HEAD` on purpose.
 
+The fallback runs `git diff HEAD` with fixed options: no color, no
+external diff, no textconv, the `a/` and `b/` path prefixes, paths from
+the top of the work tree, and the short submodule form. A git setting
+such as `color.ui=always` or `diff.external` therefore cannot change the
+diff that `check` reads.
+
 A diff with no changed file never reads as a clean allow. Empty output
 of `git diff HEAD` allows with the note `no changed files in git diff
 HEAD; untracked files are not part of it`, in every mode, because a

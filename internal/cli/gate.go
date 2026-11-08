@@ -378,7 +378,7 @@ func readDiff(stdin io.Reader, stderr io.Writer, root string, wait time.Duration
 		}
 	}
 
-	out, err := gitOutput(root, "diff", "HEAD")
+	out, err := gate.GitDiffHead(root)
 	if err != nil {
 		return "", "", fmt.Errorf("git diff: %w", err)
 	}

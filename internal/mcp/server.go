@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 
 	"github.com/seamark-dev/seamark/internal/delivery"
@@ -565,12 +564,12 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 		source := gate.SourceDiffArgument
 
 		if p.Diff == "" {
-			out, err := exec.Command("git", "-C", s.root, "diff", "HEAD").Output()
+			out, err := gate.GitDiffHead(s.root)
 			if err != nil {
 				return toolOutput{}, fmt.Errorf("no diff given and `git diff HEAD` failed: %w", err)
 			}
 
-			p.Diff = string(out)
+			p.Diff = out
 			policyInput = report.PolicyInputGitDiffHead
 			source = gate.SourceGitDiffHead
 		}

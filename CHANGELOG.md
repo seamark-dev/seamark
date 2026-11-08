@@ -177,6 +177,10 @@ model-boundary delivery.
   comment edit next to an effectful function no longer reaches its
   effects. An added or removed line whose text starts with `++ ` or
   `-- ` no longer reads as a file header.
+- **Git config and the `git diff HEAD` fallback.** `check` and MCP
+  `check` run it with fixed color, external diff, textconv, path prefix,
+  relative path, and submodule options, so a setting such as
+  `color.ui=always` no longer turns a change into an allow.
 - **MCP server after an upgrade.** A running MCP server keeps the
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the

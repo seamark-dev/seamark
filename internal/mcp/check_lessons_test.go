@@ -140,6 +140,30 @@ func checkLegacyFixture(t *testing.T) string {
 	return root
 }
 
+// TestCheckMCPGitDiffHeadIgnoresDiffConfig covers the git diff HEAD
+// fallback of the MCP check tool. A repository config that changes the
+// diff text must not change the decision. Without the fix, color.ui=always
+// gave allow for a change that needs approval. The test compares the
+// decision block alone, because the companion hint reads git log and is
+// not part of this fallback.
+func TestCheckMCPGitDiffHeadIgnoresDiffConfig(t *testing.T) {
+	const decision = "verdict  require_approval (mode: warn)\n" +
+		"effects  [fs:write]\n" +
+		"  [require_approval] store-writes: the change reaches file writes"
+
+	root := checkLegacyFixture(t)
+
+	text, isErr := callCheck(t, root, "{}")
+	require.False(t, isErr)
+	require.Equal(t, decision, strings.SplitN(text, "\n\n", 2)[0])
+
+	fixtureGit(t, root, "config", "color.ui", "always")
+
+	text, isErr = callCheck(t, root, "{}")
+	assert.False(t, isErr)
+	assert.Equal(t, decision, strings.SplitN(text, "\n\n", 2)[0])
+}
+
 // TestCheckLessonsMCPOptionAbsentKeepsText freezes the text of the MCP
 // check tool as it was before the lesson_checks option existed, because
 // a call without the option must keep its text. Three argument shapes
