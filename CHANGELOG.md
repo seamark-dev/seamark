@@ -130,12 +130,43 @@ model-boundary delivery.
 - **Author names keep their text.** Author, authority, and `GIT_AUTHOR_*`
   values now keep their text in audit records and mined text. Auth,
   OAuth, authorize, and authorization names still redact.
+- **Stable effect order.** `gate`, `check`, the hooks, and MCP `check`
+  list effects in sorted order on every run, in the text, the JSON, the
+  audit entry, and the policy input. `diff.files` is sorted too, so a
+  rule that indexes either list gives the same verdict on every run.
+- **A diff with no changed file.** `check` and MCP `check` no longer
+  give a bare allow for it. Empty `git diff HEAD` output gets a note that
+  untracked files are not part of it. Input that names no changed file
+  gets a note in warn mode and blocks with exit 2 under enforcement.
+- **Only changed lines count in `check`.** The context lines of a hunk
+  no longer touch the symbols around an edit, so verdicts can change: a
+  comment edit next to an effectful function no longer reaches its
+  effects. An added or removed line whose text starts with `++ ` or
+  `-- ` no longer reads as a file header.
+- **MCP server after an upgrade.** A running MCP server keeps the
+  binary it started with. When the seamark binary at its launch path
+  changes or goes away, each tool reply opens with a note to restart the
+  agent or reconnect the MCP server.
+- **Newer-schema refusal on MCP.** When an MCP tool or resource meets a
+  database from a newer seamark, its reply adds a line that names the
+  running version and says to restart the agent if a newer seamark is
+  installed. The CLI text does not change.
+- **The MCP `check` tool names its writes.** Its description says that a
+  call refreshes the index, appends to `audit.jsonl`, and can write
+  `lessons-audit.jsonl` and `lesson-check-audit.jsonl`. The data-flow
+  tables name the same writes for `check` and `mcp`.
+- **Ignored MCP arguments.** A tool call with an argument key that the
+  tool does not take still runs, and its reply now opens with a note that
+  names each ignored key and the keys the tool takes.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
 An older binary then refuses the upgraded database and a bundle of
 version 4 — the versioning contract. That covers v0.8.0, which has
-schema 6 and state version 2. The installed hooks move with the binary.
+schema 6 and state version 2. Restart your AI coding agent after you
+replace the binary, because a running MCP server keeps the old one: a
+v0.8.0 server tells you to "upgrade seamark" for the upgraded database,
+and a restart fixes that. The installed hooks move with the binary.
 A new binary still reads every older bundle, and a row of such a bundle
 records no scope choice.
 An export of the new binary is no way back, so make a backup before you

@@ -195,14 +195,30 @@ func refuseNewer(db *sql.DB) error {
 	return checkNotNewer(stored)
 }
 
+// NewerSchemaError is the refusal of a database that a newer seamark
+// stamped. It is a type, so a caller such as the MCP server can add its
+// own advice with errors.As and the text stays the same for the CLI.
+type NewerSchemaError struct {
+	// Stored is the schema version of the database.
+	Stored int
+	// Supported is the schema version of this binary.
+	Supported int
+}
+
+// Error returns the refusal text. The text tells the user to keep the
+// database, because it holds proposal decisions that no rebuild restores.
+func (e *NewerSchemaError) Error() string {
+	return fmt.Sprintf(
+		"store: database schema is v%d but this seamark understands v%d — "+
+			"upgrade seamark (the database was left untouched; do not delete it: "+
+			"it holds your proposal decisions)", e.Stored, e.Supported,
+	)
+}
+
 // checkNotNewer is the shared newer-database refusal.
 func checkNotNewer(stored int) error {
 	if stored > schemaVersion {
-		return fmt.Errorf(
-			"store: database schema is v%d but this seamark understands v%d — "+
-				"upgrade seamark (the database was left untouched; do not delete it: "+
-				"it holds your proposal decisions)", stored, schemaVersion,
-		)
+		return &NewerSchemaError{Stored: stored, Supported: schemaVersion}
 	}
 
 	return nil

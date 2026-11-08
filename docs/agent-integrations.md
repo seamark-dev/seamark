@@ -101,6 +101,11 @@ current Codex session or trust decisions.
 A capability an agent does not declare is reported as unsupported, not
 broken. `init` prints what it skipped, and `doctor` does not fail on it.
 
+A running MCP server keeps the seamark binary it started with, because
+the agent starts it once per session. After you replace or upgrade the
+binary, each tool reply opens with a note that names the old version
+until you restart the agent or reconnect its MCP server.
+
 The real-model smoke passed on 2026-09-27 with codex-cli 0.157.0 and
 GPT-6 Luna at low reasoning: one group produced a proposal with Codex
 provenance, and all 10 script checks passed. A temporary CLI wrapper added

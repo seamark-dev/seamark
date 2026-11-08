@@ -123,12 +123,33 @@ slow diff to a file first
 (`gh pr diff 42 > pr.diff; seamark check --enforce < pr.diff`), or run
 `seamark check </dev/null` to check `git diff HEAD` on purpose.
 
+A diff with no changed file never reads as a clean allow. Empty output
+of `git diff HEAD` allows with the note `no changed files in git diff
+HEAD; untracked files are not part of it`, in every mode, because a
+clean tree is a normal state. Input that has bytes but names no changed
+file (no `diff --git`, `---`, `+++` or rename header with a path) is
+not a diff that `check` can read. In warn mode the verdict carries a
+note that names the source (`stdin`, the MCP `diff` argument) and says
+that it covers no change. Under enforcement it blocks with exit 2 and
+writes no audit entry; the MCP `check` tool returns an error result.
+
 Changed lines map to symbols; symbols carry transitively-propagated
 effect tags; the union is what the change can _ultimately_ reach — even
-when the edited function never touches a sink itself. Policy rules over
-`diff.effects` gate merges the same way `gate` gates commands, and
+when the edited function never touches a sink itself. Only added and
+removed lines count: the context lines of a hunk do not. Removed lines
+count as the line directly above them, and for a pure deletion also as
+the line below them, because either line can belong to the symbol that
+lost them. When the first removed line with text is indented, the
+nearest line with text above them in the hunk counts too: a Python
+function ends at its last statement, so a blank line between it and the
+removed lines lies outside it. A cut before the first line, such as the
+deletion of a whole file, counts no line, so the reach of that file
+stays unknown. Policy
+rules over `diff.effects` gate merges the same way `gate` gates commands, and
 `diff.unindexed_files` exposes coverage blind spots to your rules —
 changed files the index cannot attribute never silently read as safe.
+`diff.files` and `diff.effects` reach the rules in sorted order, so a
+rule that indexes them gives the same verdict on every run.
 The text output also appends the recurring lessons governing the
 touched files — clearly marked advisory, never part of the verdict,
 printed even when the verdict blocks (a deny is exactly when they

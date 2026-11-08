@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/google/cel-go/common/types"
@@ -466,7 +467,14 @@ func emptyDiff() map[string]any {
 }
 
 // evaluate runs every rule and keeps the strongest verdict.
+//
+// The callers build tags from a map, so their order changes between
+// runs. evaluate sorts tags in place before any rule runs. The
+// activation holds the same slice, so CEL sees the order of the
+// decision, the text, and the audit entry.
 func (p *Policy) evaluate(tags []string, activation map[string]any) (*Decision, error) {
+	sort.Strings(tags)
+
 	d := &Decision{Verdict: VerdictAllow, Mode: p.Mode, Effects: tags, PolicySHA: p.Hash}
 
 	run := func(rules []Rule, verdict string) error {

@@ -284,7 +284,12 @@ diff the policy read. A lesson violation exits 2, as a policy block does.`,
 				return err
 			}
 
-			decision, err := gate.EvalDiff(policy, st, diffText)
+			source := gate.SourceGitDiffHead
+			if policyInput == report.PolicyInputStdinDiff {
+				source = gate.SourceStdin
+			}
+
+			decision, err := gate.EvalDiff(policy, st, diffText, source)
 			if err != nil {
 				return err
 			}

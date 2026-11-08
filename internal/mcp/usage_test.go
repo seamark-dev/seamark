@@ -173,7 +173,7 @@ func TestMCPUsageHoldsNoArgument(t *testing.T) {
 	root := writeFixture(t)
 
 	serve(t, root, usageInitialize,
-		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"why","arguments":{"query":"`+sentinel+`"}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"why","arguments":{"query":"`+sentinel+`","`+sentinel+`key":1}}}`,
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"expand","arguments":{"ref":"`+sentinel+`"}}}`,
 		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"change_set","arguments":{"files":["`+sentinel+`.go"]}}}`,
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"check","arguments":{"diff":"+++ `+sentinel+`"}}}`,
