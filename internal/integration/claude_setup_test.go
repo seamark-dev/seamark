@@ -1039,12 +1039,55 @@ func TestClaudeSetupAndInspectionWarnOnceWhenHooksAreDisabled(t *testing.T) {
 		assert.Equal(t, approve.ClaudeSettings, disabled[0].Path)
 	})
 
+	t.Run("a report-only lesson-check definition alone", func(t *testing.T) {
+		// A guard that discards its exit status is no owned entry, but it is
+		// a seamark hook that the setting turns off.
+		root := t.TempDir()
+		writeRel(t, root, approve.ClaudeSettings, `{"disableAllHooks": true, "hooks":{"PreToolUse":[`+
+			hookEntry("Edit|Write|MultiEdit", testBinary+" "+hooks.LessonGuardMarker+" || true")+`]}}`)
+
+		insp := claudeSetup{}.Inspect(root)
+
+		require.NotNil(t, insp.LessonHooks)
+		require.Empty(t, insp.LessonHooks.Entries)
+		require.True(t, insp.LessonHooks.ReportOnly)
+
+		disabled := findingsWith(insp.Findings, disabledReason)
+		require.Len(t, disabled, 1)
+		assert.Equal(t, approve.ClaudeSettings, disabled[0].Path)
+	})
+
 	t.Run("no seamark hooks", func(t *testing.T) {
 		root := t.TempDir()
 		setClaudeKey(t, root, approve.ClaudeSettings, "disableAllHooks", "true")
 
 		assert.Empty(t, findingsWith(claudeSetup{}.Inspect(root).Findings, disabledReason),
 			"a repository without seamark hooks gets no finding for a setting of its own")
+	})
+
+	t.Run("no seamark hooks and an unreadable local file", func(t *testing.T) {
+		root := t.TempDir()
+		setClaudeKey(t, root, approve.ClaudeSettings, "disableAllHooks", "true")
+		writeRel(t, root, claudeLocalSettings, `{not json`)
+
+		insp := claudeSetup{}.Inspect(root)
+
+		assert.Empty(t, findingsWith(insp.Findings, disabledReason), "an unreadable local file is no installed hook")
+		assert.Len(t, findingsAt(insp.Findings, claudeLocalSettings, "duplicate seamark hooks"), 1,
+			"the unchecked-source finding stays")
+		require.NotNil(t, insp.LessonHooks)
+		assert.True(t, insp.LessonHooks.SourceUnreadable, "the capability report keeps the read failure")
+	})
+
+	t.Run("seamark hooks and an unreadable local file", func(t *testing.T) {
+		root := t.TempDir()
+		applyLessonSetupWithBinary(t, root, testBinary, ClientSetup{ClientID: ClaudeID, Hooks: true})
+		setClaudeKey(t, root, approve.ClaudeSettings, "disableAllHooks", "true")
+		writeRel(t, root, claudeLocalSettings, `{not json`)
+
+		disabled := findingsWith(claudeSetup{}.Inspect(root).Findings, disabledReason)
+		require.Len(t, disabled, 1)
+		assert.Contains(t, disabled[0].Reason, claudeLocalSettings+" could not be read")
 	})
 
 	t.Run("a plain run that does not read the local file", func(t *testing.T) {

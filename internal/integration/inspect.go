@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -344,14 +345,53 @@ type hookSource struct {
 	// client runs a filtered hook only for the calls that match, so its
 	// coverage is uncertain. On an event without a tool it never runs.
 	filter string
+	// missing is the binary path of an owned lifecycle command that the
+	// client cannot start, or "". Such a source has no tools and no mode,
+	// so it counts for nothing. Only classifyHook reads it, to name the
+	// broken definition when no other definition runs the hook.
+	missing string
+	// idle is true for an owned lifecycle command of the managed document
+	// under a matcher that fires for none of the spec's tools. matcher is
+	// that matcher. Such a source has no tools and no mode, and only
+	// classifyHook reads it, to name the matcher.
+	idle    bool
+	matcher string
+	// otherForm is true for an owned command in the form of another
+	// client, such as a Codex gate handler in the Claude Code form.
+	otherForm bool
+	// missingAction is the action that repairs a missing binary. The
+	// finding and the hook entry print it, so both say the same words.
+	missingAction string
 }
 
 // hookRules are the rules of one client for reading a hook document:
 // its ID for an action, its matcher rule, and its execution rule.
+// rewrite is the action that makes setup rewrite the managed hook
+// commands to the running binary. It follows the setup route that can
+// run in the current state, so only an inspection sets it. self is the
+// binary that a plan runs as. That binary can start, so a plan never
+// checks it.
 type hookRules struct {
 	clientID string
 	fires    hooks.MatcherRule
 	exec     hooks.ExecutionRule
+	rewrite  string
+	self     string
+}
+
+// withSelf returns the rules of a plan that runs as the binary.
+func (r hookRules) withSelf(binary string) hookRules {
+	r.self = binary
+
+	return r
+}
+
+// withRewrite returns the rules with the action that rewrites the
+// managed hook commands.
+func (r hookRules) withRewrite(action string) hookRules {
+	r.rewrite = action
+
+	return r
 }
 
 // The hook rules of the built-in clients.
@@ -584,7 +624,12 @@ func (s *hookSource) applyExecution(spec hooks.Spec, execution hooks.Execution) 
 // It is named in an info finding and has no tools, so it counts for
 // nothing. A definition with an if filter on an event without a tool
 // never runs either. It is kept without tools, so the classification can
-// name the field.
+// name the field. An owned lifecycle command whose binary the client
+// cannot start gets a warning. It is kept without tools and mode, so the
+// classification can name it, and runningSources drops it for every
+// other consumer. An owned lifecycle command of the managed document
+// under a matcher that never fires is kept in the same way, with a
+// warning that names the matcher.
 func documentSources(findings *[]Finding, document map[string]any, rules hookRules, path string, spec hooks.Spec, managed bool) []hookSource {
 	var sources []hookSource
 
@@ -602,10 +647,13 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		// rule. One marker ends an owned command, and that marker gives
 		// the mode. Any other command is read once, and the reading
 		// answers every question about it.
-		if _, marker, owned := hooks.OwnedCommand(cmd, markers); owned {
+		binary := ""
+
+		if bin, marker, owned := hooks.OwnedCommand(cmd, markers); owned {
 			source.certain, source.managed = true, managed
 			source.mode = hooks.GateMarkerMode(marker)
-			asked = source.mode
+			source.otherForm = slices.Contains(spec.OtherForms, marker)
+			asked, binary = source.mode, bin
 		} else if reading := hooks.ReadHook(cmd, markers); reading.Use() != hooks.HookNotRun {
 			source.certain = reading.Use() == hooks.HookRuns
 			source.mode, asked = wrappedGateMode(spec, reading)
@@ -619,9 +667,34 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		}
 
 		// The matcher decides first. A definition that never fires gets the
-		// finding about its matcher, whatever its other fields say.
+		// finding about its matcher, whatever its other fields say. Setup
+		// keeps the matcher of its own command, so that command gets a
+		// warning with the matcher to set, and the source stays for the
+		// classification.
 		if len(source.tools) == 0 {
+			if binary != "" && managed && hookType == "command" && lifecycleSpec(spec) {
+				source.idle, source.matcher, source.mode = true, matcher, ""
+				*findings = append(*findings, idleMatcherFinding(source, spec))
+				sources = append(sources, source)
+
+				return
+			}
+
 			*findings = append(*findings, neverFiresFinding(path, cmd, spec.Event, matcher, spec))
+
+			return
+		}
+
+		// A binary that the client cannot start blocks nothing and delivers
+		// nothing. The client reads the failure as a non-blocking error. So
+		// the source keeps no tools and no mode, and only its finding counts.
+		if binary != "" && binary != rules.self && lifecycleSpec(spec) && hookBinaryMissing(binary) {
+			source.missing, source.missingAction = binary, missingBinaryAction(rules, path, managed)
+			gate := source.mode != ""
+			source.tools, source.mode = nil, ""
+
+			*findings = append(*findings, missingBinaryFinding(source, spec, gate))
+			sources = append(sources, source)
 
 			return
 		}
@@ -825,8 +898,14 @@ func missingTools(spec hooks.Spec, covered []string) []string {
 // the uncertain ones when only those exist and the detail says "may". A
 // definition that never runs because of an if filter makes the hook
 // partial, not absent, so the action names the field and no re-run of
-// setup claims to repair it.
-func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSource) {
+// setup claims to repair it. A definition whose binary the client cannot
+// start counts for nothing. When no other definition runs the hook, it
+// makes the hook partial with the repair of its binary. So does a managed
+// definition under a matcher that never fires, with the matcher to set.
+func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource) {
+	broken := slices.IndexFunc(all, hookSource.cannotStart)
+	idle := slices.IndexFunc(all, func(s hookSource) bool { return s.idle })
+	sources := runningSources(all)
 	certain := coveredTools(spec, sources, certainSource)
 	// Every other source has at least one of the spec's tools, so the
 	// first uncertain one also tells whether any uncertain coverage exists.
@@ -872,6 +951,15 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, sources []hookSo
 		entry.State = StatePartial
 		entry.Detail = fmt.Sprintf("%s never runs from %s: it has an if field on %s", name, sources[never].path, spec.Event)
 		entry.Action = fmt.Sprintf("remove the `if` field from the %s hook in %s", spec.Event, sources[never].path)
+	case broken >= 0:
+		entry.State = StatePartial
+		entry.Detail = fmt.Sprintf("%s cannot start from %s: %s is missing", name, all[broken].path, render.Sanitize(all[broken].missing))
+		entry.Action = all[broken].missingAction
+	case idle >= 0:
+		entry.State = StatePartial
+		entry.Detail = fmt.Sprintf("%s never runs from %s: its matcher %q does not fire for %s", name, all[idle].path,
+			render.Sanitize(all[idle].matcher), strings.Join(toolNames(spec.Tools()), ", "))
+		entry.Action = idleMatcherAction(all[idle], spec)
 	default:
 		entry.State = StateAbsent
 	}
@@ -1013,6 +1101,88 @@ func neverFiresFinding(path, command, event, matcher string, spec hooks.Spec) Fi
 		Path:  path,
 		Reason: fmt.Sprintf("has %#q under %s %q, which never runs for %s %s; it is not a handler of that hook",
 			describeCommand(command), event, render.Sanitize(matcher), spec.Event, strings.Join(toolNames(spec.Tools()), ", ")),
+	}
+}
+
+// lifecycleSpec reports whether the spec is one of the lifecycle hooks
+// of a client: the gate, the lessons hook, or the context reset. Only
+// these get the binary check. The lesson-check hooks keep the binary
+// state of the capability report.
+func lifecycleSpec(spec hooks.Spec) bool {
+	all := append(hooks.ClaudeSpecs(hooks.ModeWarn), hooks.CodexSpecs(hooks.ModeWarn)...)
+
+	return slices.ContainsFunc(all, func(s hooks.Spec) bool { return slices.Contains(s.Markers(), spec.Marker) })
+}
+
+// missingBinaryAction is the repair for an owned command whose binary
+// the client cannot start. Setup rewrites the commands of the managed
+// document to the running binary, so the action there is the setup
+// route of rules. Codex hashes the command into its trust record, so
+// the Codex action adds the new review. Setup never edits another
+// document, so the action there is a hand edit.
+func missingBinaryAction(rules hookRules, path string, managed bool) string {
+	if !managed {
+		return "fix the binary path in " + path + ", or remove that definition"
+	}
+
+	action := cmp.Or(rules.rewrite, "run `seamark init --client "+rules.clientID+"`") +
+		", which rewrites the hook command to the running seamark binary"
+
+	if rules.clientID == CodexID {
+		action += "; then open the project in Codex and review the hooks with /hooks, because the new command changes the trust hash"
+	}
+
+	return action
+}
+
+// missingBinaryFinding names an owned command whose binary the client
+// cannot start. The client reads that failure as a non-blocking error,
+// so the hook does nothing. A gate hook then blocks no verdict, whatever
+// its mode says. Setup and inspection share it, so both say it alike.
+func missingBinaryFinding(s hookSource, spec hooks.Spec, gate bool) Finding {
+	reason := fmt.Sprintf("has %#q, whose binary %s is missing, so the client cannot start the seamark %s hook",
+		describeCommand(s.command), render.Sanitize(s.missing), spec.Name)
+
+	if gate {
+		reason += ", and no verdict blocks"
+	}
+
+	return Finding{Level: FindingWarning, Path: s.path, Reason: reason, Action: s.missingAction}
+}
+
+// cannotStart reports whether the client cannot start the source.
+func (s hookSource) cannotStart() bool { return s.missing != "" }
+
+// inert reports whether the client never runs the source: it cannot
+// start, or it is a managed command under a matcher that never fires.
+func (s hookSource) inert() bool { return s.cannotStart() || s.idle }
+
+// runningSources drops each inert source. Such a source counts for no
+// tool, no mode, and no duplicate, so every consumer except
+// classifyHook reads this list.
+func runningSources(sources []hookSource) []hookSource {
+	return slices.DeleteFunc(slices.Clone(sources), hookSource.inert)
+}
+
+// idleMatcherAction sets the matcher of a managed command that never
+// fires. Setup keeps the matcher of an existing hook, because a narrow
+// matcher can be the user's choice, so a re-run of setup cannot repair
+// it. The action therefore never names a run of setup.
+func idleMatcherAction(s hookSource, spec hooks.Spec) string {
+	return fmt.Sprintf("set the matcher of that hook to %q in %s", spec.Matcher, s.path)
+}
+
+// idleMatcherFinding names a managed command under a matcher that fires
+// for none of the spec's tools. It is a warning, because setup does not
+// repair it and the hook does nothing. Setup and inspection share it, so
+// init and doctor say it alike.
+func idleMatcherFinding(s hookSource, spec hooks.Spec) Finding {
+	return Finding{
+		Level: FindingWarning,
+		Path:  s.path,
+		Reason: fmt.Sprintf("has %#q under %s %q, which never runs for %s; setup does not change the matcher of an existing hook",
+			describeCommand(s.command), spec.Event, render.Sanitize(s.matcher), strings.Join(toolNames(spec.Tools()), ", ")),
+		Action: idleMatcherAction(s, spec),
 	}
 }
 

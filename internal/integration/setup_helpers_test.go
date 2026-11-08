@@ -10,6 +10,15 @@ import (
 // This file holds the generic setup test helpers that the lesson, Claude,
 // and Codex setup tests share.
 
+// The hook fixtures of the tests name these second binaries beside
+// testBinary, which a test machine does not need to hold. The lifecycle
+// hook inspection reads them as hooks that can start.
+func init() {
+	for _, binary := range []string{"/home/me/bin/seamark", "/opt/bin/seamark"} {
+		TreatHookBinaryAsPresent(binary)
+	}
+}
+
 // applyHooks installs the lesson and gate hooks of one client, as init
 // does.
 func applyHooks(t *testing.T, root, clientID string) {

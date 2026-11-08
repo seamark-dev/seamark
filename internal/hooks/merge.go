@@ -29,6 +29,11 @@ type Spec struct {
 	// recognizes them like Marker and rewrites them to it, so a re-run
 	// migrates an existing hook and never adds a duplicate beside it.
 	Legacy []string
+	// OtherForms lists the markers of the same hook in the form of another
+	// client, which this client also runs. The readers recognize them like
+	// Marker. Merge does not rewrite them, because a document can hold
+	// several of them. ReduceOtherForms decides which one stays.
+	OtherForms []string
 	// Status is the message the client shows while the hook runs.
 	// Empty means no message: Merge then writes no statusMessage key.
 	Status string
@@ -62,8 +67,14 @@ func (s Spec) Tools() []string {
 }
 
 // Markers returns every spelling that identifies the hook: the current
-// marker first, then the legacy ones.
+// marker first, then the legacy ones, then the forms of another client.
 func (s Spec) Markers() []string {
+	return append(s.ownMarkers(), s.OtherForms...)
+}
+
+// ownMarkers returns the current marker and the legacy ones: the
+// spellings that Merge rewrites to the current marker.
+func (s Spec) ownMarkers() []string {
 	return append([]string{s.Marker}, s.Legacy...)
 }
 
@@ -81,7 +92,7 @@ func ClaudeSpecs(gateMode string) []Spec {
 			Name:  "gate",
 			Event: "PreToolUse", Matcher: "Bash",
 			Marker: GateMarker(gateMode), Legacy: []string{GateMarker(other)},
-			Status: "seamark gate: classifying command", Timeout: 15,
+			Status: "seamark gate: classifying command", Timeout: GateTimeout,
 			BackgroundKeys: ClaudeBackgroundKeys,
 		},
 		{
@@ -104,7 +115,10 @@ func ClaudeSpecs(gateMode string) []Spec {
 // finds it at index 0. Codex names its shell tool Bash in the event and
 // in the matcher; the opposite mode's marker is listed as legacy, so a
 // mode switch rewrites the existing gate hook in place. Codex reports
-// every file edit as the apply_patch tool. CodexMatcher holds the rule
+// every file edit as the apply_patch tool. Codex also runs a gate hook
+// in the Claude Code form, without the client selector, and the Claude
+// codec reads its input. Such a hook blocks, so the gate spec lists both
+// Claude Code markers as other forms. CodexMatcher holds the rule
 // that Codex uses to read a matcher, with the aliases Edit and Write of
 // apply_patch. The timeout is seconds, as in Claude Code.
 //
@@ -126,7 +140,8 @@ func CodexSpecs(gateMode string) []Spec {
 			Name:  "gate",
 			Event: "PreToolUse", Matcher: "Bash",
 			Marker: CodexGateMarker(gateMode), Legacy: []string{CodexGateMarker(other)},
-			Status: "seamark gate: classifying command", Timeout: 15,
+			OtherForms: []string{GateMarker(ModeWarn), GateMarker(ModeEnforce)},
+			Status:     "seamark gate: classifying command", Timeout: GateTimeout,
 			BackgroundKeys: CodexBackgroundKeys,
 		},
 		{
@@ -449,7 +464,9 @@ func CodexMatcher(matcher, tool string) bool {
 }
 
 // applyExisting rewrites seamark's own hook command to want when it is
-// present. OwnedBySeamark recognizes the command, so an unrelated
+// present. A command in another client's form is not rewritten here,
+// because ReduceOtherForms keeps at most one of them. OwnedBySeamark
+// recognizes the command, so an unrelated
 // command that only contains or ends with the marker text stays as it
 // is. A foreground spec also loses its background keys, under any
 // matcher, because such a hook cannot block. It reports whether such a
@@ -458,7 +475,7 @@ func CodexMatcher(matcher, tool string) bool {
 func applyExisting(eventHooks []any, spec Spec, want string) (
 	found bool, rewritten []Rewrite, removed []BackgroundRemoval,
 ) {
-	markers := spec.Markers()
+	markers := spec.ownMarkers()
 
 	ForEachCommand(eventHooks, func(_ string, h map[string]any, cmd string) {
 		if !OwnedBySeamark(cmd, markers) {

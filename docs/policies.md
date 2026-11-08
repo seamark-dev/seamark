@@ -61,9 +61,16 @@ an existing enforcing policy remains in force. Use
 `seamark init --client codex --gate-mode enforce` to opt in for a selected
 AI coding agent. This bakes
 `--enforce` into the hook: deny/require_approval verdicts exit 2 and
-block, and the gate **fails closed** — a malformed payload, a broken
-policy file, or an internal error blocks the command instead of silently
-allowing it. Re-running `init` without `--gate-mode` keeps whatever mode
+block, and the gate **fails closed** on its own failures — a malformed
+payload, a broken policy file, or an internal error exits 2 and blocks
+the command instead of silently allowing it. This needs a gate process
+that starts and returns. The client stops a gate hook that runs past its
+timeout (setup writes 15 seconds), and it cannot start a seamark binary
+that was moved or deleted. Then the gate returns no exit status 2 and
+cannot block the command, and the client's own rule decides. Claude Code
+2.1.319 lets the tool run after a hook timeout (recorded for the
+pre-write lesson hook). No Codex recording shows what Codex does in
+either case. Re-running `init` without `--gate-mode` keeps whatever mode
 each selected client has installed, and every run ends with a `gate`
 line stating the effective behavior; a selected client whose hook still
 runs without the flag is named under that line. A verdict blocks only by

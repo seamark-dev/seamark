@@ -1,0 +1,277 @@
+package integration
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/hooks"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
+)
+
+// absentBinary is a hook binary path that no test machine holds.
+const absentBinary = "/nonexistent/seamark"
+
+// findingsAt keeps the findings of one path whose reason holds text.
+func findingsAt(findings []Finding, path, text string) []Finding {
+	return slices.DeleteFunc(slices.Clone(findings), func(f Finding) bool {
+		return f.Path != path || !strings.Contains(f.Reason, text)
+	})
+}
+
+// entryOf returns the inspection entry of one capability.
+func entryOf(t *testing.T, insp Inspection, capability Capability) CapabilityInspection {
+	t.Helper()
+
+	entry, ok := insp.Entry(capability)
+	require.True(t, ok, "no %s entry", capability)
+
+	return entry
+}
+
+func TestHookBinaryMissingFollowsTheRuleOfIdentifyBinary(t *testing.T) {
+	dir := t.TempDir()
+
+	good := filepath.Join(dir, "good", "seamark")
+	require.NoError(t, os.MkdirAll(filepath.Dir(good), 0o755))
+	require.NoError(t, os.WriteFile(good, []byte("#!/bin/sh\n"), 0o755))
+
+	plain := filepath.Join(dir, "plain", "seamark")
+	require.NoError(t, os.MkdirAll(filepath.Dir(plain), 0o755))
+	require.NoError(t, os.WriteFile(plain, []byte("text"), 0o644))
+
+	folder := filepath.Join(dir, "folder", "seamark")
+	require.NoError(t, os.MkdirAll(folder, 0o755))
+
+	cases := []struct {
+		name, binary, state string
+	}{
+		{"an absent absolute path", absentBinary, lessoncheck.BinaryMissing},
+		{"a directory", folder, lessoncheck.BinaryMissing},
+		{"a relative command", "seamark", lessoncheck.BinaryUnknown},
+		{"a good file", good, ""},
+	}
+
+	// Windows has no execute bit, so a plain file can start there.
+	if runtime.GOOS != "windows" {
+		cases = append(cases, struct{ name, binary, state string }{"a file without an execute bit", plain, lessoncheck.BinaryMissing})
+	}
+
+	// A folder without permissions makes the stat fail with another error
+	// than absence. The file can still exist, so the state is unknown. The
+	// superuser reads every folder, so the case needs another user.
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		locked := filepath.Join(dir, "locked", "seamark")
+		require.NoError(t, os.MkdirAll(filepath.Dir(locked), 0o755))
+		require.NoError(t, os.WriteFile(locked, []byte("#!/bin/sh\n"), 0o755))
+		require.NoError(t, os.Chmod(filepath.Dir(locked), 0))
+		t.Cleanup(func() { _ = os.Chmod(filepath.Dir(locked), 0o755) })
+
+		cases = append(cases, struct{ name, binary, state string }{"a file in a locked folder", locked, lessoncheck.BinaryUnknown})
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, state := statHookBinary(tc.binary)
+			assert.Equal(t, tc.state, state)
+			assert.Equal(t, tc.state == lessoncheck.BinaryMissing, hookBinaryMissing(tc.binary))
+
+			// identifyBinary reads the same state before it reads a version.
+			if tc.state != "" {
+				assert.Equal(t, tc.state, identifyBinary(tc.binary, BinaryIdentity{}).state)
+			}
+		})
+	}
+}
+
+func TestClaudeHookWithAMissingBinaryWarnsAndCountsForNothing(t *testing.T) {
+	root := t.TempDir()
+	writeRel(t, root, ".claude/settings.json", `{"hooks":{
+  "PreToolUse":[`+hookEntry("Bash", absentBinary+" gate --enforce --hook")+`,`+
+		hookEntry("Edit|Write|MultiEdit", absentBinary+" lessons --hook")+`],
+  "PostCompact":[{"hooks":[{"type":"command","command":"`+absentBinary+` lessons --hook-reset"}]}]}}`)
+
+	insp := claudeSetup{}.Inspect(root)
+
+	gate := findingsAt(insp.Findings, ".claude/settings.json", "cannot start the seamark gate hook")
+	require.Len(t, gate, 1)
+	assert.Equal(t, FindingWarning, gate[0].Level)
+	assert.Contains(t, gate[0].Reason, "has `"+absentBinary+" gate --enforce --hook`, whose binary "+absentBinary+" is missing")
+	assert.Contains(t, gate[0].Reason, "no verdict blocks")
+	assert.Equal(t, "run `seamark init --client claude`, which rewrites the hook command to the running seamark binary",
+		gate[0].Action)
+
+	lessons := findingsAt(insp.Findings, ".claude/settings.json", "cannot start the seamark lessons hook")
+	require.Len(t, lessons, 1)
+	assert.NotContains(t, lessons[0].Reason, "verdict", "only the gate blocks a verdict")
+	assert.Len(t, findingsAt(insp.Findings, ".claude/settings.json", "cannot start the seamark context reset hook"), 1)
+
+	// The definitions count for no tool and no mode, so no gate mode is
+	// claimed, and each hook is partial with the repair of its binary.
+	assert.Empty(t, insp.GateMode)
+	assert.Equal(t, hooks.ModeEnforce, insp.ManagedGateMode, "the marker mode that setup keeps")
+
+	for _, capability := range []Capability{CapabilityCommands, CapabilityEdits, CapabilityResets} {
+		entry := entryOf(t, insp, capability)
+		assert.Equal(t, StatePartial, entry.State, capability)
+		assert.Contains(t, entry.Detail, "cannot start from .claude/settings.json: "+absentBinary+" is missing", capability)
+		assert.Contains(t, entry.Action, "run `seamark init --client claude`", capability)
+	}
+
+	assert.Contains(t, insp.DescribeHooks(), "gate hook cannot start from .claude/settings.json")
+}
+
+func TestClaudeMissingBinaryActionFollowsTheRouteThatRuns(t *testing.T) {
+	// A .mcp.json that the explicit setup cannot read stops that run, so
+	// the repair names the plain form.
+	root := t.TempDir()
+	writeRel(t, root, ".claude/settings.json", bashHook(absentBinary+" gate --hook"))
+	writeRel(t, root, ".mcp.json", `{not json`)
+
+	insp := claudeSetup{}.Inspect(root)
+
+	gate := findingsAt(insp.Findings, ".claude/settings.json", "cannot start the seamark gate hook")
+	require.Len(t, gate, 1)
+	assert.True(t, strings.HasPrefix(gate[0].Action, "run `seamark init` (the plain form never reads .mcp.json"), gate[0].Action)
+	assert.Equal(t, gate[0].Action, entryOf(t, insp, CapabilityCommands).Action)
+}
+
+func TestCodexMissingBinaryActionFollowsTheRouteThatRuns(t *testing.T) {
+	// Codex setup stops at a config.toml that it cannot read, so the
+	// repair fixes that file first.
+	root := t.TempDir()
+	writeRel(t, root, codexHooksFile, bashHook(absentBinary+" gate --hook --client codex"))
+	writeRel(t, root, ".codex/config.toml", "[mcp_servers\n")
+
+	insp := codexSetup{}.Inspect(root)
+
+	gate := findingsAt(insp.Findings, codexHooksFile, "cannot start the seamark gate hook")
+	require.Len(t, gate, 1)
+	assert.True(t, strings.HasPrefix(gate[0].Action,
+		"fix the file, then re-run `seamark init --client codex`, which rewrites the hook command"), gate[0].Action)
+	assert.Equal(t, gate[0].Action, entryOf(t, insp, CapabilityCommands).Action)
+}
+
+func TestCodexHookWithAMissingBinaryWarnsAndNamesTheReview(t *testing.T) {
+	root := t.TempDir()
+	writeRel(t, root, ".codex/hooks.json", `{"hooks":{"PreToolUse":[`+
+		hookEntry("Bash", absentBinary+" gate --hook --client codex")+`,`+
+		hookEntry("apply_patch", absentBinary+" lessons --hook --client codex")+`]}}`)
+
+	insp := codexSetup{}.Inspect(root)
+
+	gate := findingsAt(insp.Findings, ".codex/hooks.json", "cannot start the seamark gate hook")
+	require.Len(t, gate, 1)
+	assert.Equal(t, FindingWarning, gate[0].Level)
+	assert.Contains(t, gate[0].Action, "run `seamark init --client codex`, which rewrites the hook command")
+	assert.Contains(t, gate[0].Action, "review the hooks with /hooks, because the new command changes the trust hash")
+	assert.Len(t, findingsAt(insp.Findings, ".codex/hooks.json", "cannot start the seamark lessons hook"), 1)
+
+	assert.Empty(t, insp.GateMode)
+
+	for _, capability := range []Capability{CapabilityCommands, CapabilityEdits} {
+		entry := entryOf(t, insp, capability)
+		assert.Equal(t, StatePartial, entry.State, capability)
+		assert.Contains(t, entry.Detail, "cannot start from .codex/hooks.json", capability)
+		assert.Equal(t, gate[0].Action, entry.Action, capability)
+	}
+}
+
+func TestClaudeLocalHookWithAMissingBinaryGetsAHandEdit(t *testing.T) {
+	root := t.TempDir()
+	applyHooks(t, root, ClaudeID)
+	writeRel(t, root, claudeLocalSettings, bashHook(absentBinary+" gate --enforce --hook"))
+
+	insp := claudeSetup{}.Inspect(root)
+
+	local := findingsAt(insp.Findings, claudeLocalSettings, "cannot start the seamark gate hook")
+	require.Len(t, local, 1)
+	assert.Equal(t, "fix the binary path in .claude/settings.local.json, or remove that definition", local[0].Action)
+
+	// The local definition counts for no mode and runs beside nothing. It
+	// gets no information finding about a definition that runs, either.
+	assert.Equal(t, hooks.ModeWarn, insp.GateMode)
+	assert.Empty(t, findingsAt(insp.Findings, claudeLocalSettings, "runs twice"))
+	assert.Empty(t, findingsAt(insp.Findings, claudeLocalSettings, "setup does not manage that definition"))
+	assert.Equal(t, StateCurrent, entryOf(t, insp, CapabilityCommands).State)
+
+	plan := planClaude(t, root, ClientSetup{Hooks: true})
+	assert.Len(t, findingsAt(plan.Findings, claudeLocalSettings, "cannot start the seamark gate hook"), 1)
+	assert.Empty(t, findingsAt(plan.Findings, claudeLocalSettings, "runs twice"))
+
+	for _, hook := range plan.GateHooks {
+		assert.NotEqual(t, claudeLocalSettings, hook.Path, "a hook that cannot start is no gate hook")
+	}
+}
+
+func TestClaudeEqualHooksWithAMissingBinaryAreNoCopy(t *testing.T) {
+	// A definition that cannot start runs for no tool. So an equal local
+	// definition is no copy that Claude Code runs once, and only the two
+	// binary warnings print.
+	root := t.TempDir()
+	writeRel(t, root, ".claude/settings.json", bashHook(absentBinary+" gate --hook"))
+	writeRel(t, root, claudeLocalSettings, bashHook(absentBinary+" gate --hook"))
+
+	insp := claudeSetup{}.Inspect(root)
+
+	assert.Len(t, findingsWith(insp.Findings, "cannot start the seamark gate hook"), 2)
+	assert.Empty(t, findingsWith(insp.Findings, "Claude Code runs"))
+}
+
+func TestClaudeHookFollowsAWorkingDefinitionBesideABrokenOne(t *testing.T) {
+	root := t.TempDir()
+	writeRel(t, root, ".claude/settings.json", bashHook(absentBinary+" gate --hook"))
+	writeRel(t, root, claudeLocalSettings, bashHook(testBinary+" gate --enforce --hook"))
+
+	insp := claudeSetup{}.Inspect(root)
+
+	commands := entryOf(t, insp, CapabilityCommands)
+	assert.Equal(t, StateCurrent, commands.State)
+	assert.Contains(t, commands.Detail, "runs from .claude/settings.local.json (not managed by setup)")
+	assert.Equal(t, hooks.ModeEnforce, insp.GateMode)
+	assert.Len(t, findingsAt(insp.Findings, ".claude/settings.json", "cannot start the seamark gate hook"), 1)
+}
+
+func TestCodexSetupRewritesAMissingBinaryWithoutAWarning(t *testing.T) {
+	root := t.TempDir()
+	writeRel(t, root, ".codex/hooks.json", bashHook(absentBinary+" gate --hook --client codex"))
+
+	plan := planCodex(t, root, ClientSetup{Hooks: true})
+
+	assert.Empty(t, findingsWith(plan.Findings, "cannot start"), "the merge repairs the managed command")
+	require.Len(t, plan.Writes, 1)
+	assert.Contains(t, string(plan.Writes[0].After), testBinary+" gate --hook --client codex")
+	assert.NotContains(t, string(plan.Writes[0].After), absentBinary)
+	assert.Contains(t, plan.GateHooks, GateHook{Path: codexHooksFile, Mode: hooks.ModeWarn, Managed: true})
+}
+
+func TestRelativeHookCommandGetsNoBinaryCheck(t *testing.T) {
+	root := t.TempDir()
+	writeRel(t, root, ".claude/settings.json", bashHook("seamark gate --hook"))
+
+	insp := claudeSetup{}.Inspect(root)
+
+	assert.Empty(t, findingsWith(insp.Findings, "cannot start"))
+	assert.Equal(t, hooks.ModeWarn, insp.GateMode)
+}
+
+func TestSetupNeverChecksTheBinaryItRunsAs(t *testing.T) {
+	// The plan writes its own binary into the managed commands, so that
+	// binary never gets the warning, whatever the disk holds.
+	root := t.TempDir()
+
+	claude, err := claudeSetup{}.Plan(root, absentBinary, ClientSetup{ClientID: ClaudeID, Hooks: true, CheckHookSources: true})
+	require.NoError(t, err)
+	assert.Empty(t, findingsWith(claude.Findings, "cannot start"))
+	assert.Contains(t, claude.GateHooks, GateHook{Path: ".claude/settings.json", Mode: hooks.ModeWarn, Managed: true})
+
+	codex, err := codexSetup{}.Plan(root, absentBinary, ClientSetup{ClientID: CodexID, Hooks: true})
+	require.NoError(t, err)
+	assert.Empty(t, findingsWith(codex.Findings, "cannot start"))
+}

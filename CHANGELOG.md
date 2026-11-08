@@ -67,6 +67,33 @@ model-boundary delivery.
   also as Edit and Write, as Codex does. A gate under ash no longer
   reads as running for Bash, and an inline lesson hook under Edit is no
   longer installed twice.
+- **Hook binaries that do not exist.** Setup, doctor, and status warn
+  about a seamark hook whose binary path names no executable file, and
+  no longer report such a hook as installed or count its gate mode. The
+  warning names the setup run that rewrites the command, or the hand
+  edit for `.claude/settings.local.json`.
+- **Codex gate in the Claude Code form.** A `gate --hook` or
+  `gate --enforce --hook` handler without `--client codex` in
+  `.codex/hooks.json` runs and blocks in Codex. Doctor and status now
+  count it in the gate mode and name it, and `init --client codex` keeps
+  one gate handler: it removes the extra handlers or rewrites the only
+  one, keeps enforce unless `--gate-mode` asks otherwise, and asks for a
+  new review in /hooks.
+- **Hooks under a matcher that never fires.** For a seamark hook in the
+  managed file under such a matcher, doctor and init for both clients
+  now warn and name the matcher to set in that file, in place of a
+  `seamark init` run that changes nothing. Setup still keeps the matcher.
+  For a Codex gate handler in the Claude Code form that
+  `init --client codex` removes, doctor names that run instead.
+- **Gate failure wording.** `init` and the docs no longer say that
+  every gate failure fails closed under enforce. The gate's own failures
+  still exit 2 and block. A hook that the client stops at its timeout,
+  or a seamark binary that cannot start, returns no exit 2, so the gate
+  cannot block that command.
+- **Unreadable local settings.** A `.claude/settings.local.json` that
+  cannot be read no longer makes doctor and status warn that installed
+  seamark hooks never run under `disableAllHooks: true` when no seamark
+  hook is installed. The unread-file warning stays.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.

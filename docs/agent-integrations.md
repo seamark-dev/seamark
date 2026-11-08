@@ -74,6 +74,21 @@ appears only when Seamark has a relevant lesson for the edited files.
 For Claude Code, check that no project settings file sets
 `disableAllHooks: true`.
 
+Doctor warns when a seamark hook command names a binary that does not
+exist, or that is not an executable file. The client cannot start such a
+hook, so it blocks nothing and delivers nothing. A committed hook file
+with an absolute path from another machine is one example. For the file
+that setup manages, the fix is a setup run, which rewrites the command
+to the running binary; Codex then asks for a new review in `/hooks`.
+
+Setup keeps the matcher of an existing hook, because a narrow matcher can
+be your choice. When the matcher of a seamark hook in the file that setup
+manages never fires for the hook's tools, init and doctor warn and name
+the matcher to set in that file. A setup run does not change it. A Codex
+gate handler in the Claude Code form is the exception when `seamark init
+--client codex` removes it, because another gate handler stays: doctor
+names that setup run instead.
+
 ## What each agent supports
 
 The table distinguishes installed features from behavior verified with a
@@ -628,7 +643,16 @@ The rules that hold every adapter to the same behavior:
   must not read any other document; a test records the documents it
   reads. `Plan` rewrites every owned gate command, also one under a
   matcher that never fires, and the narration reports each `--enforce`
-  that the rewrite removes.
+  that the rewrite removes. Codex also runs a gate handler in the
+  Claude Code form (`gate --hook` or `gate --enforce --hook`, without
+  `--client codex`), and that handler blocks. So the Codex readers count
+  it as a managed gate in its own mode, and doctor names it. The Codex
+  `Plan` keeps at most one such handler: none when a Codex-form handler
+  runs for Bash, else the first one that runs, rewritten in place to the
+  managed command with its matcher and other keys. It removes the
+  others, and an entry left without handlers. Without `--gate-mode`,
+  enforce in either form wins, and each removal or rewrite names the
+  `/hooks` review that the new trust hash needs.
 - **A finding names its document once.** `Finding.Path` is the document
   that holds what the finding describes, and every consumer prints
   `<Path>: <Reason>`. The reason never starts with a path. It names a

@@ -666,7 +666,37 @@ func TestInitClientGateSummaryIncludesALocalEnforcingHook(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(starterPolicyFor(gateModeEnforce)), 0o644))
 
 	out = initClients(t, root, false, false, false, gateModeEnforce, "claude")
-	assert.Contains(t, out, "gate    enforce — deny/require_approval verdicts exit 2 and block; gate failures fail closed")
+	assert.Contains(t, out, "gate    enforce — deny/require_approval verdicts exit 2 and block; so do the gate's own failures.\n")
+}
+
+// The enforce gate line names the two cases that return no exit 2. A
+// client that stops the hook at its timeout, or a binary that cannot
+// start, never runs the gate code, so the gate cannot block.
+func TestInitGateLineNamesWhatEnforceCannotBlock(t *testing.T) {
+	want := "  gate    enforce — deny/require_approval verdicts exit 2 and block; so do the gate's own failures.\n" +
+		"          The gate cannot block a command when the client stops the hook at its timeout (setup\n" +
+		"          writes 15 s) or cannot start the seamark binary\n"
+
+	for _, client := range []string{"claude", "codex"} {
+		out := initClients(t, t.TempDir(), false, false, false, gateModeEnforce, client)
+		assert.Contains(t, out, want, client)
+		assert.NotContains(t, out, "gate failures fail closed", client)
+	}
+}
+
+// The init help states the same limit as the gate line. The test pins
+// the whole paragraph, because a short substring lets the help claim
+// what the client does after a timeout, and no recording shows that.
+func TestInitHelpNamesWhatEnforceCannotBlock(t *testing.T) {
+	want := "That bakes --enforce into the hook: deny/require_approval verdicts exit 2\n" +
+		"(blocking the agent's command), and so do the gate's own failures. The\n" +
+		"gate cannot block a command when the client stops the hook at its\n" +
+		"timeout (setup writes 15 seconds) or cannot start the seamark binary.\n"
+
+	long := newInitCmd(&options{}).Long
+
+	assert.Contains(t, long, want)
+	assert.NotContains(t, long, "fail closed")
 }
 
 func TestInitClientGateSummaryIgnoresALocalWarnHook(t *testing.T) {

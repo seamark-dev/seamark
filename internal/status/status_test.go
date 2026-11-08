@@ -20,6 +20,12 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
+// The hook fixtures of this file name /bin/seamark, which a test machine
+// does not need to hold. The inspection reads it as a hook that can start.
+func init() {
+	integration.TreatHookBinaryAsPresent("/bin/seamark")
+}
+
 func seededStore(t *testing.T) (st *store.Store, root string) {
 	t.Helper()
 

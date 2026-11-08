@@ -134,6 +134,63 @@ func releaseCore(version string) ([3]int, bool) {
 	return core, true
 }
 
+// statHookBinary decides whether a hook binary can start, without
+// running it. It returns the file information of a binary that can
+// start, and an empty state. Otherwise it returns BinaryUnknown or
+// BinaryMissing. A relative path depends on the environment of the
+// client, so it is unknown. Absence is missing. Another stat error is
+// unknown, because an unreadable file is not an absent one. A file that
+// is not regular, or that has no execute bit, is missing, because the
+// client cannot start it. identifyBinary and the lifecycle hook
+// inspection share this rule, so they never disagree about one path.
+func statHookBinary(binary string) (info fs.FileInfo, state string) {
+	if !filepath.IsAbs(binary) {
+		return nil, lessoncheck.BinaryUnknown
+	}
+
+	info, err := os.Stat(binary)
+
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, lessoncheck.BinaryMissing
+	case err != nil:
+		return nil, lessoncheck.BinaryUnknown
+	case !info.Mode().IsRegular(), runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0:
+		return nil, lessoncheck.BinaryMissing
+	}
+
+	return info, ""
+}
+
+// hookBinaryMissing reports whether the client cannot start the binary
+// of a lifecycle hook, by the rule of statHookBinary. An unknown state is
+// not missing, so a relative command never gets a warning. A fixture
+// binary of the tests counts as present.
+func hookBinaryMissing(binary string) bool {
+	if fixtureHookBinaries[binary] {
+		return false
+	}
+
+	_, state := statHookBinary(binary)
+
+	return state == lessoncheck.BinaryMissing
+}
+
+// fixtureHookBinaries holds the hook binary paths that the lifecycle
+// hook inspection treats as present. Only test support fills it, before
+// any test runs, so no lock guards it.
+var fixtureHookBinaries = map[string]bool{}
+
+// TreatHookBinaryAsPresent makes the lifecycle hook inspection treat one
+// binary path as present. The shared test fixtures name a path such as
+// /usr/local/bin/seamark, which a test machine does not need to hold.
+// Without this call, every fixture hook reads as one that cannot start.
+// The shipped binary never calls it. The lesson-check capability report
+// ignores it, because its tests expect the real state of that path.
+func TreatHookBinaryAsPresent(binary string) {
+	fixtureHookBinaries[binary] = true
+}
+
 // binaryReading is the static identification of one hook binary.
 type binaryReading struct {
 	state   string
@@ -149,19 +206,9 @@ type binaryReading struct {
 // so it reads as unknown. A stat error other than absence is unknown
 // too, never missing: an unreadable file is not an absent one.
 func identifyBinary(binary string, self BinaryIdentity) binaryReading {
-	if !filepath.IsAbs(binary) {
-		return binaryReading{state: lessoncheck.BinaryUnknown}
-	}
-
-	info, err := os.Stat(binary)
-
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return binaryReading{state: lessoncheck.BinaryMissing}
-	case err != nil:
-		return binaryReading{state: lessoncheck.BinaryUnknown}
-	case !info.Mode().IsRegular(), runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0:
-		return binaryReading{state: lessoncheck.BinaryMissing}
+	info, state := statHookBinary(binary)
+	if state != "" {
+		return binaryReading{state: state}
 	}
 
 	// The same file needs no read of its content.
