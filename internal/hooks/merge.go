@@ -92,7 +92,7 @@ func ClaudeSpecs(gateMode string) []Spec {
 			Name:  "gate",
 			Event: "PreToolUse", Matcher: "Bash",
 			Marker: GateMarker(gateMode), Legacy: []string{GateMarker(other)},
-			Status: "seamark gate: classifying command", Timeout: 15,
+			Status: "seamark gate: classifying command", Timeout: GateTimeout,
 			BackgroundKeys: ClaudeBackgroundKeys,
 		},
 		{
@@ -141,7 +141,7 @@ func CodexSpecs(gateMode string) []Spec {
 			Event: "PreToolUse", Matcher: "Bash",
 			Marker: CodexGateMarker(gateMode), Legacy: []string{CodexGateMarker(other)},
 			OtherForms: []string{GateMarker(ModeWarn), GateMarker(ModeEnforce)},
-			Status:     "seamark gate: classifying command", Timeout: 15,
+			Status:     "seamark gate: classifying command", Timeout: GateTimeout,
 			BackgroundKeys: CodexBackgroundKeys,
 		},
 		{

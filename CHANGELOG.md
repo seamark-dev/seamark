@@ -85,6 +85,11 @@ model-boundary delivery.
   `seamark init` run that changes nothing. Setup still keeps the matcher.
   For a Codex gate handler in the Claude Code form that
   `init --client codex` removes, doctor names that run instead.
+- **Gate failure wording.** `init` and the docs no longer say that
+  every gate failure fails closed under enforce. The gate's own failures
+  still exit 2 and block. A hook that the client stops at its timeout,
+  or a seamark binary that cannot start, returns no exit 2, so the gate
+  cannot block that command.
 - **Unreadable local settings.** A `.claude/settings.local.json` that
   cannot be read no longer makes doctor and status warn that installed
   seamark hooks never run under `disableAllHooks: true` when no seamark

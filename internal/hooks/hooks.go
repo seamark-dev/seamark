@@ -18,17 +18,25 @@ import (
 )
 
 // Gate hook modes. Warn installs a hook that follows .seamark/policy.yaml
-// and never blocks by itself; enforce bakes --enforce into the hook, so
-// blocking verdicts exit 2 and the gate's own failures fail closed.
+// and never blocks by itself. Enforce bakes --enforce into the hook, so
+// blocking verdicts exit 2. The gate's own failures also exit 2, but only
+// while the gate process runs. A hook that the client stops at its
+// timeout, or a binary that cannot start, returns no exit 2.
 const (
 	ModeWarn    = "warn"
 	ModeEnforce = "enforce"
 )
 
+// GateTimeout is the gate hook timeout in seconds that setup writes for
+// every client. The init text names this number, so it reads it from
+// here and cannot drift from the hook specs.
+const GateTimeout = 15
+
 // GateMarker returns the gate hook's argument tail for a mode. Warn omits
-// --enforce so .seamark/policy.yaml stays the single source of truth for
-// blocking; enforce bakes the flag in, which also makes the gate's own
-// failures block (fail closed).
+// --enforce, so .seamark/policy.yaml stays the single source of truth for
+// blocking. Enforce bakes the flag in, so the gate's own failures also
+// exit 2 and block. That holds only while the gate process runs: a hook
+// that the client stops at its timeout returns no exit 2.
 func GateMarker(mode string) string {
 	if mode == ModeEnforce {
 		return "gate --enforce --hook"

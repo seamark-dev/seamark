@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -67,7 +68,9 @@ Enforcement is an explicit opt-in:
   seamark init --gate-mode enforce
 
 That bakes --enforce into the hook: deny/require_approval verdicts exit 2
-(blocking the agent's command) and the gate's own failures fail closed.
+(blocking the agent's command), and so do the gate's own failures. The
+gate cannot block a command when the client stops the hook at its
+timeout (setup writes ` + strconv.Itoa(hooks.GateTimeout) + ` seconds) or cannot start the seamark binary.
 A fresh init also scaffolds .seamark/policy.yaml with the matching mode;
 an existing policy file is never modified.
 
@@ -623,7 +626,12 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		fmt.Fprintf(w, "  gate    warn — .seamark/policy.yaml failed to load (%v);\n"+
 			"          the hook reports the error and fails open\n", policyErr)
 	case managedEnforce:
-		fmt.Fprintf(w, "  gate    enforce — deny/require_approval verdicts exit 2 and block; gate failures fail closed\n")
+		// The gate's own failures exit 2 only while the gate process runs.
+		// The line names the two cases where it never returns, because
+		// then the client's own rule decides and the gate cannot block.
+		fmt.Fprintf(w, "  gate    enforce — deny/require_approval verdicts exit 2 and block; so do the gate's own failures.\n"+
+			"          The gate cannot block a command when the client stops the hook at its timeout (setup\n"+
+			"          writes %d s) or cannot start the seamark binary\n", hooks.GateTimeout)
 
 		if policyMode != gateModeEnforce {
 			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml says mode: %s — it still governs plain\n"+

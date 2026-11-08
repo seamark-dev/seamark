@@ -471,3 +471,19 @@ func TestMergeKeepsAWrappedCommandAsItIs(t *testing.T) {
 	assert.Contains(t, commandsOf(claude, "PreToolUse"), gate)
 	assert.Equal(t, ModeWarn, InstalledGateMode(claude), "the managed hook is the one that was added")
 }
+
+// The init text names GateTimeout as the gate hook timeout, so the gate
+// spec of each client must write that number.
+func TestGateSpecsWriteGateTimeout(t *testing.T) {
+	for _, mode := range []string{ModeWarn, ModeEnforce} {
+		claude := ClaudeSpecs(mode)[0]
+		require.Equal(t, "gate", claude.Name)
+		assert.Equal(t, GateTimeout, claude.Timeout, mode)
+
+		codex := CodexSpecs(mode)[0]
+		require.Equal(t, "gate", codex.Name)
+		assert.Equal(t, GateTimeout, codex.Timeout, mode)
+	}
+
+	assert.Equal(t, 15, GateTimeout, "the docs name 15 seconds")
+}
