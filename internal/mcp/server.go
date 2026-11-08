@@ -537,6 +537,7 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 		}
 
 		policyInput := report.PolicyInputStdinDiff
+		source := gate.SourceDiffArgument
 
 		if p.Diff == "" {
 			out, err := exec.Command("git", "-C", s.root, "diff", "HEAD").Output()
@@ -546,6 +547,7 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 
 			p.Diff = string(out)
 			policyInput = report.PolicyInputGitDiffHead
+			source = gate.SourceGitDiffHead
 		}
 
 		// The lesson checks need the policy decision after withCurrentStore
@@ -558,7 +560,7 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 				return "", err
 			}
 
-			decision, err = gate.EvalDiff(policy, st, p.Diff)
+			decision, err = gate.EvalDiff(policy, st, p.Diff, source)
 			if err != nil {
 				return "", err
 			}

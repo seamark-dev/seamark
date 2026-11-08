@@ -134,6 +134,10 @@ model-boundary delivery.
   list effects in sorted order on every run, in the text, the JSON, the
   audit entry, and the policy input. `diff.files` is sorted too, so a
   rule that indexes either list gives the same verdict on every run.
+- **A diff with no changed file.** `check` and MCP `check` no longer
+  give a bare allow for it. Empty `git diff HEAD` output gets a note that
+  untracked files are not part of it. Input that names no changed file
+  gets a note in warn mode and blocks with exit 2 under enforcement.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

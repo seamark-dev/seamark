@@ -123,6 +123,16 @@ slow diff to a file first
 (`gh pr diff 42 > pr.diff; seamark check --enforce < pr.diff`), or run
 `seamark check </dev/null` to check `git diff HEAD` on purpose.
 
+A diff with no changed file never reads as a clean allow. Empty output
+of `git diff HEAD` allows with the note `no changed files in git diff
+HEAD; untracked files are not part of it`, in every mode, because a
+clean tree is a normal state. Input that has bytes but names no changed
+file (no `diff --git`, `---`, `+++` or rename header with a path) is
+not a diff that `check` can read. In warn mode the verdict carries a
+note that names the source (`stdin`, the MCP `diff` argument) and says
+that it covers no change. Under enforcement it blocks with exit 2 and
+writes no audit entry; the MCP `check` tool returns an error result.
+
 Changed lines map to symbols; symbols carry transitively-propagated
 effect tags; the union is what the change can _ultimately_ reach — even
 when the edited function never touches a sink itself. Policy rules over

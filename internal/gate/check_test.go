@@ -90,7 +90,7 @@ func TestCheckDiffBlastRadius(t *testing.T) {
 	p, err := LoadPolicy(root)
 	require.NoError(t, err)
 
-	d, err := EvalDiff(p, st, mainDiff)
+	d, err := EvalDiff(p, st, mainDiff, SourceStdin)
 	require.NoError(t, err)
 
 	assert.Contains(t, d.Effects, "infra:mutate",
@@ -116,7 +116,7 @@ func TestCheckDiffOutsideBlastRadius(t *testing.T) {
 +// harmless
 `
 
-	d, err := EvalDiff(p, st, quiet)
+	d, err := EvalDiff(p, st, quiet, SourceStdin)
 	require.NoError(t, err)
 	assert.Empty(t, d.Effects)
 	assert.Equal(t, VerdictAllow, d.Verdict)
@@ -143,7 +143,7 @@ func TestEvalDiffRegistersHunklessRecords(t *testing.T) {
 		"empty-file": {
 			"diff --git a/empty.go b/empty.go\nnew file mode 100644\nindex 0000000..e69de29\n", "empty.go"},
 	} {
-		d, err := EvalDiff(p, st, tc.diff)
+		d, err := EvalDiff(p, st, tc.diff, SourceStdin)
 		require.NoError(t, err, name)
 		require.NotEmpty(t, d.Notes, "%s: a hunkless change must carry uncertainty", name)
 		assert.Contains(t, d.Notes[0], tc.path, "%s: the affected path must be named", name)
@@ -210,7 +210,7 @@ require_approval:
 
 	// Map order in Go changes between runs, so one run can pass by chance.
 	for run := range 20 {
-		d, err := EvalDiff(p, st, diff)
+		d, err := EvalDiff(p, st, diff, SourceStdin)
 		require.NoError(t, err)
 
 		assert.Equal(t, []string{"fs:write", "infra:mutate", "net:egress", "proc:exec"}, d.Effects, "run %d", run)
@@ -237,9 +237,66 @@ require_approval:
 		"diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-x\n+y\n"
 
 	for run := range 20 {
-		d, err := EvalDiff(p, st, diff)
+		d, err := EvalDiff(p, st, diff, SourceStdin)
 		require.NoError(t, err)
 
 		assert.Equal(t, VerdictApproval, d.Verdict, "run %d: diff.files is sorted", run)
+	}
+}
+
+func TestEvalDiffNotesAnEmptyGitDiff(t *testing.T) {
+	st, root := checkFixture(t)
+
+	// Empty output of git diff HEAD is a clean tree or a tree with only
+	// untracked files. Both modes allow it with a note, because a clean
+	// tree is a normal state.
+	for _, mode := range []string{"warn", "enforce"} {
+		p, err := LoadPolicy(root)
+		require.NoError(t, err)
+
+		p.Mode = mode
+
+		d, err := EvalDiff(p, st, "", SourceGitDiffHead)
+		require.NoError(t, err, mode)
+
+		assert.Equal(t, VerdictAllow, d.Verdict, mode)
+		assert.False(t, d.Blocking(), mode)
+		assert.Equal(t, []string{"no changed files in git diff HEAD; untracked files are not part of it"}, d.Notes, mode)
+	}
+}
+
+func TestEvalDiffNoFileInput(t *testing.T) {
+	st, root := checkFixture(t)
+
+	// Each input has bytes but registers no path. The last one is a
+	// --no-prefix binary record: its header has no b/ marker, and it has
+	// no ---, +++ or rename line.
+	inputs := map[string]string{
+		"text":            "not a diff\n",
+		"blank line":      "\n",
+		"headerless hunk": "@@ -1 +1 @@\n-a\n+b\n",
+		"no-prefix binary": "diff --git logo.png logo.png\n" +
+			"Binary files logo.png and logo.png differ\n",
+	}
+
+	for name, input := range inputs {
+		p, err := LoadPolicy(root)
+		require.NoError(t, err)
+
+		d, err := EvalDiff(p, st, input, SourceStdin)
+		require.NoError(t, err, name)
+
+		assert.Equal(t, VerdictAllow, d.Verdict, name)
+		assert.Equal(t, []string{"stdin names no changed file (no diff --git, ---, +++ or rename header with a path); " +
+			"this verdict covers no change"}, d.Notes, name)
+
+		// Under enforcement the gate cannot read the input, so it blocks.
+		p.Mode = "enforce"
+
+		_, err = EvalDiff(p, st, input, SourceDiffArgument)
+		require.ErrorIs(t, err, ErrBlocked, name)
+		assert.Equal(t, "blocked by policy: the diff argument names no changed file "+
+			"(no diff --git, ---, +++ or rename header with a path); "+
+			"enforce mode blocks input that it cannot read as a diff", err.Error(), name)
 	}
 }

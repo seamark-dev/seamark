@@ -18,11 +18,32 @@ var ErrBlocked = errors.New("blocked by policy")
 
 var hunkRe = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 
+// The diff sources name where the diff text of EvalDiff comes from. The
+// texts for a diff with no changed file name the source, so the CLI and
+// MCP give the same words for the same case.
+const (
+	// SourceStdin is a diff that the CLI reads from a stdin pipe.
+	SourceStdin = "stdin"
+	// SourceDiffArgument is the diff argument of the MCP check tool.
+	SourceDiffArgument = "the diff argument"
+	// SourceGitDiffHead is the output of `git diff HEAD`, which both
+	// callers use when they get no diff.
+	SourceGitDiffHead = "git diff HEAD"
+)
+
+// noFileHeader says why input with bytes in it gives no changed file.
+const noFileHeader = "names no changed file (no diff --git, ---, +++ or rename header with a path)"
+
 // EvalDiff computes a unified diff's blast radius and evaluates policy
 // over it: changed lines map to symbols, and symbols already carry the
 // transitively-propagated effect tags — their union is what this change
 // can ultimately reach (RFC-001 §5.5, pre-edit enforcement).
-func EvalDiff(p *Policy, st *store.Store, diffText string) (*Decision, error) {
+//
+// source names where diffText comes from, one of the Source constants.
+// A diff with no changed file never reads as a clean allow. Empty text
+// gets a note. Text with bytes but no file gets a note, and under
+// enforcement it blocks, because the gate cannot read it as a diff.
+func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, error) {
 	touched := map[string][][2]uint32{} // file -> [start, end] line ranges
 
 	file := ""
@@ -91,6 +112,15 @@ func EvalDiff(p *Policy, st *store.Store, diffText string) (*Decision, error) {
 			touched[file] = append(touched[file],
 				[2]uint32{uint32(start), uint32(start + count - 1)})
 		}
+	}
+
+	// Input with bytes in it but no file is not a diff that check can
+	// read. Under enforcement a failure of the gate must not fail open,
+	// so the gate blocks before any rule runs.
+	unreadable := len(touched) == 0 && diffText != ""
+	if unreadable && p.Mode == "enforce" {
+		return nil, FailClosed(fmt.Errorf("%s %s; enforce mode blocks input that it cannot read as a diff",
+			source, noFileHeader), true)
 	}
 
 	files := make([]string, 0, len(touched))
@@ -170,6 +200,19 @@ func EvalDiff(p *Policy, st *store.Store, diffText string) (*Decision, error) {
 	d, err := p.evaluate(tags, activation)
 	if err != nil {
 		return nil, err
+	}
+
+	// The texts quote no input byte, so they need no sanitizing.
+	switch {
+	case unreadable:
+		d.Notes = append(d.Notes, fmt.Sprintf("%s %s; this verdict covers no change", source, noFileHeader))
+	case diffText == "" && source == SourceGitDiffHead:
+		// A clean tree and a tree with only untracked files both give
+		// empty output. The note says so, because untracked files can
+		// hold the change.
+		d.Notes = append(d.Notes, "no changed files in git diff HEAD; untracked files are not part of it")
+	case diffText == "":
+		d.Notes = append(d.Notes, "no changed files in "+source)
 	}
 
 	if len(unindexed) > 0 {
