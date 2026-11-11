@@ -49,11 +49,6 @@ pin:
 func prepareRepo(t *testing.T, indexed bool) string {
 	t.Helper()
 
-	// gitify and the commands run git. A global or system git
-	// configuration must not change what they see.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-
 	root := writeFixture(t)
 	verifyWrite(t, root, "generated/a.txt", "asset\n")
 	verifyWrite(t, root, "src/handler.go", "package src\n\nfunc Handle() {}\n")

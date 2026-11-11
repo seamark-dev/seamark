@@ -17,8 +17,21 @@ import (
 //
 // The hook fixtures also name /opt/bin/seamark, which a test machine does
 // not need to hold. The inspection reads it as a hook that can start.
+//
+// A global or system git configuration, for example diff prefixes,
+// colors, or a diff.external command, must not change what a test reads.
+// The setup runs in every re-executed child process too, so it stays
+// constant and cheap; a test never changes these two variables.
 func TestMain(m *testing.M) {
 	if err := os.Unsetenv(recordEvaluationsEnv); err != nil {
+		panic(err)
+	}
+
+	if err := os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull); err != nil {
+		panic(err)
+	}
+
+	if err := os.Setenv("GIT_CONFIG_SYSTEM", os.DevNull); err != nil {
 		panic(err)
 	}
 

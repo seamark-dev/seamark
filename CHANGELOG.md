@@ -8,6 +8,21 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Faster, quieter test runs.** `make test` and `make test-race` accept
+  `TEST_PKGS`, `TEST_RUN`, `TEST_FLAGS` and `TEST_TIMEOUT`, use Go's own
+  build cache by default, and print a bounded summary from the new
+  `cmd/testsummary` runner. Complete per-invocation logs
+  (`events.jsonl`, `stderr.log`, `output.log`, `summary.json`) stay
+  outside the checkout under `TEST_LOG_DIR`; `RAW=1` restores plain
+  `go test` output. `make verify` replaces the overlapping local
+  release-gate sequence with one ordered run of the ordinary suite, the
+  race suite, lint and smoke. CI keeps the same required coverage: the
+  ordinary suites on both platforms, full race on Linux, lint and smoke.
+- **Six focused tests overlap their independent work.** The hermetic
+  workflow preflight, the co-change variant contract, and four CLI lock
+  tests now run in parallel. Each still owns its repositories and
+  databases; cases, assertions and lock deadlines are unchanged.
+
 v0.9.0 is the planned first release with lesson-check hook handlers,
 not a published release. Shipping is blocked on the
 [mandatory native verification and release fixes](docs/agent-integrations.md#release-checklist).

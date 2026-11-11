@@ -1540,6 +1540,8 @@ func TestLessonCheckCombine(t *testing.T) {
 // runs no checker and writes nothing, so a refresh of the console never
 // adds an audit record.
 func TestLessonCheckRevalidate(t *testing.T) {
+	t.Parallel()
+
 	// fresh returns a repository and its fresh verification. The check
 	// pin passes on a clean line in src, and nothing is in generated.
 	fresh := func(t *testing.T, paths ...string) (*gitRepo, *Verification) {
@@ -1565,6 +1567,7 @@ func TestLessonCheckRevalidate(t *testing.T) {
 	}
 
 	t.Run("unchanged inputs stay fresh and nothing is written", func(t *testing.T) {
+		t.Parallel()
 		g, v := fresh(t)
 		state := listTree(t, filepath.Join(g.root, ".seamark"))
 
@@ -1599,6 +1602,7 @@ func TestLessonCheckRevalidate(t *testing.T) {
 
 	for _, tc := range stale {
 		t.Run(tc.name+" makes the result stale", func(t *testing.T) {
+			t.Parallel()
 			g, v := fresh(t)
 			tc.change(g)
 
@@ -1607,6 +1611,7 @@ func TestLessonCheckRevalidate(t *testing.T) {
 	}
 
 	t.Run("an explicit selection ignores a change outside it", func(t *testing.T) {
+		t.Parallel()
 		g, v := fresh(t, "src")
 		require.Equal(t, []string{"src"}, v.Selection.Paths)
 
@@ -1621,6 +1626,7 @@ func TestLessonCheckRevalidate(t *testing.T) {
 	// Verify computes from the results of Evaluate, for a valid, an
 	// invalid, an undecodable, and an absent configuration.
 	t.Run("the binding equals the binding of Verify for every configuration state", func(t *testing.T) {
+		t.Parallel()
 		for name, lessons := range map[string]string{
 			"valid":   mixedYAML,
 			"tier 2":  strings.Replace(mixedYAML, `'TODO\('`, `'TODO('`, 1),
@@ -1641,6 +1647,7 @@ func TestLessonCheckRevalidate(t *testing.T) {
 	// An absent and an unreadable lessons.yaml both have the digest "".
 	// A read error is never an absent file, so the result goes stale.
 	t.Run("an unreadable lessons.yaml is not an absent one", func(t *testing.T) {
+		t.Parallel()
 		if os.Geteuid() == 0 {
 			t.Skip("root reads a file without read permission")
 		}
@@ -1657,6 +1664,7 @@ func TestLessonCheckRevalidate(t *testing.T) {
 	})
 
 	t.Run("a stale result stays stale without a read", func(t *testing.T) {
+		t.Parallel()
 		_, v := fresh(t)
 		v.Freshness = FreshnessStale
 
@@ -1667,6 +1675,7 @@ func TestLessonCheckRevalidate(t *testing.T) {
 	})
 
 	t.Run("a canceled context gives stale without an error", func(t *testing.T) {
+		t.Parallel()
 		g, v := fresh(t)
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -1678,6 +1687,7 @@ func TestLessonCheckRevalidate(t *testing.T) {
 	})
 
 	t.Run("a usage or root failure gives stale with an error", func(t *testing.T) {
+		t.Parallel()
 		g, v := fresh(t)
 
 		got, err := Revalidate(context.Background(), g.root, nil)

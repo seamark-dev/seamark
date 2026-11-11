@@ -301,6 +301,8 @@ func TestIndexFailsClosedOnARootThatDoesNotRead(t *testing.T) {
 // The open waits longer than the read, so without the refusal a build
 // would pass the lock and move the root.
 func TestIndexFailsClosedBehindALock(t *testing.T) {
+	t.Parallel()
+
 	origin := rootWriteRepo(t)
 	third := rootMoveThird(t)
 	db := store.DefaultPath(origin)
@@ -713,6 +715,8 @@ func TestIndexRefusalNamesNoMoveForAFileOfAPlainRoot(t *testing.T) {
 // longer than that read, so a skip could report success. It must not:
 // the user asked for a move, and nothing moved.
 func TestIndexMoveRootDoesNotSkipBehindALock(t *testing.T) {
+	t.Parallel()
+
 	origin := rootWriteRepo(t)
 	tree := rootWriteWorktree(t, origin)
 	db := store.DefaultPath(origin)

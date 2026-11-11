@@ -808,9 +808,9 @@ raw conversations and native identifiers out of public reports.
 
 Then run the existing release gates:
 
-1. `make agents-test`, `make lesson-check`, `make lesson-check-race`,
-   `make tui-test`, `make tui-race`, then `make test`, `make test-race`,
-   `make lint`, `make build`, `make smoke`.
+1. `make verify`: one full gate that runs the ordinary tests, the race
+   detector, lint and the binary smoke exactly once, in that order. It
+   refuses a narrowed package, regex or flag selection.
 2. `make agents-native-check CLIENT=codex` on a machine with the CLI:
    record the installed version and every `blocked` line.
 3. `make agents-native-smoke CLIENT=codex` from a committed tree with

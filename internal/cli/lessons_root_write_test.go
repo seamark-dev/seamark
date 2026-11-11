@@ -1013,6 +1013,8 @@ func TestRootWriteRefusesARootThatNoLongerExists(t *testing.T) {
 // a lock stops. The open waits longer, so the store reads the root. A
 // locked copy then gets the usual refusal and writes no pin.
 func TestRootWriteFailsClosedBehindALock(t *testing.T) {
+	t.Parallel()
+
 	origin := rootWriteRepo(t)
 	copied := rootWriteCopy(t, origin)
 	path := store.DefaultPath(copied)
@@ -1031,6 +1033,8 @@ func TestRootWriteFailsClosedBehindALock(t *testing.T) {
 // TestRootWriteWaitsForALockInACheckout covers the same lock in a normal
 // checkout. The command waits and writes, as it did before the rule.
 func TestRootWriteWaitsForALockInACheckout(t *testing.T) {
+	t.Parallel()
+
 	root := rootWriteRepo(t)
 	wait := rootWriteLock(t, store.DefaultPath(root))
 

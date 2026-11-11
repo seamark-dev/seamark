@@ -18,29 +18,6 @@ import (
 // Every repository lives under t.TempDir(), so no test reads or writes
 // the checkout that runs it.
 
-// isolateGit hides the global and the system git configuration from
-// every git process of the test, the producer's processes included.
-// ReadWorkingTree passes os.Environ() to git, so a user setting such as
-// core.fsmonitor or status.showUntrackedFiles could otherwise change the
-// snapshot. The identity variables let a commit run in every repository
-// of the test, also in a submodule clone without its own configuration.
-// LC_ALL=C keeps the git messages in English, because some tests compare
-// the stderr line of git status. A git with gettext translates them in
-// another locale. A test that calls t.Setenv cannot call t.Parallel,
-// and these tests do not call it.
-func isolateGit(t *testing.T) {
-	t.Helper()
-
-	t.Setenv("LC_ALL", "C")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-	t.Setenv("GIT_DEFAULT_HASH", "sha1")
-	t.Setenv("GIT_AUTHOR_NAME", "Seamark Test")
-	t.Setenv("GIT_AUTHOR_EMAIL", "test@seamark.invalid")
-	t.Setenv("GIT_COMMITTER_NAME", "Seamark Test")
-	t.Setenv("GIT_COMMITTER_EMAIL", "test@seamark.invalid")
-}
-
 // gitRepo is one temporary repository.
 type gitRepo struct {
 	t    *testing.T
@@ -51,7 +28,6 @@ type gitRepo struct {
 // initArgs go to `git init`, for example "--object-format=sha256".
 func newGitRepo(t *testing.T, initArgs ...string) *gitRepo {
 	t.Helper()
-	isolateGit(t)
 
 	g := &gitRepo{t: t, root: t.TempDir()}
 	g.git(append([]string{"init", "-q", "-b", "main"}, initArgs...)...)

@@ -561,6 +561,14 @@ func TestWorkflowFingerprintBindsTheExperiment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, baseFingerprint, again, "the fingerprint is deterministic")
 
+	// The two real calls above generated their own material twice each. From
+	// here one schema-sync template and one cache-version template are
+	// generated, and every comparison works on an independent copy: the
+	// explicit-arms check then proves copied and real material agree.
+	schemaTemplate := templateGenerator(t, base.Instance.Generate)
+	base.Instance.Generate = schemaTemplate
+	cacheVersionTemplate := templateGenerator(t, CacheVersionCochangeInstance().Generate)
+
 	explicitArms := base
 	explicitArms.Arms = []WorkflowArm{ArmMCPSkills, ArmMCPOnly}
 	explicitFingerprint, err := WorkflowFingerprint(explicitArms)
@@ -568,7 +576,10 @@ func TestWorkflowFingerprintBindsTheExperiment(t *testing.T) {
 	assert.Equal(t, baseFingerprint, explicitFingerprint, "implicit and explicit default arms are one experiment")
 
 	for name, mutate := range map[string]func(*WorkflowConfig){
-		"instance":    func(c *WorkflowConfig) { c.Instance = CacheVersionCochangeInstance() },
+		"instance": func(c *WorkflowConfig) {
+			c.Instance = CacheVersionCochangeInstance()
+			c.Instance.Generate = cacheVersionTemplate
+		},
 		"one arm":     func(c *WorkflowConfig) { c.Arms = []WorkflowArm{ArmMCPOnly} },
 		"arm command": func(c *WorkflowConfig) { c.AgentArgv[ArmMCPSkills] = []string{"agent", "--tools", "Skill"} },
 		"model":       func(c *WorkflowConfig) { c.Model = "claude-test" },

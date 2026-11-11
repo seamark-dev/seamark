@@ -1037,8 +1037,8 @@ func gitSubcommand(args []string) string {
 // hides the added lines of the copy.
 func TestLessonCheckSnapshotCopyConfig(t *testing.T) {
 	// copyFixture copies src/a.go to src/b.go, adds a line to src/a.go,
-	// and stages both. isolateGit hides the global configuration, so the
-	// copy setting goes into the configuration of the repository.
+	// and stages both. The package setup hides the global configuration,
+	// so the copy setting goes into the configuration of the repository.
 	copyFixture := func(t *testing.T, key string) *gitRepo {
 		t.Helper()
 
@@ -1549,6 +1549,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// max-census-directories, so a large tree cannot make the census read
 	// without a bound.
 	t.Run("max-census-directories bounds the census", func(t *testing.T) {
+		t.Parallel()
+
 		assert.Equal(t, 50000, DefaultLimits().MaxCensusDirectories)
 
 		g := verifyRepo(t, mixedYAML)
@@ -1574,6 +1576,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// no record, so a low max-snapshot-paths keeps it complete, whatever
 	// the count of its directories.
 	t.Run("max-snapshot-paths does not bound the census", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 
 		lim := DefaultLimits()
@@ -1588,6 +1592,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// The bound counts directories. A named file is no directory, so it
 	// adds only its parents: this census holds one directory, ".".
 	t.Run("named files do not count against the census bound", func(t *testing.T) {
+		t.Parallel()
+
 		g := newGitRepo(t)
 		g.write("a.txt", "a\n")
 		g.write("b.txt", "b\n")
@@ -1607,6 +1613,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// again before a read. So the census leaves no cached directory state,
 	// and the time between a parent Lstat and a file read does not grow.
 	t.Run("the census leaves no cached directory state", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 
 		r := newTreeReader(context.Background(), g.root, DefaultLimits())
@@ -1633,6 +1641,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		{name: "a --file path that names the file", paths: []string{"generated/a.txt"}},
 	} {
 		t.Run("an empty directory without the search bit hides a delete under "+tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			g := verifyRepo(t, mixedYAML)
 			g.remove("generated/a.txt")
 			chmodUntilCleanup(t, g.path("generated"), 0o600, 0o755)
@@ -1655,6 +1665,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// the records at or below src count, so the census does not read
 	// generated, and the path set stays complete.
 	t.Run("a record outside the --file paths does not put its directory in the census", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 		g.write("generated/a.txt", "edited\n")
 		chmodUntilCleanup(t, g.path("generated"), 0o300, 0o755)
@@ -1675,6 +1687,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// outside the root. The census compares the opened directory with that
 	// Lstat, as readNoFollow does for a file, and never takes its verdict.
 	t.Run("a parent swapped for a link after the Lstat reads as unreadable", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 		g.write("deep/a/b.txt", "b\n")
 		g.commitAll("deep")
@@ -1696,6 +1710,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// fails. Both modes hide the tracked file from git on a clean tree.
 	for _, mode := range []fs.FileMode{0, 0o600} {
 		t.Run(fmt.Sprintf("an unreadable directory that holds a tracked file is incomplete (mode %04o)", mode), func(t *testing.T) {
+			t.Parallel()
+
 			g := verifyRepo(t, mixedYAML)
 			chmodUntilCleanup(t, g.path("generated"), mode, 0o755)
 
@@ -1720,6 +1736,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// check-lessons/1 envelope) sees the directory. A complete path set
 	// has no such key.
 	t.Run("the JSON names the unreadable directories", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 
 		complete, err := json.Marshal(g.verify())
@@ -1741,6 +1759,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// counts the rest, so the output stays bounded. The text line counts
 	// every directory, and the cut never changes the outcome.
 	t.Run("the JSON keeps max-unreadable-directories directories and counts the rest", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 
 		var dirs []string
@@ -1791,6 +1811,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		{name: "the default selection", paths: nil},
 	} {
 		t.Run("an unreadable directory without a tracked file stays complete under "+tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			g := verifyRepo(t, mixedYAML)
 			g.write("secret/x.txt", "x\n")
 			chmodUntilCleanup(t, g.path("secret"), 0, 0o755)
@@ -1814,6 +1836,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// reach the digest without a change of the status output, and a new
 	// modification time must not reach it.
 	t.Run("the status digest holds the unreadable directories, never a time", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 		chmodUntilCleanup(t, g.path("generated"), 0o600, 0o755)
 
@@ -1844,6 +1868,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// whole subtree is undecided. So the evidence names the top directory
 	// only.
 	t.Run("an unreadable directory names only itself, not its subtree", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 		g.write("deep/a/b/c.txt", "c\n")
 		g.commitAll("deep")
@@ -1899,6 +1925,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		{name: "mode 0000, link ignored, --file of the file below the link", mode: 0, ignored: true, paths: []string{"generated/a.txt"}, changes: []string{"modify generated/a.txt"}, results: []string{"1:unknown/incomplete-paths", "2:unknown/incomplete-paths"}, unknown: unknownBelowLink},
 	} {
 		t.Run("an index entry below a link to an unsearchable directory is incomplete ("+tc.name+")", func(t *testing.T) {
+			t.Parallel()
+
 			g := verifyRepo(t, mixedYAML)
 			if tc.ignored {
 				g.write(".git/info/exclude", ".seamark/\ngenerated\n")
@@ -1937,6 +1965,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// never opens the target: an open through the link fails at mode 0300,
 	// because the read bit is not set.
 	t.Run("a link to a directory that git can search is never opened and keeps the path set complete", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 		linkGenerated(t, g, 0o300)
 
@@ -1977,6 +2007,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// ReadWorkingTree accepts such a root, although the CLI and MCP
 	// callers resolve it with git rev-parse --show-toplevel first.
 	t.Run("a top-level tracked file read through a link to the root keeps the path set complete", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 		g.write("top.txt", "top\n")
 		g.commitAll("top")
@@ -2062,6 +2094,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			g := verifyRepo(t, mixedYAML)
 			for _, args := range tc.setup {
 				g.git(args...)
@@ -2182,6 +2216,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 
 		for _, bit := range []string{"--skip-worktree", "--assume-unchanged"} {
 			t.Run("an unreadable directory whose index entries are all skipped entries is incomplete"+tc.suffix+" ("+tc.dir+", "+bit+")", func(t *testing.T) {
+				t.Parallel()
+
 				g := verifyRepo(t, mixedYAML)
 				if tc.commit {
 					g.write(tc.entry, "package x\n")
@@ -2217,6 +2253,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// max-census-directories counts it, so a small cone in a large tree
 	// stays complete. Here the census holds two directories: . and src.
 	t.Run("a sparse checkout keeps its absent directories out of the census bound", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 		for i := range 5 {
 			g.write(fmt.Sprintf("d%d/e/f.txt", i), "f\n")
@@ -2247,6 +2285,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 	// below-link rule. So the path set stays complete, as in the
 	// skipped-entry rows above. Here generated/x holds only a skipped entry.
 	t.Run("a skipped entry two directories below a link keeps the path set complete", func(t *testing.T) {
+		t.Parallel()
+
 		g := verifyRepo(t, mixedYAML)
 		g.write("generated/x/b.txt", "b\n")
 		g.commitAll("x")
@@ -2284,6 +2324,8 @@ func TestLessonCheckSnapshotDirectoryCensus(t *testing.T) {
 		{suffix: " under --file of the link", paths: []string{"generated"}, limit: 1},
 	} {
 		t.Run("a parent of a skipped entry reached through a link counts against max-census-directories"+tc.suffix, func(t *testing.T) {
+			t.Parallel()
+
 			g := verifyRepo(t, mixedYAML)
 			g.git(skipWorktree...)
 
