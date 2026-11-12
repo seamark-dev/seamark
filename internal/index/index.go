@@ -133,6 +133,10 @@ func buildRefusal(s ownership.State, d ownership.Decision) error {
 	route := s.Route(d.Route, ownership.SurfaceBuild)
 
 	switch {
+	case s.DirRefusesWrites():
+		// No read works in this state, so "run it again" would not help.
+		// The text names the directory instead.
+		return rootMoveRefusal(s.ReadOnlyDirCause() + "; nothing changed; " + route)
 	case s.Root == ownership.RootUnreadable:
 		return rootMoveRefusal(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
 			"rebuild could move the root of another repository; nothing changed; run it again, %s",

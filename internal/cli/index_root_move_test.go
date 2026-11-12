@@ -297,6 +297,71 @@ func TestIndexFailsClosedOnARootThatDoesNotRead(t *testing.T) {
 	}
 }
 
+// readOnlyDirRefusal is the refusal for an index whose directory refuses
+// writes. The MCP test of the same state builds the same literal, so the
+// two surfaces keep one text.
+func readOnlyDirRefusal(db string) string {
+	return "the index database cannot be read, because its directory refuses writes (" + db +
+		": attempt to write a readonly database (1544)), and SQLite must create its WAL/SHM sidecars there " +
+		"to read it; nothing changed; make " + filepath.Dir(db) + " writable or use another --db"
+}
+
+// TestIndexNamesADirectoryThatRefusesWrites covers an index in a .seamark
+// directory with mode 0555 and no sidecars. No read works there, so the
+// refusal names the directory, and no flag passes it. After the directory
+// allows writes, the route runs.
+func TestIndexNamesADirectoryThatRefusesWrites(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a directory with mode 0555")
+	}
+
+	root := rootMoveThird(t)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	db := store.DefaultPath(root)
+	dir := filepath.Dir(db)
+
+	require.NoFileExists(t, db+"-wal", "a normal close removes the sidecars")
+
+	before, err := os.ReadFile(db)
+	require.NoError(t, err)
+
+	info, err := os.Stat(db)
+	require.NoError(t, err)
+
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	want := readOnlyDirRefusal(db)
+
+	for _, flags := range [][]string{nil, {"--force"}, {"--move-root"}} {
+		_, err := run(t, append([]string{"-C", root, "index"}, flags...)...)
+		require.EqualError(t, err, want, "index %v", flags)
+		assert.ErrorIs(t, err, index.ErrRootMove)
+	}
+
+	_, err = runCheckOnDevNull(t, root)
+	assertBrokenCheck(t, err)
+	assert.EqualError(t, err, want)
+
+	after, err := os.ReadFile(db)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "the refusal writes nothing")
+
+	again, err := os.Stat(db)
+	require.NoError(t, err)
+	assert.Equal(t, info.ModTime(), again.ModTime())
+	assert.NoFileExists(t, db+"-wal")
+	assert.NoFileExists(t, db+"-shm")
+
+	require.NoError(t, os.Chmod(dir, 0o755))
+
+	_, err = run(t, "-C", root, "index")
+	require.NoError(t, err, "the route runs once the directory allows writes")
+}
+
 // TestIndexFailsClosedBehindALock covers a read that a real lock stops.
 // The open waits longer than the read, so without the refusal a build
 // would pass the lock and move the root.

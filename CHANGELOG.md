@@ -243,6 +243,12 @@ model-boundary delivery.
   nothing is written. `check` and `index` no longer call such a path a
   database whose recorded root cannot be read. A `--db` below a file
   again fails on the directory of the database.
+- **An index in a read-only directory.** When the `.seamark` directory
+  refuses writes and holds no WAL/SHM sidecars, `index`, `check`, the MCP
+  tools and the console build now say that the directory refuses writes
+  and name it to make writable. They no longer say that the recorded
+  root cannot be read or suggest a retry. The refusal still writes
+  nothing.
 - **MCP server after an upgrade.** A running MCP server keeps the
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the

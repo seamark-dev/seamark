@@ -101,6 +101,10 @@ func (e *engine) databaseFacts(probe workspace.IndexProbe) rootFacts {
 
 	switch {
 	case d.Build != ownership.BuildRefused:
+	case state.DirRefusesWrites():
+		// The recorded root may be sound, so the lead names the directory
+		// as the CLI does, not an unknown root.
+		facts.BuildBlock = errors.New(state.ReadOnlyDirCause() + "; " + route)
 	case state.Root == ownership.RootUnreadable:
 		facts.BuildBlock = fmt.Errorf("%w (%s: %v), and a build could move the root of another repository; %s",
 			errRootUnknown, e.ws.DBPath, state.ReadErr, route)

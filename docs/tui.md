@@ -122,7 +122,9 @@ The state of the workspace at a glance.
   only for a file inside this workspace and outside any repository nested
   in it. It also
   refuses a default path that links to the database of another worktree,
-  and a `--db` file whose recorded root cannot be read. A refused `b`
+  and a `--db` file whose recorded root cannot be read. For a database in
+  a directory that refuses writes, the refusal names that directory to
+  make writable. A refused `b`
   reads the index again first, so a fixed cause opens the confirmation
   on that press. Leaving Overview drops that check.
 
