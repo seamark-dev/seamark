@@ -264,6 +264,52 @@ func TestRunNamesWhyAHookBinaryCannotStart(t *testing.T) {
 	assert.NotContains(t, hooks.Detail, "is missing")
 }
 
+func TestRunNamesAnUnreadableCodexConfigInTheHookFix(t *testing.T) {
+	// Codex setup stops at a config.toml that it cannot read. The hooks
+	// line names .codex/hooks.json, so its fix names config.toml.
+	const absent = "/nonexistent/seamark"
+
+	// The missing hook needs no rewrite, so its fix is the route alone.
+	cases := map[string]struct {
+		document, want string
+		exact          bool
+	}{
+		"missing binary": {
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"Bash","hooks":[{"type":"command","command":"` + absent + ` gate --hook --client codex"}]},` +
+				`{"matcher":"apply_patch","hooks":[{"type":"command","command":"` + absent + ` lessons --hook --client codex"}]}]}}`,
+			"fix .codex/config.toml, then re-run `seamark init --client codex`, which rewrites the hook command",
+			false,
+		},
+		"missing hook": {
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"apply_patch","hooks":[{"type":"command","command":"/bin/seamark lessons --hook --client codex"}]}]}}`,
+			"fix .codex/config.toml, then re-run `seamark init --client codex`",
+			true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root, dbPath := fixtureRoot(t)
+
+			require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"), []byte(tc.document), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"), []byte("broken = = [\n"), 0o644))
+
+			hooks := byName(Run(root, dbPath, "test"))["hooks"]
+
+			assert.Equal(t, StateWarn, hooks.State)
+			assert.True(t, strings.HasPrefix(hooks.Fix, tc.want), hooks.Fix)
+			assert.NotContains(t, hooks.Fix, "fix the file")
+
+			if tc.exact {
+				assert.Equal(t, tc.want, hooks.Fix)
+			}
+		})
+	}
+}
+
 func TestRunNamesTheMatcherOfAHookThatNeverFires(t *testing.T) {
 	cases := map[string]struct{ rel, document, want string }{
 		"claude gate": {

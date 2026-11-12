@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/skills"
 )
 
 // codexHooksFile is the one Codex hook document that setup manages.
@@ -774,15 +775,11 @@ func (codexSetup) Inspect(root string) Inspection {
 	// Every Codex setup that installs hooks also plans the registration,
 	// so it stops at a config.toml that the plan cannot read. The fix of
 	// that file then comes first, for a missing hook and for a missing
-	// hook binary. The action of a linked file names the link, so the
-	// route reads the registration after linkActions.
-	linked := []CapabilityInspection{registration}
-	linkActions(root, linked, map[Capability]string{CapabilityMCPRegistration: approve.CodexConfig})
-	registration = linked[0]
-
+	// hook binary.
 	restore, rewrite := "run `seamark init --client codex` to install the missing hook", "run `seamark init --client codex`"
 	if registration.State == StateUnreadable {
-		restore, rewrite = registration.Action, registration.Action
+		route := unreadableCodexConfigRoute(root)
+		restore, rewrite = route, route
 	}
 
 	// One read of each hook source serves every hook inspector below. So
@@ -812,6 +809,21 @@ func (codexSetup) Inspect(root string) Inspection {
 		Findings:          findings,
 		LessonHooks:       inspectCodexLessonHooks(reads),
 	}
+}
+
+// unreadableCodexConfigRoute is the hook route when setup cannot read
+// .codex/config.toml. A hook entry names .codex/hooks.json, so the route
+// names config.toml, because setup stops there. The registration action
+// says "the file", which only its own row explains. Setup never writes
+// through a symbolic link, so a linked file needs the link replaced. A
+// failed link check keeps the plain fix, which still names the file.
+func unreadableCodexConfigRoute(root string) string {
+	fix := "fix " + approve.CodexConfig
+	if link, err := skills.SymlinkIn(root, approve.CodexConfig); err == nil && link != "" {
+		fix = "replace the symlink at " + link + " with the real file or directory"
+	}
+
+	return fix + ", then re-run `seamark init --client codex`"
 }
 
 // InspectLessonHooks reads the hook sources with the reader of Inspect

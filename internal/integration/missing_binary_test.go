@@ -159,18 +159,78 @@ func TestClaudeMissingBinaryActionFollowsTheRouteThatRuns(t *testing.T) {
 
 func TestCodexMissingBinaryActionFollowsTheRouteThatRuns(t *testing.T) {
 	// Codex setup stops at a config.toml that it cannot read, so the
-	// repair fixes that file first.
+	// repair fixes that file first. The finding names .codex/hooks.json,
+	// so the route names config.toml.
 	root := t.TempDir()
 	writeRel(t, root, codexHooksFile, bashHook(absentBinary+" gate --hook --client codex"))
 	writeRel(t, root, ".codex/config.toml", "[mcp_servers\n")
 
 	insp := codexSetup{}.Inspect(root)
 
+	route := "fix .codex/config.toml, then re-run `seamark init --client codex`, which rewrites the hook command " +
+		"to the running seamark binary; then open the project in Codex and review the hooks with /hooks, " +
+		"because the new command changes the trust hash"
+
 	gate := findingsAt(insp.Findings, codexHooksFile, "cannot start the seamark gate hook")
 	require.Len(t, gate, 1)
-	assert.True(t, strings.HasPrefix(gate[0].Action,
-		"fix the file, then re-run `seamark init --client codex`, which rewrites the hook command"), gate[0].Action)
-	assert.Equal(t, gate[0].Action, entryOf(t, insp, CapabilityCommands).Action)
+	assert.Equal(t, route, gate[0].Action)
+	assert.Equal(t, route, entryOf(t, insp, CapabilityCommands).Action)
+
+	// The route runs: the setup run stops at config.toml until the file
+	// parses, and then it rewrites the command to the running binary.
+	explicit, err := ExplicitSetups(Builtin(), []string{CodexID}, false, false, "")
+	require.NoError(t, err)
+
+	_, err = PlanSetup(Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: explicit})
+	require.ErrorContains(t, err, ".codex/config.toml")
+
+	writeRel(t, root, ".codex/config.toml", "")
+
+	_, err = ApplySetup(mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: explicit}), ApplyOptions{})
+	require.NoError(t, err)
+
+	assert.Equal(t, StateCurrent, entryOf(t, codexSetup{}.Inspect(root), CapabilityCommands).State)
+
+	written, err := os.ReadFile(filepath.Join(root, codexHooksFile))
+	require.NoError(t, err)
+	assert.Contains(t, string(written), testBinary+" gate --hook --client codex")
+	assert.NotContains(t, string(written), absentBinary)
+}
+
+func TestCodexMissingHookActionNamesAnUnreadableConfig(t *testing.T) {
+	// Only the lessons hook is installed, and setup stops at config.toml.
+	// The absent gate entry names config.toml, the file that stops setup.
+	root := t.TempDir()
+	writeRel(t, root, codexHooksFile, `{"hooks":{"PreToolUse":[`+hookEntry("apply_patch", testBinary+" lessons --hook --client codex")+`]}}`)
+	writeRel(t, root, ".codex/config.toml", "[mcp_servers\n")
+
+	commands := entryOf(t, codexSetup{}.Inspect(root), CapabilityCommands)
+	require.Equal(t, StateAbsent, commands.State)
+	assert.Equal(t, "fix .codex/config.toml, then re-run `seamark init --client codex`", commands.Action)
+}
+
+func TestCodexMissingHookActionKeepsTheInstallRouteForAReadableConfig(t *testing.T) {
+	// A config.toml that parses stops no setup run, so the absent gate
+	// entry keeps the install route. Only an unreadable file changes it.
+	root := t.TempDir()
+	writeRel(t, root, codexHooksFile, `{"hooks":{"PreToolUse":[`+hookEntry("apply_patch", testBinary+" lessons --hook --client codex")+`]}}`)
+	writeRel(t, root, ".codex/config.toml", "[mcp_servers]\n")
+
+	insp := codexSetup{}.Inspect(root)
+	require.NotEqual(t, StateUnreadable, entryOf(t, insp, CapabilityMCPRegistration).State)
+
+	commands := entryOf(t, insp, CapabilityCommands)
+	require.Equal(t, StateAbsent, commands.State)
+	assert.Equal(t, "run `seamark init --client codex` to install the missing hook", commands.Action)
+
+	// The route runs: the setup run installs the gate hook.
+	explicit, err := ExplicitSetups(Builtin(), []string{CodexID}, false, false, "")
+	require.NoError(t, err)
+
+	_, err = ApplySetup(mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: explicit}), ApplyOptions{})
+	require.NoError(t, err)
+
+	assert.Equal(t, StateCurrent, entryOf(t, codexSetup{}.Inspect(root), CapabilityCommands).State)
 }
 
 func TestCodexHookWithAMissingBinaryWarnsAndNamesTheReview(t *testing.T) {

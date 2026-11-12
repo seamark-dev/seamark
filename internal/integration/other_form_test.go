@@ -107,7 +107,7 @@ func TestCodexInspectionOfTheClaudeCodeFormFollowsTheRouteThatRuns(t *testing.T)
 	found := findingsAt(codexSetup{}.Inspect(root).Findings, codexHooksFile, "in the Claude Code form")
 	require.Len(t, found, 1)
 	assert.True(t, strings.HasPrefix(found[0].Action,
-		"fix the file, then re-run `seamark init --client codex`, which replaces that handler"), found[0].Action)
+		"fix .codex/config.toml, then re-run `seamark init --client codex`, which replaces that handler"), found[0].Action)
 }
 
 func TestCodexWrappedGateInTheClaudeCodeFormIsAnUnmanagedSource(t *testing.T) {
@@ -283,7 +283,7 @@ func TestCodexInspectionNamesTheSetupRunThatRemovesAnIdleClaudeCodeForm(t *testi
 		found := findingsAt(codexSetup{}.Inspect(root).Findings, codexHooksFile, "in the Claude Code form, which never runs")
 		require.Len(t, found, 1)
 		assert.True(t, strings.HasPrefix(found[0].Action,
-			"fix the file, then re-run `seamark init --client codex`, which removes that handler"), found[0].Action)
+			"fix .codex/config.toml, then re-run `seamark init --client codex`, which removes that handler"), found[0].Action)
 	})
 
 	t.Run("the only handler keeps the matcher warning", func(t *testing.T) {
