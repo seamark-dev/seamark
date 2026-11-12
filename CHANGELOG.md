@@ -194,6 +194,10 @@ model-boundary delivery.
   `change_set` text part list the first five omitted pins and lessons and
   then a `+N more` line. `--json` and `structuredContent` still list every
   omission.
+- **Status in a copied checkout.** `seamark status` names the root that
+  its index records when that root is not the workspace, and the
+  `seamark index` run that records this workspace. `--json` adds
+  `recorded_root` in that case only.
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`. Doctor, status, and the
   console print the word once: `hooks unreadable (<reason>)`, not

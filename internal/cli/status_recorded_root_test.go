@@ -1,0 +1,261 @@
+package cli
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
+	"github.com/seamark-dev/seamark/internal/store"
+)
+
+// recordedRootOrigin builds a git repository with an enforcing gate
+// hook and an index, as `seamark init --gate-mode enforce` and
+// `seamark index` leave it.
+func recordedRootOrigin(t *testing.T) string {
+	t.Helper()
+
+	origin := rootWriteTree(t)
+	gitify(t, origin)
+
+	var b testWriter
+
+	require.NoError(t, runInit(&b, origin, inspecttest.Binary, gateModeEnforce, false, "", false))
+
+	_, err := run(t, "-C", origin, "index")
+	require.NoError(t, err)
+
+	return origin
+}
+
+// statusJSONKeys returns the top-level object of `status --json` that
+// runs with the global flags.
+func statusJSONKeys(t *testing.T, flags ...string) map[string]any {
+	t.Helper()
+
+	out, err := run(t, append(flags, "status", "--json")...)
+	require.NoError(t, err)
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &doc))
+
+	return doc
+}
+
+func TestStatusNamesTheRootThatItsIndexRecords(t *testing.T) {
+	// Status reads the root that the index records. In a copied or a
+	// moved checkout that is not the workspace, so the first line names
+	// that root and the index run that records this workspace.
+	t.Run("copied checkout", func(t *testing.T) {
+		origin := recordedRootOrigin(t)
+		copied := rootWriteCopy(t, origin)
+
+		require.NoError(t, os.Remove(filepath.Join(copied, ".claude", "settings.json")))
+
+		policy := filepath.Join(copied, ".seamark", "policy.yaml")
+		data, err := os.ReadFile(policy)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(policy, []byte(strings.Replace(string(data), "mode: enforce", "mode: warn", 1)), 0o644))
+
+		before := files(t, copied)
+
+		out, err := run(t, "-C", copied, "status")
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(out, "root           the index of this checkout records another repository ("+origin+
+			"), so this report describes "+origin+", not this workspace; run `seamark index` in "+copied+" first\n"), out)
+		assert.Equal(t, origin, statusJSONKeys(t, "-C", copied)["recorded_root"])
+		assert.Equal(t, before, files(t, copied), "status writes nothing")
+
+		// The route runs and clears the line: status then reads the copy.
+		_, err = run(t, "-C", copied, "index")
+		require.NoError(t, err)
+
+		out, err = run(t, "-C", copied, "status")
+		require.NoError(t, err)
+		assert.NotContains(t, out, "root   ")
+		assert.Contains(t, out, "gate           policy mode warn; no gate hook installed")
+		assert.NotContains(t, statusJSONKeys(t, "-C", copied), "recorded_root")
+	})
+
+	t.Run("moved checkout", func(t *testing.T) {
+		origin := recordedRootOrigin(t)
+		moved := filepath.Join(rootWriteDir(t), "moved")
+		require.NoError(t, os.Rename(origin, moved))
+
+		out, err := run(t, "-C", moved, "status")
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(out, "root           the index of this checkout records a directory that no longer exists ("+
+			origin+"), so this report describes "+origin+", not this workspace; run `seamark index` in "+moved+" first\n"), out)
+
+		_, err = run(t, "-C", moved, "index")
+		require.NoError(t, err)
+
+		out, err = run(t, "-C", moved, "status")
+		require.NoError(t, err)
+		assert.NotContains(t, out, "root   ")
+		assert.Contains(t, out, "gate           enforce (claude hook carries --enforce")
+	})
+
+	t.Run("the recorded workspace and a link to it", func(t *testing.T) {
+		origin := recordedRootOrigin(t)
+		link := filepath.Join(rootWriteDir(t), "link")
+		require.NoError(t, os.Symlink(origin, link))
+
+		for _, root := range []string{origin, link} {
+			out, err := run(t, "-C", root, "status")
+			require.NoError(t, err)
+			assert.True(t, strings.HasPrefix(out, "workspace      "), out)
+			assert.NotContains(t, statusJSONKeys(t, "-C", root), "recorded_root")
+		}
+	})
+
+	// A command in a directory inside the recorded root runs in that
+	// repository, inside git and outside it. So --db with that directory
+	// prints no line.
+	t.Run("a directory inside the recorded root", func(t *testing.T) {
+		for name, root := range map[string]string{"outside git": rootWritePlainRoot(t), "in git": rootWriteRepo(t)} {
+			inside := filepath.Join(root, "pkg")
+			require.NoError(t, os.MkdirAll(inside, 0o755))
+
+			flags := []string{"-C", inside, "--db", store.DefaultPath(root)}
+
+			out, err := run(t, append(flags, "status")...)
+			require.NoError(t, err, name)
+			assert.True(t, strings.HasPrefix(out, "workspace      "), "%s: %s", name, out)
+			assert.NotContains(t, statusJSONKeys(t, flags...), "recorded_root", name)
+		}
+	})
+
+	// The recorded root comes from the database. A control byte in it
+	// must not reach the terminal or the JSON.
+	t.Run("a recorded root with control bytes", func(t *testing.T) {
+		origin := rootWriteRepo(t)
+		copied := rootWriteCopy(t, origin)
+		clean := origin + "[31m-x -y"
+
+		writeIndexDB(t, store.DefaultPath(copied), map[string]string{store.MetaRepoRoot: origin + "\x1b[31m-x\n-y"})
+
+		out, err := run(t, "-C", copied, "status")
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(out, "root           the index of this checkout records a directory that no longer exists ("+
+			clean+"), so this report describes "+clean+", not this workspace; run `seamark index` in "+copied+
+			" first\nworkspace      "), out)
+		assert.NotContains(t, out, "\x1b")
+		assert.Equal(t, clean, statusJSONKeys(t, "-C", copied)["recorded_root"])
+	})
+}
+
+// statusRootLine returns the first line of `status` that runs with the
+// global flags.
+func statusRootLine(t *testing.T, flags ...string) string {
+	t.Helper()
+
+	out, err := run(t, append(flags, "status")...)
+	require.NoError(t, err)
+
+	line, _, _ := strings.Cut(out, "\n")
+
+	return line
+}
+
+func TestStatusRootLineFollowsTheRuleOfTheDatabase(t *testing.T) {
+	// With --db the subject is "this database". The line names only a
+	// route that makes the index record this workspace. That route runs
+	// and clears the line. A route into the recorded root prints the same
+	// report again, so the line then names no route.
+	describes := func(origin string) string {
+		return "(" + origin + "), so this report describes " + origin + ", not this workspace"
+	}
+
+	t.Run("a custom database of a copy", func(t *testing.T) {
+		origin, copied, custom := rootWriteCustomCopy(t)
+		flags := []string{"-C", copied, "--db", custom}
+
+		assert.Equal(t, "root           this database records another repository "+describes(origin)+
+			"; run `seamark index --move-root --db "+custom+"` in "+copied+" first", statusRootLine(t, flags...))
+
+		_, err := run(t, "-C", copied, "index", "--move-root", "--db", custom)
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(statusRootLine(t, flags...), "workspace      "))
+	})
+
+	t.Run("a custom database of a moved checkout", func(t *testing.T) {
+		origin := rootWriteRepo(t)
+		moved := filepath.Join(rootWriteDir(t), "moved")
+		custom := filepath.Join(moved, "custom.db")
+
+		require.NoError(t, os.Rename(origin, moved))
+		require.NoError(t, os.Rename(store.DefaultPath(moved), custom))
+
+		flags := []string{"-C", moved, "--db", custom}
+
+		assert.Equal(t, "root           this database records a directory that no longer exists "+describes(origin)+
+			"; run `seamark index --db "+custom+"` in "+moved+" first", statusRootLine(t, flags...))
+
+		_, err := run(t, append(flags, "index")...)
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(statusRootLine(t, flags...), "workspace      "))
+	})
+
+	t.Run("the database of the origin from a copy", func(t *testing.T) {
+		origin := rootWriteRepo(t)
+		copied := rootWriteCopy(t, origin)
+
+		assert.Equal(t, "root           this database records another repository "+describes(origin),
+			statusRootLine(t, "-C", copied, "--db", store.DefaultPath(origin)))
+	})
+
+	// With --db, status keeps -C as the workspace and does not widen it
+	// to the git top level. The rule then reads the copy as a third
+	// checkout that owns the file, so the line names no route.
+	t.Run("the database of a copy from a directory inside it", func(t *testing.T) {
+		origin := rootWriteRepo(t)
+		copied := rootWriteCopy(t, origin)
+		inside := filepath.Join(copied, "pkg")
+
+		require.NoError(t, os.MkdirAll(inside, 0o755))
+
+		assert.Equal(t, "root           this database records another repository "+describes(origin),
+			statusRootLine(t, "-C", inside, "--db", store.DefaultPath(copied)))
+	})
+}
+
+// gitCalls puts a git script first on PATH. The script appends the
+// arguments of each call to the returned file and runs the real git.
+func gitCalls(t *testing.T) string {
+	t.Helper()
+
+	gitPath, err := exec.LookPath("git")
+	require.NoError(t, err)
+
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote(calls) + "\nexec " + shellQuote(gitPath) + " \"$@\"\n"
+
+	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o755))
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	return calls
+}
+
+func TestStatusResolvesTheWorkspaceOnce(t *testing.T) {
+	// Status runs often. The root line compares the recorded root with
+	// the workspace that opened the index, because each resolution of
+	// the workspace starts a git process.
+	origin := recordedRootOrigin(t)
+	calls := gitCalls(t)
+
+	out, err := run(t, "-C", origin, "status")
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(out, "workspace      "), out)
+
+	data, err := os.ReadFile(calls)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(data), "rev-parse --show-toplevel\n"), string(data))
+}

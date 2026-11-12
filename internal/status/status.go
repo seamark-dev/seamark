@@ -56,6 +56,15 @@ const (
 
 // Status is the gathered health report, JSON-ready.
 type Status struct {
+	// RecordedRoot is the root that the index records, set only when it
+	// is not the workspace of the command. Every other line describes
+	// that root, so a reader must see it. It is sanitized, because it
+	// comes from the database. Without it the JSON keeps its bytes.
+	RecordedRoot string `json:"recorded_root,omitempty"`
+	// rootNotice is the text of the root line. The JSON holds only
+	// RecordedRoot, because the route is advice for a terminal.
+	rootNotice string
+
 	SchemaVersion string   `json:"schema_version"`
 	IndexedAt     int64    `json:"indexed_at,omitempty"`
 	Freshness     string   `json:"freshness"`
@@ -258,8 +267,22 @@ func gatherAs(reg *integration.Registry, st *store.Store, root string,
 	return s, nil
 }
 
+// NoteRecordedRoot records that the index describes another root than
+// the workspace of the command. The CLI sets it, because only the CLI
+// knows the workspace that the user named. notice is the text of the
+// root line, and recorded is that root.
+func (s *Status) NoteRecordedRoot(recorded, notice string) {
+	s.RecordedRoot, s.rootNotice = render.Sanitize(recorded), notice
+}
+
 // Print renders the report as aligned text, the RFC's status layout.
+// The root line comes first, because it says which repository every
+// later line describes.
 func Print(w io.Writer, s *Status) {
+	if s.rootNotice != "" {
+		fmt.Fprintf(w, "root           %s\n", s.rootNotice)
+	}
+
 	fresh := s.Freshness
 	switch s.Freshness {
 	case FreshStale:

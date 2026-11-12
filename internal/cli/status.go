@@ -25,7 +25,9 @@ problems belong to ` + "`seamark doctor`" + `; status assumes seamark runs
 and asks how much its answers can be trusted.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, root, err := openIndex(opts)
+			// The workspace comes back with the index, so the root line
+			// below starts no second git process.
+			st, probe, ws, err := openIndexWorkspace(opts)
 			if err != nil {
 				return err
 			}
@@ -33,9 +35,13 @@ and asks how much its answers can be trusted.`,
 
 			// The lesson-check report identifies each hook binary against
 			// this binary and its version.
-			s, err := status.GatherAs(st, root, integration.SelfIdentity(version))
+			s, err := status.GatherAs(st, probe.Root, integration.SelfIdentity(version))
 			if err != nil {
 				return err
+			}
+
+			if notice := recordedRootNotice(ws, probe.Root); notice != "" {
+				s.NoteRecordedRoot(probe.Root, notice)
 			}
 
 			if asJSON {

@@ -145,6 +145,11 @@ parse. `--json` carries the count as
 `coverage.files_deleted`, and `seamark index` adds
 `(47 deleted in the working tree)` after the seen count.
 
+When the index records another root than the workspace, as in a copied
+or moved checkout, a `root` line comes first. It names that root, says
+that the report describes it, and names the `seamark index` run that
+records this workspace. `--json` carries the root as `recorded_root`.
+
 The `clients` block is the per-agent view: which hooks and which MCP
 registration each agent has, the native evidence behind them (a
 recorded check on a named version and surface, a pending check, or
