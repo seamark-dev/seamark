@@ -92,10 +92,18 @@ asks for a new review in `/hooks`.
 Setup keeps the matcher of an existing hook, because a narrow matcher can
 be your choice. When the matcher of a seamark hook in the file that setup
 manages never fires for the hook's tools, init and doctor warn and name
-the matcher to set in that file. A setup run does not change it. A Codex
+the matcher to set in that file. A setup run does not change it. When
+another handler of setup in that file already runs the hook for each of
+its tools, init and doctor name the removal of the idle handler instead,
+because a matcher edit would make the hook run twice. A Codex
 gate handler in the Claude Code form is the exception when `seamark init
 --client codex` removes it, because another gate handler stays: doctor
 names that setup run instead.
+
+Codex runs every matching handler, so two handlers of the seamark gate
+or lessons hook in `.codex/hooks.json` that run for one tool run that
+hook twice. init and doctor warn and ask you to keep one of them. Setup
+removes neither, because it does not choose which keys you keep.
 
 ## What each agent supports
 
@@ -658,7 +666,12 @@ The rules that hold every adapter to the same behavior:
   `Plan` keeps at most one such handler: none when a Codex-form handler
   runs for Bash, else the first one that runs, rewritten in place to the
   managed command with its matcher and other keys. It removes the
-  others, and an entry left without handlers. Without `--gate-mode`,
+  others, and an entry left without handlers. `Plan` keeps every
+  Codex-form handler, so it reads the merged document and warns when two
+  of them still run for one tool, as `Inspect` does. The merged document
+  also picks the route for a Codex-form handler that never fires, because
+  the merge rewrites a handler whose binary is missing, and that handler
+  then runs. Without `--gate-mode`,
   enforce in either form wins, and each removal or rewrite names the
   `/hooks` review that the new trust hash needs.
 - **A finding names its document once.** `Finding.Path` is the document

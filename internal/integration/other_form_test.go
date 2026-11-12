@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -190,20 +191,29 @@ func TestCodexSetupKeepsOneGateHandler(t *testing.T) {
 				assert.Equal(t, "open the project in Codex and review the hooks with /hooks", f.Action)
 			}
 
-			// Each matcher warning names a handler that the written file holds,
-			// so the advised edit has a hook to change.
+			// Each matcher or removal warning names a handler that the written
+			// file holds, so the advised edit has a hook to change.
 			matchers := warningsWith(plan.Findings, `set the matcher of that hook to "Bash" in .codex/hooks.json`)
-			for _, f := range matchers {
+			removals := warningsWith(plan.Findings, "remove that handler from .codex/hooks.json")
+
+			for _, f := range append(slices.Clone(matchers), removals...) {
 				_, rest, _ := strings.Cut(f.Reason, "`")
 				command, _, _ := strings.Cut(rest, "`")
 				assert.Contains(t, commandsIn(writeFor(t, plan, codexHooksFile), "PreToolUse"), command, f.Reason)
 			}
 
-			// The ash entry keeps its matcher: setup never changes one.
+			// The ash entry keeps its matcher: setup never changes one. The
+			// rewritten handler runs for Bash, so a matcher edit on the ash
+			// entry would start a second gate handler. The plan names its
+			// removal instead.
 			if name == "the Codex form never fires" {
 				assert.Equal(t, []any{"ash", "Bash", "apply_patch"}, matchersOf(writeFor(t, plan, codexHooksFile), "PreToolUse"))
-				assert.Len(t, matchers, 1)
+				assert.Empty(t, matchers)
+				assert.Len(t, removals, 1)
 			}
+
+			// One gate handler runs after the plan, so no finding says twice.
+			assert.Empty(t, findingsWith(plan.Findings, "runs twice"))
 
 			if name == "a handler beside a foreign hook" {
 				assert.Contains(t, commandsIn(writeFor(t, plan, codexHooksFile), "PreToolUse"), "my-linter")

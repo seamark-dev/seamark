@@ -100,7 +100,11 @@ model-boundary delivery.
   now warn and name the matcher to set in that file, in place of a
   `seamark init` run that changes nothing. Setup still keeps the matcher.
   For a Codex gate handler in the Claude Code form that
-  `init --client codex` removes, doctor names that run instead.
+  `init --client codex` removes, doctor names that run instead. When
+  another handler of setup already runs the hook for its tools, both
+  commands name the removal of the idle handler, not a matcher edit, and
+  two Codex handlers of the gate or lessons hook that both run now get a
+  warning that the hook runs twice.
 - **Gate failure wording.** `init` and the docs no longer say that
   every gate failure fails closed under enforce. The gate's own failures
   still exit 2 and block. A hook that the client stops at its timeout,

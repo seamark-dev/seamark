@@ -354,6 +354,25 @@ func TestRunNamesTheMatcherOfAHookThatNeverFires(t *testing.T) {
 	}
 }
 
+func TestRunWarnsAboutTwoManagedCodexGateHandlers(t *testing.T) {
+	// Codex runs both handlers, so the codex line warns. Each handler runs
+	// the gate, so the hooks line stays ok.
+	root, dbPath := fixtureRoot(t)
+	gate := `{"matcher":"Bash","hooks":[{"type":"command","command":"/bin/seamark gate --hook --client codex"}]}`
+	document := `{"hooks":{"PreToolUse":[` + gate + `,` + gate + `,` +
+		`{"matcher":"apply_patch","hooks":[{"type":"command","command":"/bin/seamark lessons --hook --client codex"}]}]}}`
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"), []byte(document), 0o644))
+
+	checks := byName(Run(root, dbPath, "test"))
+
+	assert.Equal(t, StateOK, checks["hooks"].State)
+	assert.Equal(t, StateWarn, checks["codex"].State)
+	assert.Contains(t, checks["codex"].Detail, "so the hook runs twice")
+	assert.Contains(t, checks["codex"].Fix, "keep one of those handlers")
+}
+
 func TestRunDetectsMissingAgentBinary(t *testing.T) {
 	root, dbPath := fixtureRoot(t)
 

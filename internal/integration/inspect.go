@@ -633,9 +633,16 @@ func (s *hookSource) applyExecution(spec hooks.Spec, execution hooks.Execution) 
 // classification can name it, and runningSources drops it for every
 // other consumer. An owned lifecycle command of the managed document
 // under a matcher that never fires is kept in the same way, with a
-// warning that names the matcher.
+// warning that names the matcher. When other managed handlers of the
+// document already run the hook for each tool, that warning names the
+// removal of the idle handler instead.
 func documentSources(findings *[]Finding, document map[string]any, rules hookRules, path string, spec hooks.Spec, managed bool) []hookSource {
 	var sources []hookSource
+
+	// idle maps the index of each idle source to the index of its finding.
+	// The walk reads the handlers one at a time, so the walk adds the
+	// matcher warning, and its end can replace it.
+	idle := map[int]int{}
 
 	hookMap, _ := document["hooks"].(map[string]any)
 	eventHooks, _ := hookMap[spec.Event].([]any)
@@ -678,6 +685,7 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		if len(source.tools) == 0 {
 			if binary != "" && managed && hookType == "command" && lifecycleSpec(spec) {
 				source.idle, source.matcher, source.mode = true, matcher, ""
+				idle[len(sources)] = len(*findings)
 				*findings = append(*findings, idleMatcherFinding(source, spec))
 				sources = append(sources, source)
 
@@ -721,7 +729,40 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		sources = append(sources, source)
 	})
 
+	// Only the end of the walk knows the other handlers, so the route of
+	// each idle handler is decided here.
+	covered := managedRunsEveryTool(spec, sources)
+
+	for at, finding := range idle {
+		(*findings)[finding] = idleFinding(sources[at], spec, covered)
+	}
+
 	return sources
+}
+
+// runsManaged keeps the managed sources that certainly run the hook. An
+// inert source has no tools, so coveredTools skips it.
+func runsManaged(s hookSource) bool { return s.managed && certainSource(s) && !s.inert() }
+
+// managedRunsEveryTool reports whether the managed sources that
+// certainly run the hook cover every tool of the spec together. Only
+// then does the removal of an idle handler keep the whole coverage.
+func managedRunsEveryTool(spec hooks.Spec, sources []hookSource) bool {
+	return len(coveredTools(spec, sources, runsManaged)) == len(spec.Tools())
+}
+
+// idleFinding returns the warning about an idle managed source. covered
+// says whether other managed handlers already run the hook for each
+// tool. Then a matcher edit starts a second handler, so the finding
+// names the removal. A handler in another client's form keeps the
+// matcher warning, because the setup reduction of that form finds that
+// warning by value. Setup and inspection share this rule.
+func idleFinding(s hookSource, spec hooks.Spec, covered bool) Finding {
+	if covered && !s.otherForm {
+		return coveredIdleFinding(s, spec)
+	}
+
+	return idleMatcherFinding(s, spec)
 }
 
 // executionFindingsIn appends the execution findings of every definition
@@ -1005,7 +1046,9 @@ func sourcePaths(sources []hookSource) string {
 // another key, so Claude Code runs both for that tool. An uncertain
 // definition is also a warning, because setup cannot tell whether the
 // hook runs twice, but the reader can. The reason never starts with the
-// path, because every consumer prefixes it.
+// path, because every consumer prefixes it. Two managed definitions get
+// no finding here. codexDuplicateFindings names them for Codex, and
+// Claude Code runs managed definitions with one handler key once.
 func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) {
 	managedTools := coveredTools(spec, sources, managedSource)
 	managedMode := hookMode(sources, managedSource)
@@ -1194,6 +1237,23 @@ func idleMatcherFinding(s hookSource, spec hooks.Spec) Finding {
 		Reason: fmt.Sprintf("has %#q under %s %q, which never runs for %s; setup does not change the matcher of an existing hook",
 			describeCommand(s.command), spec.Event, render.Sanitize(s.matcher), strings.Join(toolNames(spec.Tools()), ", ")),
 		Action: idleMatcherAction(s, spec),
+	}
+}
+
+// coveredIdleFinding names a managed command under a matcher that fires
+// for none of the spec's tools, while other managed handlers already run
+// the hook for each tool. A matcher edit would make the hook run twice,
+// so the action removes the idle handler. Setup and inspection share it,
+// so init and doctor say it alike.
+func coveredIdleFinding(s hookSource, spec hooks.Spec) Finding {
+	tools := strings.Join(toolNames(spec.Tools()), ", ")
+
+	return Finding{
+		Level: FindingWarning,
+		Path:  s.path,
+		Reason: fmt.Sprintf("has %#q under %s %q, which never runs for %s; another handler of the managed %s hook already runs for %s",
+			describeCommand(s.command), spec.Event, render.Sanitize(s.matcher), tools, spec.Name, tools),
+		Action: "remove that handler from " + s.path,
 	}
 }
 
