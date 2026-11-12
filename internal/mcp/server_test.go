@@ -263,9 +263,24 @@ func TestResourcesAndPrompts(t *testing.T) {
 		`{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"seamark://status"}}`,
 	)
 
+	// The exact list, in order: the `seamark mcp` help in cli/mcp.go names
+	// each resource, so a new one must reach that help too.
+	var listed struct {
+		Resources []struct {
+			URI string `json:"uri"`
+		} `json:"resources"`
+	}
+
 	require.Nil(t, resps["1"].Error)
-	assert.Contains(t, string(resps["1"].Result), "seamark://orient")
-	assert.Contains(t, string(resps["1"].Result), "seamark://status")
+	require.NoError(t, json.Unmarshal(resps["1"].Result, &listed))
+
+	uris := make([]string, 0, len(listed.Resources))
+	for _, r := range listed.Resources {
+		uris = append(uris, r.URI)
+	}
+
+	assert.Equal(t, []string{"seamark://orient", "seamark://status"}, uris,
+		"the `seamark mcp` help in cli/mcp.go names each resource; update it with this list")
 
 	var read struct {
 		Contents []struct {
