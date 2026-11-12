@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -237,6 +238,30 @@ func TestRunWarnsWhenEveryHookBinaryIsMissing(t *testing.T) {
 			assert.Contains(t, hooks.Fix, tc.route+"`, which rewrites the hook command")
 		})
 	}
+}
+
+func TestRunNamesWhyAHookBinaryCannotStart(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no execute bit")
+	}
+
+	root, dbPath := fixtureRoot(t)
+
+	// A file with mode 644 exists, so the warning names the execute bit,
+	// not a missing path.
+	plain := filepath.Join(t.TempDir(), "seamark")
+	require.NoError(t, os.WriteFile(plain, []byte("text"), 0o644))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
+			`{"type":"command","command":"`+plain+` gate --hook"}]}]}}`), 0o644))
+
+	hooks := byName(Run(root, dbPath, "test"))["hooks"]
+
+	assert.Equal(t, StateWarn, hooks.State)
+	assert.Contains(t, hooks.Detail, "gate hook cannot start from .claude/settings.json: "+plain+" has no execute bit")
+	assert.NotContains(t, hooks.Detail, "is missing")
 }
 
 func TestRunNamesTheMatcherOfAHookThatNeverFires(t *testing.T) {

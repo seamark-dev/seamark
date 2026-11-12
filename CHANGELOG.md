@@ -85,8 +85,9 @@ model-boundary delivery.
 - **Hook binaries that do not exist.** Setup, doctor, and status warn
   about a seamark hook whose binary path names no executable file, and
   no longer report such a hook as installed or count its gate mode. The
-  warning names the setup run that rewrites the command, or the hand
-  edit for `.claude/settings.local.json`.
+  warning says why: the path is missing, is not a regular file, or has
+  no execute bit. It names the setup run that rewrites the command, or
+  the hand edit for `.claude/settings.local.json`.
 - **Codex gate in the Claude Code form.** A `gate --hook` or
   `gate --enforce --hook` handler without `--client codex` in
   `.codex/hooks.json` runs and blocks in Codex. Doctor and status now

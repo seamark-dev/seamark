@@ -134,6 +134,15 @@ func releaseCore(version string) ([3]int, bool) {
 	return core, true
 }
 
+// The causes of a hook binary that the client cannot start. The
+// inspection prints one after the binary path, so each must read as a
+// predicate. Each names what the stat saw, so the user knows what to fix.
+const (
+	binaryAbsent     = "is missing"
+	binaryNotRegular = "is not a regular file"
+	binaryNoExecBit  = "has no execute bit"
+)
+
 // statHookBinary decides whether a hook binary can start, without
 // running it. It returns the file information of a binary that can
 // start, and an empty state. Otherwise it returns BinaryUnknown or
@@ -143,37 +152,41 @@ func releaseCore(version string) ([3]int, bool) {
 // is not regular, or that has no execute bit, is missing, because the
 // client cannot start it. identifyBinary and the lifecycle hook
 // inspection share this rule, so they never disagree about one path.
-func statHookBinary(binary string) (info fs.FileInfo, state string) {
+// For a missing binary, cause names what the stat saw, so the warning
+// can tell an absent path from a file that the client cannot run.
+func statHookBinary(binary string) (info fs.FileInfo, state, cause string) {
 	if !filepath.IsAbs(binary) {
-		return nil, lessoncheck.BinaryUnknown
+		return nil, lessoncheck.BinaryUnknown, ""
 	}
 
 	info, err := os.Stat(binary)
 
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return nil, lessoncheck.BinaryMissing
+		return nil, lessoncheck.BinaryMissing, binaryAbsent
 	case err != nil:
-		return nil, lessoncheck.BinaryUnknown
-	case !info.Mode().IsRegular(), runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0:
-		return nil, lessoncheck.BinaryMissing
+		return nil, lessoncheck.BinaryUnknown, ""
+	case !info.Mode().IsRegular():
+		return nil, lessoncheck.BinaryMissing, binaryNotRegular
+	case runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0:
+		return nil, lessoncheck.BinaryMissing, binaryNoExecBit
 	}
 
-	return info, ""
+	return info, "", ""
 }
 
-// hookBinaryMissing reports whether the client cannot start the binary
-// of a lifecycle hook, by the rule of statHookBinary. An unknown state is
-// not missing, so a relative command never gets a warning. A fixture
-// binary of the tests counts as present.
-func hookBinaryMissing(binary string) bool {
+// hookBinaryFault returns why the client cannot start the binary of a
+// lifecycle hook, by the rule of statHookBinary, or "" when it can. An
+// unknown state is no fault, so a relative command never gets a warning.
+// A fixture binary of the tests counts as present.
+func hookBinaryFault(binary string) string {
 	if fixtureHookBinaries[binary] {
-		return false
+		return ""
 	}
 
-	_, state := statHookBinary(binary)
+	_, _, cause := statHookBinary(binary)
 
-	return state == lessoncheck.BinaryMissing
+	return cause
 }
 
 // fixtureHookBinaries holds the hook binary paths that the lifecycle
@@ -206,7 +219,7 @@ type binaryReading struct {
 // so it reads as unknown. A stat error other than absence is unknown
 // too, never missing: an unreadable file is not an absent one.
 func identifyBinary(binary string, self BinaryIdentity) binaryReading {
-	info, state := statHookBinary(binary)
+	info, state, _ := statHookBinary(binary)
 	if state != "" {
 		return binaryReading{state: state}
 	}

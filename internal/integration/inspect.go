@@ -347,9 +347,13 @@ type hookSource struct {
 	filter string
 	// missing is the binary path of an owned lifecycle command that the
 	// client cannot start, or "". Such a source has no tools and no mode,
-	// so it counts for nothing. Only classifyHook reads it, to name the
-	// broken definition when no other definition runs the hook.
+	// so it counts for nothing. classifyHook and missingBinaryFinding read
+	// it to name the broken definition. cause says why the client cannot
+	// start that binary: it is missing, is not a regular file, or has no
+	// execute bit. The finding takes it from here and never stats again,
+	// so a setup plan can rebuild the same finding and remove it.
 	missing string
+	cause   string
 	// idle is true for an owned lifecycle command of the managed document
 	// under a matcher that fires for none of the spec's tools. matcher is
 	// that matcher. Such a source has no tools and no mode, and only
@@ -688,8 +692,14 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		// A binary that the client cannot start blocks nothing and delivers
 		// nothing. The client reads the failure as a non-blocking error. So
 		// the source keeps no tools and no mode, and only its finding counts.
-		if binary != "" && binary != rules.self && lifecycleSpec(spec) && hookBinaryMissing(binary) {
-			source.missing, source.missingAction = binary, missingBinaryAction(rules, path, managed)
+		// The plan runs as rules.self, so it never stats that binary.
+		var cause string
+		if binary != "" && binary != rules.self && lifecycleSpec(spec) {
+			cause = hookBinaryFault(binary)
+		}
+
+		if cause != "" {
+			source.missing, source.cause, source.missingAction = binary, cause, missingBinaryAction(rules, path, managed)
 			gate := source.mode != ""
 			source.tools, source.mode = nil, ""
 
@@ -953,7 +963,8 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource
 		entry.Action = fmt.Sprintf("remove the `if` field from the %s hook in %s", spec.Event, sources[never].path)
 	case broken >= 0:
 		entry.State = StatePartial
-		entry.Detail = fmt.Sprintf("%s cannot start from %s: %s is missing", name, all[broken].path, render.Sanitize(all[broken].missing))
+		entry.Detail = fmt.Sprintf("%s cannot start from %s: %s %s", name, all[broken].path,
+			render.Sanitize(all[broken].missing), all[broken].cause)
 		entry.Action = all[broken].missingAction
 	case idle >= 0:
 		entry.State = StatePartial
@@ -1140,8 +1151,8 @@ func missingBinaryAction(rules hookRules, path string, managed bool) string {
 // so the hook does nothing. A gate hook then blocks no verdict, whatever
 // its mode says. Setup and inspection share it, so both say it alike.
 func missingBinaryFinding(s hookSource, spec hooks.Spec, gate bool) Finding {
-	reason := fmt.Sprintf("has %#q, whose binary %s is missing, so the client cannot start the seamark %s hook",
-		describeCommand(s.command), render.Sanitize(s.missing), spec.Name)
+	reason := fmt.Sprintf("has %#q, whose binary %s %s, so the client cannot start the seamark %s hook",
+		describeCommand(s.command), render.Sanitize(s.missing), s.cause, spec.Name)
 
 	if gate {
 		reason += ", and no verdict blocks"

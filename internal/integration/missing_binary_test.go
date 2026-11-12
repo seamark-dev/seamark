@@ -49,18 +49,31 @@ func TestHookBinaryMissingFollowsTheRuleOfIdentifyBinary(t *testing.T) {
 	folder := filepath.Join(dir, "folder", "seamark")
 	require.NoError(t, os.MkdirAll(folder, 0o755))
 
-	cases := []struct {
-		name, binary, state string
-	}{
-		{"an absent absolute path", absentBinary, lessoncheck.BinaryMissing},
-		{"a directory", folder, lessoncheck.BinaryMissing},
-		{"a relative command", "seamark", lessoncheck.BinaryUnknown},
-		{"a good file", good, ""},
+	type binaryCase struct{ name, binary, state, cause string }
+
+	// A directory with an execute bit fails only the regular-file check.
+	cases := []binaryCase{
+		{"an absent absolute path", absentBinary, lessoncheck.BinaryMissing, binaryAbsent},
+		{"a directory", folder, lessoncheck.BinaryMissing, binaryNotRegular},
+		{"a relative command", "seamark", lessoncheck.BinaryUnknown, ""},
+		{"a good file", good, "", ""},
 	}
 
 	// Windows has no execute bit, so a plain file can start there.
 	if runtime.GOOS != "windows" {
-		cases = append(cases, struct{ name, binary, state string }{"a file without an execute bit", plain, lessoncheck.BinaryMissing})
+		cases = append(cases, binaryCase{"a file without an execute bit", plain, lessoncheck.BinaryMissing, binaryNoExecBit})
+	}
+
+	// A directory without an execute bit fails both checks. Its cause
+	// shows that the regular-file check comes before the execute-bit
+	// check. The mode goes back before TempDir removes the folder.
+	if runtime.GOOS != "windows" {
+		bare := filepath.Join(dir, "bare", "seamark")
+		require.NoError(t, os.MkdirAll(bare, 0o755))
+		require.NoError(t, os.Chmod(bare, 0o644))
+		t.Cleanup(func() { _ = os.Chmod(bare, 0o755) })
+
+		cases = append(cases, binaryCase{"a directory without an execute bit", bare, lessoncheck.BinaryMissing, binaryNotRegular})
 	}
 
 	// A folder without permissions makes the stat fail with another error
@@ -73,14 +86,16 @@ func TestHookBinaryMissingFollowsTheRuleOfIdentifyBinary(t *testing.T) {
 		require.NoError(t, os.Chmod(filepath.Dir(locked), 0))
 		t.Cleanup(func() { _ = os.Chmod(filepath.Dir(locked), 0o755) })
 
-		cases = append(cases, struct{ name, binary, state string }{"a file in a locked folder", locked, lessoncheck.BinaryUnknown})
+		cases = append(cases, binaryCase{"a file in a locked folder", locked, lessoncheck.BinaryUnknown, ""})
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, state := statHookBinary(tc.binary)
+			_, state, cause := statHookBinary(tc.binary)
 			assert.Equal(t, tc.state, state)
-			assert.Equal(t, tc.state == lessoncheck.BinaryMissing, hookBinaryMissing(tc.binary))
+			assert.Equal(t, tc.cause, cause)
+			assert.Equal(t, tc.cause, hookBinaryFault(tc.binary))
+			assert.Equal(t, tc.state == lessoncheck.BinaryMissing, hookBinaryFault(tc.binary) != "")
 
 			// identifyBinary reads the same state before it reads a version.
 			if tc.state != "" {
@@ -239,16 +254,117 @@ func TestClaudeHookFollowsAWorkingDefinitionBesideABrokenOne(t *testing.T) {
 }
 
 func TestCodexSetupRewritesAMissingBinaryWithoutAWarning(t *testing.T) {
+	// The plan rebuilds the finding of each managed source and removes it.
+	// Each cause must give the same finding, or a stale warning stays.
+	for name, binary := range brokenBinaries(t) {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, ".codex/hooks.json", bashHook(binary+" gate --hook --client codex"))
+
+			plan := planCodex(t, root, ClientSetup{Hooks: true})
+
+			assert.Empty(t, findingsWith(plan.Findings, "cannot start"), "the merge repairs the managed command")
+			require.Len(t, plan.Writes, 1)
+			assert.Contains(t, string(plan.Writes[0].After), testBinary+" gate --hook --client codex")
+			assert.NotContains(t, string(plan.Writes[0].After), binary)
+			assert.Contains(t, plan.GateHooks, GateHook{Path: codexHooksFile, Mode: hooks.ModeWarn, Managed: true})
+		})
+	}
+}
+
+// brokenBinaries returns one hook binary path for each cause that stops
+// the client: an absent path, a directory, and a file with no execute
+// bit. Windows has no execute bit, so it gets no such file.
+func brokenBinaries(t *testing.T) map[string]string {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	folder := filepath.Join(dir, "folder", "seamark")
+	require.NoError(t, os.MkdirAll(folder, 0o755))
+
+	binaries := map[string]string{"absent": absentBinary, "directory": folder}
+
+	if runtime.GOOS != "windows" {
+		plain := filepath.Join(dir, "plain", "seamark")
+		require.NoError(t, os.MkdirAll(filepath.Dir(plain), 0o755))
+		require.NoError(t, os.WriteFile(plain, []byte("text"), 0o644))
+
+		binaries["no execute bit"] = plain
+	}
+
+	return binaries
+}
+
+func TestClaudeHookBinaryWarningNamesTheCause(t *testing.T) {
+	binaries := brokenBinaries(t)
+
+	cases := map[string]string{"directory": binaryNotRegular, "no execute bit": binaryNoExecBit}
+
+	for name, cause := range cases {
+		binary, ok := binaries[name]
+		if !ok {
+			continue
+		}
+
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeRel(t, root, ".claude/settings.json", bashHook(binary+" gate --hook"))
+
+			insp := claudeSetup{}.Inspect(root)
+
+			gate := findingsAt(insp.Findings, ".claude/settings.json", "cannot start the seamark gate hook")
+			require.Len(t, gate, 1)
+			assert.Contains(t, gate[0].Reason, "whose binary "+binary+" "+cause+", so the client cannot start the seamark gate hook, and no verdict blocks")
+			assert.NotContains(t, gate[0].Reason, binaryAbsent)
+
+			// The setup run rewrites the command to the running binary, so
+			// it clears every cause, and the action does not depend on it.
+			assert.Equal(t, "run `seamark init --client claude`, which rewrites the hook command to the running seamark binary",
+				gate[0].Action)
+
+			commands := entryOf(t, insp, CapabilityCommands)
+			assert.Equal(t, StatePartial, commands.State)
+			assert.Contains(t, commands.Detail, "gate hook cannot start from .claude/settings.json: "+binary+" "+cause)
+			assert.NotContains(t, commands.Detail, binaryAbsent)
+		})
+	}
+}
+
+func TestClaudeLocalHookWithAnUnrunnableBinaryGetsAHandEdit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no execute bit")
+	}
+
 	root := t.TempDir()
-	writeRel(t, root, ".codex/hooks.json", bashHook(absentBinary+" gate --hook --client codex"))
+	applyHooks(t, root, ClaudeID)
+	writeRel(t, root, claudeLocalSettings, bashHook(brokenBinaries(t)["no execute bit"]+" gate --hook"))
 
-	plan := planCodex(t, root, ClientSetup{Hooks: true})
+	insp := claudeSetup{}.Inspect(root)
 
-	assert.Empty(t, findingsWith(plan.Findings, "cannot start"), "the merge repairs the managed command")
-	require.Len(t, plan.Writes, 1)
-	assert.Contains(t, string(plan.Writes[0].After), testBinary+" gate --hook --client codex")
-	assert.NotContains(t, string(plan.Writes[0].After), absentBinary)
-	assert.Contains(t, plan.GateHooks, GateHook{Path: codexHooksFile, Mode: hooks.ModeWarn, Managed: true})
+	local := findingsAt(insp.Findings, claudeLocalSettings, "cannot start the seamark gate hook")
+	require.Len(t, local, 1)
+	assert.Contains(t, local[0].Reason, binaryNoExecBit)
+	assert.Equal(t, "fix the binary path in .claude/settings.local.json, or remove that definition", local[0].Action)
+}
+
+func TestHookBinaryWarningScrubsTheBinaryPath(t *testing.T) {
+	// The settings file holds the binary path, so the path is untrusted
+	// text. status --json writes the detail and the reason with no second
+	// scrub, so the inspection must remove the escape character itself.
+	root := t.TempDir()
+	writeRel(t, root, ".claude/settings.json", bashHook(`'/nonexistent/esc\u001b[2J/seamark' gate --hook`))
+
+	insp := claudeSetup{}.Inspect(root)
+
+	gate := findingsAt(insp.Findings, ".claude/settings.json", "cannot start the seamark gate hook")
+	require.Len(t, gate, 1)
+	assert.Contains(t, gate[0].Reason, "whose binary /nonexistent/esc[2J/seamark is missing")
+	assert.NotContains(t, gate[0].Reason, "\x1b")
+
+	commands := entryOf(t, insp, CapabilityCommands)
+	assert.Contains(t, commands.Detail, "gate hook cannot start from .claude/settings.json: /nonexistent/esc[2J/seamark is missing")
+	assert.NotContains(t, commands.Detail, "\x1b")
 }
 
 func TestRelativeHookCommandGetsNoBinaryCheck(t *testing.T) {

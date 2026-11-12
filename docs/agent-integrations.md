@@ -81,11 +81,13 @@ your user settings (`~/.claude/settings.json`), settings passed with
 not in their reports.
 
 Doctor warns when a seamark hook command names a binary that does not
-exist, or that is not an executable file. The client cannot start such a
-hook, so it blocks nothing and delivers nothing. A committed hook file
-with an absolute path from another machine is one example. For the file
-that setup manages, the fix is a setup run, which rewrites the command
-to the running binary; Codex then asks for a new review in `/hooks`.
+exist, or that is not an executable file. The warning names the cause:
+the path is missing, is not a regular file, or has no execute bit. The
+client cannot start such a hook, so it blocks nothing and delivers
+nothing. A committed hook file with an absolute path from another
+machine is one example. For the file that setup manages, the fix is a
+setup run, which rewrites the command to the running binary; Codex then
+asks for a new review in `/hooks`.
 
 Setup keeps the matcher of an existing hook, because a narrow matcher can
 be your choice. When the matcher of a seamark hook in the file that setup
