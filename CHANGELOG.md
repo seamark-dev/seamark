@@ -206,15 +206,18 @@ model-boundary delivery.
   `-- ` no longer reads as a file header.
 - **Git config and the git output that seamark reads.** `check` and MCP
   `check` run the `git diff HEAD` fallback with fixed color, external
-  diff, textconv, path prefix, relative path, and submodule options, so a
-  setting such as `color.ui=always` no longer turns a change into an
-  allow. History mining, the `mostly` names of partners, fix mining, the
-  index freshness check, and the LSP use the same options, plus fixed
-  signature, rename-follow, path-quoting, untracked-file, and revert
-  search options. A setting such as `color.ui=always`,
-  `log.showSignature`, or `diff.external` no longer drops a `mostly`
-  name, loses or adds a fix finding, or hides an edit from the next
-  index run. Fix findings store a non-ASCII path raw, as history does.
+  diff, textconv, path prefix, relative path, submodule, and rename
+  detection options, so a setting such as `color.ui=always` or
+  `diff.renames=copies` no longer turns a change into an allow. History
+  mining, the `mostly` names of partners, fix mining, the index
+  freshness check, and the LSP use the same options, plus fixed
+  signature, rename-follow, root-commit, path-quoting, untracked-file,
+  and revert search options. A setting such as `color.ui=always`,
+  `log.showSignature`, `log.showRoot=false`, or `diff.external` no
+  longer drops a `mostly` name, loses or adds a fix finding or a
+  co-change pair, or hides an edit from the next index run. Fix findings
+  store a non-ASCII path raw, as history does, and list a renamed file
+  under its old and its new path, not as `old => new`.
 - **MCP server after an upgrade.** A running MCP server keeps the
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the

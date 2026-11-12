@@ -535,7 +535,10 @@ func duplicatePatchShas(root, since string) map[string]bool {
 // prMap supplies the merge-topology PR fallback; an explicit reference
 // in the message always wins over inference.
 func buildFinding(root string, c commit, prMap map[string]int) (model.Finding, bool) {
-	stat, err := gitOut(root, history.ParsedGitArgs("show", "--format=", "--numstat", c.sha)...)
+	// --no-renames lists a renamed file under its old and its new path.
+	// With rename detection, numstat writes "old => new" as one path, and
+	// that path does not exist. History mining lists renames the same way.
+	stat, err := gitOut(root, history.ParsedGitArgs("show", "--format=", "--numstat", "--no-renames", c.sha)...)
 	if err != nil {
 		return model.Finding{}, false
 	}
@@ -567,7 +570,8 @@ func buildFinding(root string, c commit, prMap map[string]int) (model.Finding, b
 // the merge's whole diff against its first parent — what the pull
 // request changed — under the same caps as a single commit's patch.
 func buildMergeFinding(root string, m mergeCommit) (model.Finding, bool) {
-	stat, err := gitOut(root, history.ParsedGitArgs("diff", "--numstat", m.sha+"^1", m.sha)...)
+	// --no-renames keeps each path real, as in buildFinding.
+	stat, err := gitOut(root, history.ParsedGitArgs("diff", "--numstat", "--no-renames", m.sha+"^1", m.sha)...)
 	if err != nil {
 		return model.Finding{}, false
 	}

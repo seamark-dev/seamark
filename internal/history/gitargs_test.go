@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,9 +36,11 @@ func TestParsedGitArgsList(t *testing.T) {
 		"-c", "diff.relative=false",
 		"-c", "log.follow=false",
 		"-c", "log.showSignature=false",
+		"-c", "log.showRoot=true",
 		"log",
 		"--no-color", "--no-ext-diff", "--no-textconv",
 		"--src-prefix=a/", "--dst-prefix=b/", "--submodule=short",
+		"--find-renames",
 		"-p", "--", "a.go",
 	}, ParsedGitArgs("log", "-p", "--", "a.go"))
 }
@@ -55,6 +58,15 @@ func TestParsedGitArgsRunWithEachSubcommand(t *testing.T) {
 	isolatedGit(t, root, "commit", "-q", "-m", "init")
 	require.NoError(t, os.WriteFile(file, []byte("package a\n\nvar x = 1\n"), 0o644))
 	isolatedGit(t, root, "commit", "-q", "-am", "add x")
+
+	// A rename commit and a staged rename show that the fixed rename
+	// option writes the default rename records.
+	writeLines(t, filepath.Join(root, "r.txt"), 20)
+	isolatedGit(t, root, "add", "-A")
+	isolatedGit(t, root, "commit", "-q", "-m", "add r")
+	isolatedGit(t, root, "mv", "r.txt", "s.txt")
+	isolatedGit(t, root, "commit", "-q", "-m", "rename r")
+	isolatedGit(t, root, "mv", "s.txt", "u.txt")
 	require.NoError(t, os.WriteFile(file, []byte("package a\n\nvar x = 2\n"), 0o644))
 
 	cases := [][]string{
@@ -73,5 +85,52 @@ func TestParsedGitArgsRunWithEachSubcommand(t *testing.T) {
 			got := isolatedGit(t, root, ParsedGitArgs(c[0], c[1:]...)...)
 			assert.Equal(t, want, got)
 		})
+	}
+}
+
+// writeLines writes n numbered lines to path, so git can match a rename
+// or a copy of the file by its content.
+func writeLines(t *testing.T, path string, n int) {
+	t.Helper()
+
+	var b strings.Builder
+	for i := range n {
+		b.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+
+	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o644))
+}
+
+func TestParsedGitArgsCallerNoRenamesWins(t *testing.T) {
+	// History mining and the mostly names pass --no-renames after the
+	// fixed --find-renames. Git reads the last rename option, so a rename
+	// lists as two plain paths, also under diff.renames=copies.
+	root := t.TempDir()
+
+	isolatedGit(t, root, "init", "-q", "-b", "main")
+	writeLines(t, filepath.Join(root, "a.txt"), 20)
+	isolatedGit(t, root, "add", "-A")
+	isolatedGit(t, root, "commit", "-q", "-m", "init")
+	isolatedGit(t, root, "mv", "a.txt", "c.txt")
+	isolatedGit(t, root, "commit", "-q", "-m", "rename")
+
+	cases := [][]string{
+		{"log", "-1", "--numstat", "--no-renames", "--format="},
+		{"show", "--numstat", "--no-renames", "--format="},
+	}
+
+	for _, config := range []string{"", "copies"} {
+		if config != "" {
+			isolatedGit(t, root, "config", "diff.renames", config)
+		}
+
+		for _, c := range cases {
+			t.Run(config+" "+strings.Join(c, " "), func(t *testing.T) {
+				got := isolatedGit(t, root, ParsedGitArgs(c[0], c[1:]...)...)
+				assert.Contains(t, got, "0\t20\ta.txt\n")
+				assert.Contains(t, got, "20\t0\tc.txt\n")
+				assert.NotContains(t, got, "=>")
+			})
+		}
 	}
 }

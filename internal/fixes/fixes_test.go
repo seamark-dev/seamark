@@ -825,3 +825,128 @@ func TestMineStoresRawNonASCIIPaths(t *testing.T) {
 
 	assert.Empty(t, want, "each source yields one finding")
 }
+
+// numberedGo returns a Go file with n numbered functions, so git can
+// match a rename or a copy of the file by its content.
+func numberedGo(pkg string, n int) string {
+	var b strings.Builder
+
+	b.WriteString("package " + pkg + "\n")
+
+	for i := range n {
+		fmt.Fprintf(&b, "\nfunc F%d() int { return %d }\n", i, i)
+	}
+
+	return b.String()
+}
+
+// renameRepo builds a repository whose root commit is a fix, then a fix
+// commit that renames a file, a fix/ branch merge that renames a file,
+// and a fix commit that edits a file and adds a near copy of it.
+func renameRepo(t *testing.T) string {
+	t.Helper()
+
+	root, commit, git := repo(t)
+
+	commit("fix: guard the loader against a nil store", map[string]string{
+		"pkg/load.go":  numberedGo("pkg", 12),
+		"pkg/save.go":  numberedGo("pkg", 14),
+		"pkg/cache.go": numberedGo("pkg", 16),
+	})
+
+	git("mv", "pkg/load.go", "pkg/loader.go")
+	commit("fix: keep the loader under its package name", nil)
+
+	git("checkout", "-b", "fix/save-name")
+	git("mv", "pkg/save.go", "pkg/saver.go")
+	commit("name the saver after its role", nil)
+	git("checkout", "main")
+	git("merge", "--no-ff", "fix/save-name", "-m", "Merge branch 'fix/save-name'")
+
+	cache := numberedGo("pkg", 16)
+	edited := strings.Replace(cache, "return 3 }", "return -3 }", 1)
+	commit("fix: return a negative cache marker", map[string]string{
+		"pkg/cache.go":     edited,
+		"pkg/cachecopy.go": edited + "\n// Copy keeps the old marker.\n",
+	})
+
+	return root
+}
+
+func TestMineIgnoresRenameAndRootConfig(t *testing.T) {
+	// Fix mining lists a renamed file under its old and its new path, as
+	// history mining does. diff.renames and log.showRoot must not change
+	// the findings: false or copies changed the paths, and log.showRoot=false
+	// dropped the root fix commit.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root := renameRepo(t)
+
+	want, err := Mine(root, Options{})
+	require.NoError(t, err)
+	require.Len(t, want.Findings, 4, "the root fix, the rename fix, the branch rename, and the copy fix")
+
+	var rooted, renamed, branch bool
+
+	for _, f := range want.Findings {
+		for _, p := range f.Paths {
+			assert.NotContains(t, p, "=>", "a stored path is a real path")
+		}
+
+		switch {
+		case strings.Contains(f.Body, "against a nil store"):
+			rooted = true
+		case f.Source == model.SourceFixBranch:
+			branch = true
+
+			assert.ElementsMatch(t, []string{"pkg/save.go", "pkg/saver.go"}, f.Paths)
+		case strings.Contains(f.Body, "under its package name"):
+			renamed = true
+
+			assert.ElementsMatch(t, []string{"pkg/load.go", "pkg/loader.go"}, f.Paths)
+		}
+	}
+
+	assert.True(t, rooted, "the root fix is a finding")
+	assert.True(t, renamed, "the rename fix is a finding")
+	assert.True(t, branch, "the branch rename is a finding")
+
+	cases := []struct {
+		key, value string
+		// args is a plain git call whose text the setting changes.
+		args []string
+	}{
+		{key: "diff.renames", value: "copies", args: []string{"show", "--numstat", "--format=", "HEAD"}},
+		{key: "diff.renames", value: "false", args: []string{"show", "--numstat", "--format=", "HEAD~1^2"}},
+		{key: "log.showRoot", value: "false", args: []string{"log", "--numstat", "--format=%s"}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.key+"="+c.value, func(t *testing.T) {
+			plain := func() string {
+				out, err := exec.Command("git", append([]string{"-C", root}, c.args...)...).Output()
+				require.NoError(t, err)
+
+				return string(out)
+			}
+
+			before := plain()
+
+			gitConfig := func(args ...string) {
+				out, err := exec.Command("git", append([]string{"-C", root, "config"}, args...)...).CombinedOutput()
+				require.NoError(t, err, "%s", out)
+			}
+
+			gitConfig(c.key, c.value)
+			t.Cleanup(func() { gitConfig("--unset", c.key) })
+
+			// The case is real only when it changes the plain git text.
+			require.NotEqual(t, before, plain(), "plain git %v", c.args)
+
+			got, err := Mine(root, Options{})
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}

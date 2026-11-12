@@ -4,6 +4,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -142,4 +144,72 @@ func TestGitDiffHeadIgnoresDiffSubmodule(t *testing.T) {
 	got, err := GitDiffHead(root)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+}
+
+// numberedLines returns n numbered lines, so git can match a rename or a
+// copy of the file by its content.
+func numberedLines(n int) string {
+	var b strings.Builder
+	for i := range n {
+		b.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+
+	return b.String()
+}
+
+func TestGitDiffHeadIgnoresRenameConfig(t *testing.T) {
+	// diff.renames=false writes a rename as a deletion and an addition of
+	// every line. diff.renames=copies writes a near-copy as one record with
+	// the differing lines only. Both change the files and lines that check
+	// reads, so GitDiffHead must keep git's default rename detection.
+	body := numberedLines(20)
+
+	rename := func(t *testing.T, root string) {
+		runGit(t, root, "mv", "sub/r.txt", "sub/s.txt")
+	}
+
+	nearCopy := func(t *testing.T, root string) {
+		edited := strings.Replace(body, "line 3\n", "line three\n", 1)
+		require.NoError(t, os.WriteFile(filepath.Join(root, "sub", "r.txt"), []byte(edited), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "sub", "copy.txt"), []byte(edited+"extra\n"), 0o644))
+		runGit(t, root, "add", "-A")
+	}
+
+	// Each setting changes only one shape. diff.renames=copies writes a
+	// pure rename as the default does, and diff.renames=false leaves a copy
+	// as it is, because the default finds no copies.
+	cases := []struct {
+		name  string
+		value string
+		setup func(t *testing.T, root string)
+	}{
+		{name: "rename", value: "false", setup: rename},
+		{name: "near-copy", value: "copies", setup: nearCopy},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name+" diff.renames="+c.value, func(t *testing.T) {
+			root := gitDiffRepo(t)
+
+			require.NoError(t, os.WriteFile(filepath.Join(root, "sub", "r.txt"), []byte(body), 0o644))
+			runGit(t, root, "add", "-A")
+			runGit(t, root, "commit", "-q", "-m", "add r")
+			c.setup(t, root)
+
+			want, err := GitDiffHead(root)
+			require.NoError(t, err)
+
+			plain := runGit(t, root, "diff", "HEAD")
+			require.Equal(t, want, plain, "the default config gives the plain text")
+
+			runGit(t, root, "config", "diff.renames", c.value)
+
+			// The case is real only when it changes a plain git diff HEAD.
+			assert.NotEqual(t, plain, runGit(t, root, "diff", "HEAD"), "plain git diff HEAD")
+
+			got, err := GitDiffHead(root)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
 }

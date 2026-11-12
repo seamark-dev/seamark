@@ -132,10 +132,10 @@ slow diff to a file first
 
 The fallback runs `git diff HEAD` with fixed options: no color, no
 external diff, no textconv, the `a/` and `b/` path prefixes, raw
-non-ASCII paths, paths from the top of the work tree, and the short
-submodule form. A git setting
-such as `color.ui=always` or `diff.external` therefore cannot change the
-diff that `check` reads.
+non-ASCII paths, paths from the top of the work tree, the short
+submodule form, and git's default rename detection (renames, not
+copies). A git setting such as `color.ui=always`, `diff.external`, or
+`diff.renames` therefore cannot change the diff that `check` reads.
 
 A diff with no changed file never reads as a clean allow. Empty output
 of `git diff HEAD` allows with the note `no changed files in git diff

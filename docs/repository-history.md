@@ -76,13 +76,27 @@ on every file git tracks.
 
 History mining, the `mostly` names, fix mining, and the index freshness
 check run git with fixed options: no color, no external diff, no
-textconv, no signature lines, no rename following, the `a/` and `b/`
-path prefixes, raw non-ASCII paths, paths from the top of the work tree,
-the short submodule form, the listing of untracked files, and basic
-regular expressions for the revert search. A setting such as
-`color.ui=always`, `diff.external`, `log.showSignature`,
-`grep.patternType`, or `status.showUntrackedFiles=no` therefore cannot
-change what seamark reads.
+textconv, no signature lines, no rename following, a fixed rename
+detection, the diff of the root commit, the `a/` and `b/` path
+prefixes, raw non-ASCII paths, paths from the top of the work tree, the
+short submodule form, the listing of untracked files, and basic regular
+expressions for the revert search. A setting such as `color.ui=always`,
+`diff.external`, `diff.renames`, `log.showRoot=false`,
+`log.showSignature`, `grep.patternType`, or
+`status.showUntrackedFiles=no` therefore cannot change what seamark
+reads.
+
+The rename detection differs by reader:
+
+- History mining and the `mostly` names read history without rename
+  detection. A rename is a deletion of the old path and an addition of
+  the new path, so a renamed file starts new history at its new path.
+- Fix mining reads the file list of a fix without rename detection, so
+  a finding lists a renamed file under its old and its new path. It
+  reads the patch of a fix, and the patch identity that drops a
+  duplicate fix, with git's default rename detection.
+- The index freshness check reads `git diff HEAD` with git's default
+  rename detection.
 
 ## How much can the answers be trusted?
 

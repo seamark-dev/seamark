@@ -17,6 +17,10 @@ var parsedGitConfig = []string{
 	// log.showSignature=true writes signature lines to stdout before
 	// each signed commit, so they mix with the format fields.
 	"-c", "log.showSignature=false",
+	// log.showRoot=false drops the diff of the root commit from log, and
+	// show of the root commit prints no diff. The root commit then loses
+	// its files in co-change and fix mining.
+	"-c", "log.showRoot=true",
 }
 
 // parsedGitFlags holds the options that go after the git subcommand.
@@ -37,6 +41,12 @@ var parsedGitFlags = []string{
 	// diff.submodule=log or diff writes a submodule change without a
 	// diff --git header. The short form keeps that header.
 	"--submodule=short",
+	// diff.renames=false writes a rename as a deletion and an addition of
+	// every line, and diff.renames=copies also writes a copy as one record.
+	// Either way the changed files and lines differ from the default.
+	// A caller's later --no-renames wins, because git reads the last
+	// rename option.
+	"--find-renames",
 }
 
 // ParsedGitArgs returns the git arguments for a diff, log, or show call
