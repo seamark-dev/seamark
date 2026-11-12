@@ -133,6 +133,10 @@ func buildRefusal(s ownership.State, d ownership.Decision) error {
 	route := s.Route(d.Route, ownership.SurfaceBuild)
 
 	switch {
+	case s.DirRefusesWrites():
+		// No read works in this state, so "run it again" would not help.
+		// The text names the directory instead.
+		return rootMoveRefusal(s.ReadOnlyDirCause() + "; nothing changed; " + route)
 	case s.Root == ownership.RootUnreadable:
 		return rootMoveRefusal(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
 			"rebuild could move the root of another repository; nothing changed; run it again, %s",
@@ -205,7 +209,7 @@ func Run(opts Options) (*Summary, error) {
 		}
 	}
 
-	files, deleted, err := listFiles(root)
+	files, deleted, present, err := listFiles(root)
 	if err != nil {
 		return nil, err
 	}
@@ -360,10 +364,18 @@ func Run(opts Options) (*Summary, error) {
 			}
 		}
 
+		// Every mined pair is stored, also a pair with a gone side. An
+		// agent that deletes a file still needs its live partners.
 		for _, p := range pairs {
 			if err := tx.InsertCoChange(p); err != nil {
 				return err
 			}
+		}
+
+		// The gone list is written in the same transaction as the pairs,
+		// so the reads that leave out gone partners always match them.
+		if err := tx.SetGoneFiles(goneFiles(pairs, present)); err != nil {
+			return err
 		}
 
 		// Persist the parse cache in the same transaction as the graph, so
@@ -791,6 +803,15 @@ func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, 
 		logf("warn: fix mining failed: %v", mineErr)
 	}
 
+	// The fix write records whether origin names a GitHub repository.
+	// Both index modes run this phase, so both keep the record current.
+	// ResolveRepository runs local git only, so local mode stays offline.
+	noReviewRepository := false
+	if mineErr == nil && mined.Mined {
+		_, repoState := reviews.ResolveRepository(root)
+		noReviewRepository = repoState != reviews.RepositoryGitHub
+	}
+
 	// The hook runs before the open, because the open can create or
 	// migrate the database that the hook guards.
 	if err := runBeforePersist(req, SourceFixes); err != nil {
@@ -824,7 +845,7 @@ func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, 
 
 	progress(RefreshEvent{Phase: PhasePersist, Source: SourceFixes})
 
-	count, err := persistFixes(st, mined)
+	count, err := persistFixes(st, mined, noReviewRepository)
 	if err != nil {
 		done(failedSource(CauseStore, err))
 
@@ -1021,12 +1042,14 @@ func RefreshFixes(root, dbPath string, logf func(string, ...any)) (int, error) {
 // must not look like an authoritative empty history. The store stamps
 // the mine time in the same transaction, because the outcome loop only
 // trusts "no recurrence since exposure" if mining actually ran since.
-func persistFixes(st *store.Store, res fixes.Result) (int, error) {
+// noReviewRepository tells the store that origin names no GitHub
+// repository, so the outcome loop can rely on fix findings alone.
+func persistFixes(st *store.Store, res fixes.Result, noReviewRepository bool) (int, error) {
 	if !res.Mined {
 		return 0, nil
 	}
 
-	if err := st.ReplaceFixFindings(res.Findings); err != nil {
+	if err := st.ReplaceFixFindings(res.Findings, noReviewRepository); err != nil {
 		return 0, err
 	}
 
@@ -1182,10 +1205,15 @@ func sameSpelling(recorded, root string) bool {
 // status line never changes either). Two equal fingerprints mean the
 // index is current. "" when git is unavailable — there is no cheap
 // fingerprint without it.
+//
+// Each git call runs with history.ReadOnlyGitEnviron. Without it, git
+// status and git diff rewrite .git/index after a touch, and a concurrent
+// git command of the user can then fail on .git/index.lock.
 func WorkspaceState(root string) string {
 	gitOut := func(args ...string) ([]byte, bool) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
+		cmd.Env = history.ReadOnlyGitEnviron()
 
 		out, err := cmd.Output()
 
@@ -1202,12 +1230,17 @@ func WorkspaceState(root string) string {
 	// just stored and every workspace would look permanently stale.
 	const exclSeamark = ":(exclude).seamark"
 
-	status, ok := gitOut("status", "--porcelain", "-z", "--", ".", exclSeamark)
+	// --untracked-files=normal is the git default. It keeps
+	// status.showUntrackedFiles=no from hiding a new file, so a new file
+	// still changes the fingerprint.
+	status, ok := gitOut("status", "--porcelain", "-z", "--untracked-files=normal", "--", ".", exclSeamark)
 	if !ok {
 		return ""
 	}
 
-	diff, ok := gitOut("diff", "HEAD", "--", ".", exclSeamark)
+	// ParsedGitArgs keeps an external diff or a textconv driver from
+	// writing a constant text, which leaves a second edit unseen.
+	diff, ok := gitOut(history.ParsedGitArgs("diff", "HEAD", "--", ".", exclSeamark)...)
 	if !ok {
 		return ""
 	}
@@ -1295,7 +1328,11 @@ var skipDirs = map[string]bool{
 // tracked paths that git status shows as deleted and not staged. files
 // leaves them out, because nothing exists to parse. A walk finds no such
 // path.
-func listFiles(root string) (files, deleted []string, err error) {
+//
+// present holds every path that git lists and does not show as deleted,
+// parsed or not. A pair path outside this set is a gone path. A walk
+// returns no present set, because a workspace without git has no pairs.
+func listFiles(root string) (files, deleted []string, present map[string]bool, err error) {
 	if history.IsRepo(root) {
 		return gitFiles(root)
 	}
@@ -1325,10 +1362,28 @@ func listFiles(root string) (files, deleted []string, err error) {
 		return nil
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("index: walk %s: %w", root, err)
+		return nil, nil, nil, fmt.Errorf("index: walk %s: %w", root, err)
 	}
 
-	return files, nil, nil
+	return files, nil, nil, nil
+}
+
+// goneFiles returns the paths that a mined pair names and present does
+// not hold. History still names deleted and renamed-away files, and an
+// agent cannot open them, so the co-change reads leave them out as
+// partners and hubs. A walk has no pairs, so it gives no gone path.
+func goneFiles(pairs []model.CoChange, present map[string]bool) []string {
+	var gone []string
+
+	for _, p := range pairs {
+		for _, f := range []string{p.FileA, p.FileB} {
+			if !present[f] {
+				gone = append(gone, f)
+			}
+		}
+	}
+
+	return gone
 }
 
 // gitFiles lists the workspace through git. The cached list keeps a
@@ -1340,12 +1395,17 @@ func listFiles(root string) (files, deleted []string, err error) {
 // directory replaces is deleted. A path that git cannot lstat for a
 // different reason, such as a denied permission, is not deleted. It
 // stays in files, so the read reports it as a parse error.
-func gitFiles(root string) (files, deleted []string, err error) {
+//
+// present uses the same two git calls, so the index has one deletion
+// rule. It keeps the paths that files drops for parsing reasons: paths
+// under skipped directories and skip-worktree paths that a sparse
+// checkout leaves out of the working tree.
+func gitFiles(root string) (files, deleted []string, present map[string]bool, err error) {
 	// -t tags each path, so the loop below can find skip-worktree
 	// entries. The tag is one letter and a space before the path.
 	listed, err := gitRecords(root, "ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// --relative gives paths relative to root, as ls-files does.
@@ -1353,21 +1413,30 @@ func gitFiles(root string) (files, deleted []string, err error) {
 	// path has the same content.
 	gone, err := gitRecords(root, "diff-files", "-z", "--name-only", "--relative", "--no-renames", "--diff-filter=D")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	isGone := make(map[string]bool, len(gone))
 
 	for _, f := range gone {
+		isGone[f] = true
+
 		if !underSkippedDir(f) {
-			isGone[f] = true
 			deleted = append(deleted, f)
 		}
 	}
 
+	present = make(map[string]bool, len(listed))
+
 	for _, rec := range listed {
 		tag, f, ok := strings.Cut(rec, " ")
-		if !ok || underSkippedDir(f) || isGone[f] {
+		if !ok || f == "" || isGone[f] {
+			continue
+		}
+
+		present[f] = true
+
+		if underSkippedDir(f) {
 			continue
 		}
 
@@ -1382,7 +1451,7 @@ func gitFiles(root string) (files, deleted []string, err error) {
 		files = append(files, f)
 	}
 
-	return files, deleted, nil
+	return files, deleted, present, nil
 }
 
 // missingFile reports whether rel has no working-tree entry. Only

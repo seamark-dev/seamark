@@ -206,7 +206,7 @@ func TestIndexFixesOnlyOutsideGitKeepsStoredFixes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, st.ReplaceFixFindings([]model.Finding{{
 		ID: 5, Path: "a.go", Body: "fix: old", Source: model.SourceFixConventional,
-	}}))
+	}}, false))
 	require.NoError(t, st.SetMeta(store.MetaFixesMinedAt, "1000"))
 	require.NoError(t, st.Close())
 

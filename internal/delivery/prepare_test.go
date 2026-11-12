@@ -16,6 +16,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
@@ -222,6 +223,55 @@ func TestPrepareReturnsExactVersionsForOneManyAndNewPaths(t *testing.T) {
 		assert.Equal(t, 1, p.Pins[0].Entry)
 		assert.Equal(t, 2, p.Request.Paths[0].Pins, "the path count holds both entries")
 	})
+}
+
+// prepareBlockNotes holds two YAML block notes. A block note ends with a
+// line break, and the first note has a second line.
+const prepareBlockNotes = `pin:
+  - rule: two-line
+    region: api
+    note: |
+      First line.
+      Second line.
+  - rule: one-line
+    region: db
+    note: |
+      Only line.
+`
+
+// TestPrepareReadsANoteLineBreakAsASpace covers block notes in the
+// preparation. The note is one line, so its lines must not run together.
+// The end break adds no space, so the note still matches the hook text.
+func TestPrepareReadsANoteLineBreakAsASpace(t *testing.T) {
+	root := workspace(t)
+	cfg := writeConfig(t, root, prepareBlockNotes)
+	st := prepareMemoryStore(t)
+	files := []string{"api/handler.go", "db/query.go"}
+
+	p := mustPrepare(t, st, prepareRequest(root, cfg, files...))
+	require.Len(t, p.Pins, 2)
+
+	notes := map[string]string{}
+	for _, pin := range p.Pins {
+		notes[pin.Rule] = pin.Note
+	}
+
+	assert.Equal(t, map[string]string{"two-line": "First line. Second line.", "one-line": "Only line."}, notes)
+
+	text := preparationText(p, FormFull)
+	assert.Contains(t, text, " · two-line — First line. Second line.\n", "no trailing space before the line end")
+
+	// The edit hook prints the sanitized lesson symptom. The preparation
+	// must show the same text for the same pin.
+	lessons, _, err := report.LessonsForFiles(st, cfg, files, cfg.ChangeSetBudget())
+	require.NoError(t, err)
+	require.Len(t, lessons, 2)
+
+	for _, l := range lessons {
+		rule, _, found := strings.Cut(l.Symptom, " — ")
+		require.True(t, found, l.Symptom)
+		assert.Equal(t, render.Sanitize(l.Symptom), rule+" — "+notes[rule])
+	}
 }
 
 func TestPrepareListsEveryExecutablePinRegardlessOfBudget(t *testing.T) {

@@ -3,11 +3,14 @@ package index
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1576,6 +1579,147 @@ func TestRefreshSourcesWithoutGitHubOrigin(t *testing.T) {
 	assertReviewsKept(t, readEvidenceState(t, dbPath))
 }
 
+// readReviewRecord returns the no-review-repository record, the fixes
+// stamp, and the evidence horizon of the database at dbPath.
+func readReviewRecord(t *testing.T, dbPath string) (record, fixesAt string, horizon int64) {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	record, err = st.GetMeta(store.MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+
+	fixesAt, err = st.GetMeta(store.MetaFixesMinedAt)
+	require.NoError(t, err)
+
+	return record, fixesAt, st.EvidenceHorizon()
+}
+
+// setOrigin replaces the origin remote of the repository at root.
+func setOrigin(t *testing.T, root, origin string) {
+	t.Helper()
+
+	for _, args := range [][]string{{"remote", "remove", "origin"}, {"remote", "add", "origin", origin}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		_ = cmd.Run() // remove fails when no origin exists yet, and that is the wanted state
+	}
+}
+
+func TestRefreshSourcesRecordsANoReviewRepository(t *testing.T) {
+	noFetch := func(t *testing.T) reviews.FetchFunc {
+		return func(context.Context, string, string, reviews.Options) ([]byte, error) {
+			t.Error("an origin that names no GitHub repository is never fetched")
+
+			return nil, errors.New("unexpected fetch")
+		}
+	}
+
+	for _, origin := range []string{"", "git@gitlab.com:o/r.git"} {
+		for _, mode := range []SourceMode{SourcesLocal, SourcesReviewsAndLocal} {
+			t.Run(fmt.Sprintf("origin %q mode %v", origin, mode), func(t *testing.T) {
+				root, dbPath := sourceFixture(t, origin)
+
+				res, err := RefreshSources(context.Background(), RefreshRequest{
+					Root: root, Mode: mode, Fetch: noFetch(t),
+				})
+				require.NoError(t, err)
+				require.Equal(t, SourceRefreshed, res.Fixes.State)
+
+				record, fixesAt, horizon := readReviewRecord(t, dbPath)
+				assert.NotEqual(t, "1000", fixesAt)
+				assert.Equal(t, fixesAt, record, "the record holds the fixes stamp of its write")
+				assert.Equal(t, res.Fixes.MinedAt, horizon, "fix findings alone set the horizon")
+			})
+		}
+	}
+
+	t.Run("github origin", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+		_, err := RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, horizon := readReviewRecord(t, dbPath)
+		assert.Empty(t, record)
+		assert.Equal(t, int64(1000), horizon, "the older reviews stamp still bounds the horizon")
+	})
+
+	// A fetch failure comes after origin resolves to GitHub, so it never
+	// counts as a repository without reviews.
+	missing := fmt.Errorf("gh api: %w", &exec.Error{Name: "gh", Err: exec.ErrNotFound})
+	failures := map[string]error{
+		"gh missing": missing,
+		"auth":       fmt.Errorf("gh api: To get started with GitHub CLI: %w", ghExitError(t, 4)),
+	}
+
+	for name, fetchErr := range failures {
+		t.Run(name, func(t *testing.T) {
+			root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+			res, err := RefreshSources(context.Background(), RefreshRequest{
+				Root: root, Mode: SourcesReviewsAndLocal, Fetch: staticFetch("", fetchErr),
+			})
+			require.NoError(t, err)
+			require.NotEqual(t, SourceRefreshed, res.Reviews.State)
+
+			record, _, horizon := readReviewRecord(t, dbPath)
+			assert.Empty(t, record)
+			assert.Equal(t, "1000", readEvidenceState(t, dbPath).reviewsAt)
+			assert.Equal(t, int64(1000), horizon)
+		})
+	}
+
+	t.Run("a GitHub origin clears the record", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "")
+
+		_, err := RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, _ := readReviewRecord(t, dbPath)
+		require.NotEmpty(t, record)
+
+		setOrigin(t, root, "git@github.com:o/r.git")
+
+		_, err = RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, horizon := readReviewRecord(t, dbPath)
+		assert.Empty(t, record, "the next fix write decides again")
+		assert.Equal(t, int64(1000), horizon)
+	})
+
+	t.Run("a fix phase that writes nothing keeps the record", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "")
+
+		st, err := store.Open(dbPath)
+		require.NoError(t, err)
+		require.NoError(t, st.SetMeta(store.MetaNoReviewRepositoryAt, "1000"))
+		require.NoError(t, st.Close())
+
+		_, err = RefreshSources(context.Background(), RefreshRequest{
+			Root: root, Mode: SourcesLocal, BeforePersist: func(string) error { return errRefused },
+		})
+		require.ErrorIs(t, err, errRefused)
+
+		// A root without git history mines nothing into the same database.
+		res, err := RefreshSources(context.Background(), RefreshRequest{
+			Root: t.TempDir(), DBPath: dbPath, Mode: SourcesLocal,
+		})
+		require.NoError(t, err)
+		require.Equal(t, CauseNoHistory, res.Fixes.Cause)
+
+		record, fixesAt, horizon := readReviewRecord(t, dbPath)
+		assert.Equal(t, "1000", record)
+		assert.Equal(t, "1000", fixesAt)
+		assert.Equal(t, int64(1000), horizon)
+	})
+}
+
 func TestRefreshSourcesStopDuringFetchKeepsTheCorpus(t *testing.T) {
 	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
 
@@ -2138,4 +2282,549 @@ func TestPythonTestCallerKeepsTestMethodsOfOtherDirectories(t *testing.T) {
 	_, st := runIndex(t, root)
 
 	assert.Empty(t, calleeFQNs(t, st, "tests/a/test_x.test_ping"), "two ping methods give no edge")
+}
+
+// partnerFiles lists the co-change partners of file in the database at
+// dbPath, keyed by path, at any lift.
+func partnerFiles(t *testing.T, dbPath, file string) map[string]store.CoChangePartner {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	partners, err := st.CoChangePartners(file, 0, 100)
+	require.NoError(t, err)
+
+	byFile := make(map[string]store.CoChangePartner, len(partners))
+	for _, p := range partners {
+		byFile[p.File] = p
+	}
+
+	return byFile
+}
+
+// goneList returns the paths of the stored gone list of the database at
+// dbPath. The list holds a hex key for each path, so the helper decodes
+// the keys.
+func goneList(t *testing.T, dbPath string) []string {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	stored, err := st.GetMeta(store.MetaGoneFiles)
+	require.NoError(t, err)
+
+	var keys []string
+	require.NoError(t, json.Unmarshal([]byte(stored), &keys))
+
+	paths := make([]string, 0, len(keys))
+
+	for _, k := range keys {
+		b, err := hex.DecodeString(k)
+		require.NoError(t, err)
+
+		paths = append(paths, string(b))
+	}
+
+	return paths
+}
+
+// hotFileNames lists the files that the orient hubs read from the
+// database at dbPath.
+func hotFileNames(t *testing.T, dbPath string) []string {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	hot, err := st.HotFiles(100)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(hot))
+	for _, h := range hot {
+		names = append(names, h.File)
+	}
+
+	return names
+}
+
+func TestIndexKeepsLivePartnersOfGoneFiles(t *testing.T) {
+	root := t.TempDir()
+
+	// Every partner changes with pkg/a.go in three commits. Each later
+	// step removes some of them in a different way.
+	partners := []string{
+		"pkg/live.go",              // stays
+		"pkg/unstaged.go",          // deleted, not staged
+		"pkg/staged.go",            // deleted with git rm
+		"pkg/committed.go",         // deleted in a commit
+		"pkg/moved.go",             // renamed with git mv, not committed
+		"pkg/cmoved.go",            // renamed in a commit
+		"pkg/testdata/a.golden",    // under a skipped directory
+		"pkg/testdata/gone.golden", // under a skipped directory, deleted, not staged
+		"pkg/gen.go",               // generated, so not parsed
+		"README.md",                // no parser
+		"pkg/sparse.go",            // skip-worktree, missing from disk
+		"AUTHORS.old",              // deleted in a commit, sorts before every partner
+	}
+
+	body := func(file string, v int) string {
+		switch {
+		case file == "pkg/gen.go":
+			return fmt.Sprintf("// Code generated by hand. DO NOT EDIT.\n\npackage pkg\n\nvar Gen = %d\n", v)
+		case strings.HasSuffix(file, ".go"):
+			name := strings.TrimSuffix(filepath.Base(file), ".go")
+
+			return fmt.Sprintf("package pkg\n\nfunc %s%d() {}\n", strings.ToUpper(name[:1])+name[1:], v)
+		default:
+			return fmt.Sprintf("version %d\n", v)
+		}
+	}
+
+	gitIn(t, root, "init", "-b", "main")
+
+	for v := 1; v <= 3; v++ {
+		writeRepoFile(t, root, "pkg/a.go", fmt.Sprintf("package pkg\n\nfunc A%d() {}\n", v))
+
+		for _, f := range partners {
+			writeRepoFile(t, root, f, body(f, v))
+		}
+
+		gitIn(t, root, "add", "-A")
+		gitIn(t, root, "commit", "-q", "-m", fmt.Sprintf("change %d", v))
+	}
+
+	// Commits without pkg/a.go keep the lift of its pairs above one.
+	for v := 1; v <= 3; v++ {
+		writeRepoFile(t, root, "docs/notes.txt", fmt.Sprintf("notes %d\n", v))
+		gitIn(t, root, "add", "-A")
+		gitIn(t, root, "commit", "-q", "-m", fmt.Sprintf("notes %d", v))
+	}
+
+	gitIn(t, root, "rm", "-q", "pkg/committed.go", "AUTHORS.old")
+	gitIn(t, root, "mv", "pkg/cmoved.go", "pkg/crenamed.go")
+	gitIn(t, root, "commit", "-q", "-m", "remove and rename")
+
+	first, err := Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+	require.True(t, first.HistoryMined)
+
+	before := partnerFiles(t, first.DBPath, "pkg/a.go")
+	require.Contains(t, before, "pkg/live.go")
+	assert.NotContains(t, before, "pkg/committed.go", "a file deleted in a commit is no partner")
+	assert.NotContains(t, before, "pkg/cmoved.go", "the old path of a committed rename is no partner")
+
+	// Mining sorts the files of a commit, so a path that sorts first is
+	// only ever the first file of its pairs.
+	assert.NotContains(t, before, "AUTHORS.old", "a gone file that sorts first is no partner")
+	assert.Equal(t, []string{"AUTHORS.old", "pkg/cmoved.go", "pkg/committed.go"}, goneList(t, first.DBPath))
+
+	// The partners that stay in the workspace through every step, with
+	// their run-1 numbers as seen from each other file.
+	live := []string{"pkg/a.go", "pkg/live.go", "pkg/testdata/a.golden", "pkg/gen.go", "README.md", "pkg/sparse.go"}
+	firstPartners := map[string]map[string]store.CoChangePartner{}
+
+	for _, f := range append(slices.Clone(live), partners...) {
+		firstPartners[f] = partnerFiles(t, first.DBPath, f)
+	}
+
+	// Now the working tree removes files in every uncommitted way.
+	require.NoError(t, os.Remove(filepath.Join(root, "pkg", "unstaged.go")))
+	require.NoError(t, os.Remove(filepath.Join(root, "pkg", "testdata", "gone.golden")))
+	gitIn(t, root, "rm", "-q", "pkg/staged.go")
+	gitIn(t, root, "mv", "pkg/moved.go", "pkg/renamed.go")
+	gitIn(t, root, "update-index", "--skip-worktree", "pkg/sparse.go")
+	require.NoError(t, os.Remove(filepath.Join(root, "pkg", "sparse.go")))
+
+	second, err := Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+
+	// The refresh that tools run mines history again and reuses the parse
+	// cache, so no --force is needed for the gone list to change.
+	assert.False(t, second.Skipped)
+	assert.True(t, second.HistoryMined)
+	assert.Less(t, second.FilesReparsed, second.FilesParsed)
+
+	// The deletion rule ignores skipped directories, so a deleted golden
+	// file is gone too, although the index never parses it.
+	goneFiles := []string{
+		"AUTHORS.old", "pkg/cmoved.go", "pkg/committed.go", "pkg/moved.go", "pkg/staged.go",
+		"pkg/testdata/gone.golden", "pkg/unstaged.go",
+	}
+
+	assert.Equal(t, goneFiles, goneList(t, second.DBPath))
+
+	after := partnerFiles(t, second.DBPath, "pkg/a.go")
+	hubs := hotFileNames(t, second.DBPath)
+
+	for _, gone := range goneFiles {
+		assert.NotContains(t, after, gone, "%s is gone from the workspace", gone)
+		assert.NotContains(t, hubs, gone, "the orient hubs leave out %s", gone)
+
+		// A gone file keeps exactly its live partners, with the numbers
+		// of run 1, because an agent that deletes it still needs them.
+		want := map[string]store.CoChangePartner{}
+		for _, f := range live {
+			want[f] = firstPartners[gone][f]
+		}
+
+		assert.Equal(t, want, partnerFiles(t, second.DBPath, gone), "%s keeps its live partners", gone)
+	}
+
+	// Presence is a git question, not a parse question.
+	for _, kept := range []string{"pkg/testdata/a.golden", "pkg/gen.go", "README.md", "pkg/sparse.go"} {
+		assert.Contains(t, after, kept, "%s is still in the workspace", kept)
+	}
+
+	// The filter runs at read time, so the gone files still count in the
+	// numbers of a surviving pair, and the pair count stays the same.
+	assert.Equal(t, before["pkg/live.go"], after["pkg/live.go"])
+	assert.Equal(t, first.Stats.CoChanges, second.Stats.CoChanges)
+
+	// A full refresh gives the same result as the incremental one.
+	third, err := Run(Options{Root: root, Force: true, Logf: t.Logf})
+	require.NoError(t, err)
+	assert.Equal(t, goneList(t, second.DBPath), goneList(t, third.DBPath))
+	assert.Equal(t, second.Stats.CoChanges, third.Stats.CoChanges)
+
+	for _, f := range append(slices.Clone(live), goneFiles...) {
+		assert.Equal(t, partnerFiles(t, second.DBPath, f), partnerFiles(t, third.DBPath, f), "partners of %s", f)
+	}
+
+	assert.Equal(t, hubs, hotFileNames(t, third.DBPath))
+
+	// A file that comes back stops being gone.
+	gitIn(t, root, "checkout", "--", "pkg/unstaged.go")
+
+	fourth, err := Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+	assert.False(t, fourth.Skipped)
+	assert.NotContains(t, goneList(t, fourth.DBPath), "pkg/unstaged.go")
+	assert.Equal(t, before["pkg/unstaged.go"], partnerFiles(t, fourth.DBPath, "pkg/a.go")["pkg/unstaged.go"])
+	assert.Equal(t, first.Stats.CoChanges, fourth.Stats.CoChanges)
+}
+
+// configGit runs git in root with a fixed identity and no global or
+// system config.
+func configGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
+
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v\n%s", args, out)
+}
+
+// constantDiffScript writes an executable script that prints a constant
+// line and touches marker when it runs. It stands in for an external diff
+// program and a textconv driver.
+func constantDiffScript(t *testing.T) (script, marker string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	script = filepath.Join(dir, "const.sh")
+	marker = filepath.Join(dir, "ran")
+	body := "#!/bin/sh\ntouch '" + marker + "'\necho constant\n"
+
+	require.NoError(t, os.WriteFile(script, []byte(body), 0o755))
+
+	return script, marker
+}
+
+func TestWorkspaceStateIgnoresGitConfig(t *testing.T) {
+	// The fingerprint decides whether the index is current. A config that
+	// changes the diff or status text must not change it, or a second edit
+	// of a dirty file or a new file can read as no change.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	script, marker := constantDiffScript(t)
+
+	cases := []struct {
+		name   string
+		config [][2]string
+		attrs  string
+		env    [2]string
+	}{
+		{name: "diff.external", config: [][2]string{{"diff.external", script}}},
+		{name: "GIT_EXTERNAL_DIFF", env: [2]string{"GIT_EXTERNAL_DIFF", script}},
+		{
+			name:   "textconv",
+			config: [][2]string{{"diff.hide.textconv", script}},
+			attrs:  "*.go diff=hide\n",
+		},
+		{name: "color.ui always", config: [][2]string{{"color.ui", "always"}}},
+		{name: "status.showUntrackedFiles no", config: [][2]string{{"status.showUntrackedFiles", "no"}}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			tracked := filepath.Join(root, "main.go")
+			untracked := filepath.Join(root, "new.go")
+			stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+			require.NoError(t, os.WriteFile(tracked, []byte("package main\n"), 0o644))
+			configGit(t, root, "init", "-q", "-b", "main")
+			configGit(t, root, "add", "-A")
+			configGit(t, root, "commit", "-q", "-m", "initial")
+
+			// The three states: a dirty file, a second edit of it, and a
+			// new untracked file next to it.
+			states := []func(){
+				func() {
+					require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc one() {}\n"), 0o644))
+					_ = os.Remove(untracked)
+				},
+				func() {
+					require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc two() {}\n"), 0o644))
+					_ = os.Remove(untracked)
+				},
+				func() {
+					// The fingerprint holds the mtime of an untracked file, so
+					// each write sets the same mtime.
+					require.NoError(t, os.WriteFile(untracked, []byte("package main\n\nfunc three() {}\n"), 0o644))
+					require.NoError(t, os.Chtimes(untracked, stamp, stamp))
+				},
+			}
+
+			want := make([]string, len(states))
+
+			for i, set := range states {
+				set()
+
+				want[i] = WorkspaceState(root)
+				require.NotEmpty(t, want[i])
+			}
+
+			require.NotEqual(t, want[0], want[1], "a second edit changes the fingerprint")
+			require.NotEqual(t, want[1], want[2], "a new file changes the fingerprint")
+
+			for _, kv := range c.config {
+				configGit(t, root, "config", kv[0], kv[1])
+			}
+
+			if c.attrs != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "info", "attributes"), []byte(c.attrs), 0o644))
+			}
+
+			if c.env[0] != "" {
+				t.Setenv(c.env[0], c.env[1])
+			}
+
+			_ = os.Remove(marker)
+
+			for i, set := range states {
+				set()
+				assert.Equal(t, want[i], WorkspaceState(root), "state %d", i)
+			}
+
+			assert.NoFileExists(t, marker, "no external program runs")
+		})
+	}
+}
+
+func TestIndexSeesSecondEditUnderExternalDiff(t *testing.T) {
+	// An external diff prints the same text for every edit. The fast path
+	// must still see a second edit of a dirty file and index the new symbol.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	script, marker := constantDiffScript(t)
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	configGit(t, root, "init", "-q", "-b", "main")
+	configGit(t, root, "add", "-A")
+	configGit(t, root, "commit", "-q", "-m", "initial")
+	configGit(t, root, "config", "diff.external", script)
+
+	tracked := filepath.Join(root, "main.go")
+	require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc main() {}\n\nfunc Delta() {}\n"), 0o644))
+
+	first, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, first.Skipped)
+
+	require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc main() {}\n\nfunc Epsilon() {}\n"), 0o644))
+
+	second, st := runIndex(t, root)
+	assert.False(t, second.Skipped, "a second edit of a dirty file rebuilds")
+	assert.Equal(t, "Epsilon", mustFind(t, st, "Epsilon").Name)
+	assert.NoFileExists(t, marker, "no external program runs")
+}
+
+// gitIndexState is what a write to .git/index changes: the file identity,
+// which a rename over the file replaces, the mtime, and the bytes.
+type gitIndexState struct {
+	info  os.FileInfo
+	bytes []byte
+}
+
+// readGitIndex reads the gitIndexState of the repository at root.
+func readGitIndex(t *testing.T, root string) gitIndexState {
+	t.Helper()
+
+	p := filepath.Join(root, ".git", "index")
+
+	info, err := os.Stat(p)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+
+	return gitIndexState{info: info, bytes: data}
+}
+
+// assertGitIndexKept fails when .git/index differs from before, or when
+// a git process left .git/index.lock behind.
+func assertGitIndexKept(t *testing.T, root string, before gitIndexState, msg string) {
+	t.Helper()
+
+	after := readGitIndex(t, root)
+
+	assert.True(t, os.SameFile(before.info, after.info), "%s: .git/index has a new inode", msg)
+	assert.Equal(t, before.info.ModTime(), after.info.ModTime(), "%s: .git/index has a new mtime", msg)
+	assert.Equal(t, before.bytes, after.bytes, "%s: .git/index has new bytes", msg)
+	assert.NoFileExists(t, filepath.Join(root, ".git", "index.lock"), msg)
+}
+
+// touchOlder gives the file at p an older mtime and keeps its content. A
+// time in the past differs from the stat cache in .git/index, so the
+// test needs no sleep to make git see a touch.
+func touchOlder(t *testing.T, p string, age time.Duration) {
+	t.Helper()
+
+	at := time.Now().Add(-age)
+	require.NoError(t, os.Chtimes(p, at, at))
+}
+
+// clearGitIndexEnv removes the inherited variables that already stop git
+// from writing .git/index, so a plain git command can show the write.
+// t.Setenv restores them after the test.
+func clearGitIndexEnv(t *testing.T) {
+	t.Helper()
+
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "GIT_OPTIONAL_LOCKS" || strings.HasPrefix(k, "GIT_CONFIG_") {
+			t.Setenv(k, "")
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+}
+
+// gitIndexRepo builds a committed repository with a real change in
+// main.go. A plain git status then settles the stat cache, so a later
+// write comes only from a new touch.
+func gitIndexRepo(t *testing.T) string {
+	t.Helper()
+
+	clearGitIndexEnv(t)
+
+	root := t.TempDir()
+	writeFixture(t, root)
+	configGit(t, root, "init", "-q", "-b", "main")
+	configGit(t, root, "add", "-A")
+	configGit(t, root, "commit", "-q", "-m", "initial")
+
+	main := filepath.Join(root, "main.go")
+	require.NoError(t, os.WriteFile(main, []byte("package main\n\nfunc main() {}\n"), 0o644))
+	touchOlder(t, main, 3*time.Hour)
+	configGit(t, root, "status", "--porcelain")
+
+	return root
+}
+
+func TestWorkspaceStateKeepsGitIndex(t *testing.T) {
+	// A touch changes no content. The freshness check must read the
+	// workspace without a rewrite of .git/index, because the rewrite takes
+	// .git/index.lock and a concurrent git command of the user then fails.
+	root := gitIndexRepo(t)
+	touched := filepath.Join(root, "internal", "util", "util.go")
+
+	fingerprint := WorkspaceState(root)
+	require.NotEmpty(t, fingerprint)
+
+	touchOlder(t, touched, 2*time.Hour)
+
+	before := readGitIndex(t, root)
+
+	assert.Equal(t, fingerprint, WorkspaceState(root), "a touch changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root), "a second call changes the fingerprint")
+	assertGitIndexKept(t, root, before, "WorkspaceState")
+
+	// A plain git status refreshes the stat cache. The fingerprint stays,
+	// because only the output of git goes into it.
+	configGit(t, root, "status", "--porcelain")
+	assert.Equal(t, fingerprint, WorkspaceState(root), "a refreshed stat cache changes the fingerprint")
+
+	// Controls: each plain command writes the index after a new touch, so
+	// the fixture can show the write that WorkspaceState avoids.
+	touchOlder(t, touched, 4*time.Hour)
+
+	before = readGitIndex(t, root)
+
+	configGit(t, root, "status", "--porcelain")
+	require.NotEqual(t, before.bytes, readGitIndex(t, root).bytes, "a plain git status must write the index")
+
+	touchOlder(t, touched, 5*time.Hour)
+
+	before = readGitIndex(t, root)
+
+	t.Setenv("GIT_OPTIONAL_LOCKS", "0")
+	configGit(t, root, "status", "--porcelain")
+	assertGitIndexKept(t, root, before, "git status with GIT_OPTIONAL_LOCKS=0")
+	configGit(t, root, "diff", "HEAD")
+	require.NotEqual(t, before.bytes, readGitIndex(t, root).bytes,
+		"git diff HEAD must write the index although GIT_OPTIONAL_LOCKS=0")
+}
+
+func TestIndexRunKeepsGitIndex(t *testing.T) {
+	// index.Run reaches WorkspaceState on its fast path and on a build.
+	// Neither path may rewrite .git/index after a touch.
+	t.Run("fast path", func(t *testing.T) {
+		root := gitIndexRepo(t)
+
+		first, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		require.False(t, first.Skipped)
+
+		touchOlder(t, filepath.Join(root, "internal", "util", "util.go"), 2*time.Hour)
+
+		before := readGitIndex(t, root)
+
+		second, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		assert.True(t, second.Skipped, "a touch must keep the fast path")
+		assertGitIndexKept(t, root, before, "the fast path")
+	})
+
+	t.Run("build", func(t *testing.T) {
+		root := gitIndexRepo(t)
+
+		touchOlder(t, filepath.Join(root, "internal", "util", "util.go"), 2*time.Hour)
+
+		before := readGitIndex(t, root)
+
+		sum, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		assert.False(t, sum.Skipped)
+		assertGitIndexKept(t, root, before, "the build")
+	})
 }

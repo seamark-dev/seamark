@@ -166,11 +166,56 @@ func TestChangedPaths(t *testing.T) {
 
 	got := ChangedPaths(diff)
 
-	// A rename registers its NEW path — the file going forward, the
-	// same reading EvalDiff uses; a whole-file deletion registers the
-	// old path (what vanished must not look like an empty diff).
-	assert.Equal(t, []string{"api/a.go", "new.go", "gone.go", "gone2.go"}, got,
+	// A rename registers its new path and then its old path, because
+	// the rename removes the old path. A whole-file deletion registers
+	// the old path, so that a removed file never looks like an empty diff.
+	assert.Equal(t, []string{"api/a.go", "new.go", "old.go", "gone.go", "gone2.go"}, got,
 		"edits, renames, and whole-file deletions all register")
+}
+
+func TestEvalDiffListsTheOldPathOfARename(t *testing.T) {
+	st, root := checkFixture(t)
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	// A rename with no hunk: neither path has a changed line, so the
+	// note names both.
+	d, err := EvalDiff(p, st, "diff --git a/old.go b/new.go\nsimilarity index 100%\n"+
+		"rename from old.go\nrename to new.go\n", SourceStdin)
+	require.NoError(t, err)
+	assert.Empty(t, d.Effects)
+	assert.Equal(t, []string{"2 of 2 changed files have changes outside any indexed symbol (new.go, old.go) — " +
+		"their effect reach is unknown, not clean"}, d.Notes)
+
+	// A rename to main.go that edits main(). The effect comes from the
+	// new path, and only the old path has unknown reach.
+	moved := "diff --git a/old.go b/main.go\nsimilarity index 90%\n" +
+		"rename from old.go\nrename to main.go\n" +
+		"--- a/old.go\n+++ b/main.go\n@@ -3,3 +3,4 @@\n func main() {\n \tdeploy()\n+\t// touched\n }\n"
+
+	d, err = EvalDiff(p, st, moved, SourceStdin)
+	require.NoError(t, err)
+	assert.Contains(t, d.Effects, "infra:mutate")
+	assert.Equal(t, []string{"1 of 2 changed files have changes outside any indexed symbol (old.go) — " +
+		"their effect reach is unknown, not clean"}, d.Notes)
+
+	// A rule over diff.files sees the old path.
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: old-go-leaves
+    when: '"old.go" in diff.files'
+    message: old.go is renamed away
+`), 0o644))
+
+	p, err = LoadPolicy(root)
+	require.NoError(t, err)
+
+	d, err = EvalDiff(p, st, "diff --git a/old.go b/new.go\nrename from old.go\nrename to new.go\n", SourceStdin)
+	require.NoError(t, err)
+	assert.Equal(t, VerdictApproval, d.Verdict)
+	require.NotEmpty(t, d.Matches)
+	assert.Equal(t, "old-go-leaves", d.Matches[0].RuleID)
 }
 
 func TestEvalDiffSortsEffects(t *testing.T) {

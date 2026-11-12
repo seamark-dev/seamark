@@ -32,7 +32,7 @@ const (
 	RootWidened                     // R exists, but git widens a command there to a top level above R.
 	RootGone                        // Nothing exists at R.
 	RootHidden                      // R can exist, but no route can enter it.
-	RootUnreadable                  // F is damaged or locked, and it can belong to another repository.
+	RootUnreadable                  // F is damaged, locked, or in a directory that refuses writes, and it can belong to another repository.
 )
 
 // OwnerKind names the nearest checkout above F, relative to W and R.

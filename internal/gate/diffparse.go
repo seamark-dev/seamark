@@ -17,6 +17,12 @@ type parsedDiff struct {
 	// lines are the changed new-side lines of each path. A path with no
 	// hunk, for example a binary or a mode-only change, has no lines.
 	lines map[string][]uint32
+	// groups split the lines of each path by change group. A change
+	// group is the added and removed lines of a hunk with no context line
+	// between them. A group can have no line, for example a cut before
+	// line 1. The gate decides the unknown-reach note per group, so that
+	// one edit inside a symbol cannot hide another change of the file.
+	groups map[string][][]uint32
 }
 
 // parseDiff reads a unified diff. EvalDiff and ChangedPaths both use
@@ -29,7 +35,7 @@ type parsedDiff struct {
 // context lines of a hunk do not, because they are not part of the
 // change.
 func parseDiff(diffText string) parsedDiff {
-	out := parsedDiff{lines: map[string][]uint32{}}
+	out := parsedDiff{lines: map[string][]uint32{}, groups: map[string][][]uint32{}}
 
 	// register adds a path even before, or without, any hunk. Binary,
 	// mode-only, rename-only, and empty-file changes have no hunk, yet
@@ -86,6 +92,13 @@ func parseDiff(diffText string) parsedDiff {
 				file = p
 				register(p)
 			}
+		case strings.HasPrefix(line, "rename from "):
+			// A rename removes its old path, so the path enters the diff
+			// files like a whole-file deletion. Check then shows the
+			// partners and lessons of that path. The path gets no changed
+			// line, so its reach stays unknown. The line leaves file
+			// unchanged, because every hunk line belongs to the new path.
+			register(diffHeaderPath(strings.TrimPrefix(line, "rename from "), ""))
 		case strings.HasPrefix(line, "--- "):
 			gitRecord = gitRecord && gitHeader
 			gitHeader = false
@@ -108,9 +121,12 @@ func parseDiff(diffText string) parsedDiff {
 			if m := hunkRe.FindStringSubmatch(line); m != nil {
 				gitHeader = false
 
-				h.start(m, gitRecord, func(n uint32) {
+				// The flat lines and the groups come from the same
+				// callback, so they always hold the same lines.
+				h.start(m, gitRecord, func(group []uint32) {
 					if file != "" {
-						out.lines[file] = append(out.lines[file], n)
+						out.lines[file] = append(out.lines[file], group...)
+						out.groups[file] = append(out.groups[file], group)
 					}
 				})
 			}
@@ -123,7 +139,8 @@ func parseDiff(diffText string) parsedDiff {
 }
 
 // hunkWalker reads the body lines of one hunk and records the changed
-// new-side lines.
+// new-side lines. It collects the lines of each change group and gives
+// them to emit when the group closes.
 type hunkWalker struct {
 	oldLeft, newLeft int    // body lines that the header still announces
 	next             uint32 // the new-side number of the next line
@@ -133,12 +150,15 @@ type hunkWalker struct {
 	cutIndented      bool   // the first removed line with text is indented
 	beforeFirst      bool   // the hunk lies before new-side line 1
 	git              bool   // the record starts with a diff --git line
-	record           func(uint32)
+	groupOpen        bool   // an added or removed line came after the last context line
+	group            []uint32
+	emit             func(group []uint32)
 }
 
 // start begins a hunk from the matches of hunkRe. git tells that the
-// record starts with a diff --git line.
-func (h *hunkWalker) start(m []string, git bool, record func(uint32)) {
+// record starts with a diff --git line. emit gets the recorded lines of
+// each change group.
+func (h *hunkWalker) start(m []string, git bool, emit func(group []uint32)) {
 	h.oldLeft = hunkCount(m[1])
 	h.newLeft = hunkCount(m[3])
 	newStart, _ := strconv.Atoi(m[2])
@@ -158,7 +178,8 @@ func (h *hunkWalker) start(m []string, git bool, record func(uint32)) {
 	h.lastText = 0
 	h.cutOpen = false
 	h.git = git
-	h.record = record
+	h.groupOpen, h.group = false, nil
+	h.emit = emit
 }
 
 // active reports whether the header still announces body lines.
@@ -203,22 +224,26 @@ func (h *hunkWalker) step(line string) bool {
 		}
 
 		h.cutOpen = false
+		h.groupOpen = true
 		h.record(h.next)
 		h.advance(line[1:])
 		h.newLeft--
 	case strings.HasPrefix(line, "-") && h.oldLeft > 0:
+		h.groupOpen = true
 		h.noteCutLine(line[1:])
 		h.oldLeft--
 	case (line == "" || line[0] == ' ') && h.oldLeft > 0 && h.newLeft > 0:
 		// Git writes an empty context line as "" when
 		// diff.suppressBlankEmpty is set.
 		h.closeCut()
+		h.closeGroup()
 		h.advance(strings.TrimPrefix(line, " "))
 		h.oldLeft--
 		h.newLeft--
 	case strings.HasPrefix(line, `\`):
 		// "\ No newline at end of file" belongs to the line before it.
-		// It counts on neither side and keeps a run of removed lines open.
+		// It counts on neither side and keeps a run of removed lines and
+		// its change group open.
 	default:
 		return false
 	}
@@ -230,10 +255,28 @@ func (h *hunkWalker) step(line string) bool {
 	return true
 }
 
-// end closes the hunk and records an open cut.
+// end closes the hunk, records an open cut, and closes the open change
+// group.
 func (h *hunkWalker) end() {
 	h.closeCut()
+	h.closeGroup()
 	h.oldLeft, h.newLeft = 0, 0
+}
+
+// record adds one new-side line to the open change group.
+func (h *hunkWalker) record(n uint32) {
+	h.group = append(h.group, n)
+}
+
+// closeGroup gives the open change group to emit. It emits a group with
+// no line too, because such a change still counts for no symbol.
+func (h *hunkWalker) closeGroup() {
+	if !h.groupOpen {
+		return
+	}
+
+	h.emit(h.group)
+	h.groupOpen, h.group = false, nil
 }
 
 // advance moves past one new-side line with the given text. A line with

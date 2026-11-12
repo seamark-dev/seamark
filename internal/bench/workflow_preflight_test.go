@@ -13,6 +13,8 @@ import (
 )
 
 func TestWorkflowPreflightHermetic(t *testing.T) {
+	t.Parallel()
+
 	for _, instance := range WorkflowInstances() {
 		t.Run(instance.ID, func(t *testing.T) {
 			err := WorkflowPreflight(context.Background(), WorkflowConfig{
@@ -74,13 +76,17 @@ func TestValidateWorkflowWiringNamesTheDefect(t *testing.T) {
 	instance := SchemaSyncCochangeInstance()
 	cfg := WorkflowConfig{SeamarkBin: "/opt/seamark/bin/seamark"}
 
+	// The fixture is identical for every case, so generate it once and give
+	// each arm its own writable copy.
+	generate := templateGenerator(t, instance.Generate)
+
 	wire := func(t *testing.T) (only, withSkills string) {
 		t.Helper()
 
 		only = filepath.Join(t.TempDir(), "only")
 		withSkills = filepath.Join(t.TempDir(), "skills")
-		require.NoError(t, instance.Generate(only))
-		require.NoError(t, instance.Generate(withSkills))
+		require.NoError(t, generate(only))
+		require.NoError(t, generate(withSkills))
 
 		_, err := wireWorkflowArm(context.Background(), only, cfg, ArmMCPOnly)
 		require.NoError(t, err)

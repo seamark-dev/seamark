@@ -38,7 +38,7 @@ func TestGuardEncodeDenyUsesExitProtocol(t *testing.T) {
 			assert.Empty(t, reply.Stdout, "no permissionDecision form and no other stdout")
 			assert.Equal(t,
 				"lesson check frozen-assets (forbid-path-change/1) of pin 3215e7b483d1: Edit would change a.go; "+
-					"lesson check no-todo[31m (no-added-pattern/1) of pin ed5d4af5de3a: adds a line",
+					"lesson check no-todo[31m (no-added-pattern/1)  of pin ed5d4af5de3a: adds a line",
 				string(reply.Stderr), "sanitized reasons joined like the gate's rule messages, blank ones dropped")
 
 			// A deny without reasons still blocks.

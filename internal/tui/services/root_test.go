@@ -643,6 +643,43 @@ func TestBuildIndexFailsClosedOnARootThatDoesNotRead(t *testing.T) {
 	require.ErrorIs(t, e.Index().Database.BuildBlock, errRootUnknown)
 }
 
+// TestBuildIndexNamesADirectoryThatRefusesWrites covers a database in a
+// directory with mode 0555 and no sidecars. No read works there, so the
+// refusal names the directory to make writable, not an unknown root.
+func TestBuildIndexNamesADirectoryThatRefusesWrites(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a directory with mode 0555")
+	}
+
+	base, _ := servicestest.Workspace(t, "", "api")
+	dir := filepath.Join(rootDir(t), "ro")
+	path := filepath.Join(dir, "x.db")
+
+	st, err := store.Open(path)
+	require.NoError(t, err)
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, base.Root))
+	require.NoError(t, st.Close())
+
+	require.NoError(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	ws, err := workspace.Resolve(base.Root, path)
+	require.NoError(t, err)
+
+	e := engNew(ws, Deps{})
+	want := "the index database cannot be read, because its directory refuses writes (" + path +
+		": attempt to write a readonly database (1544)), and SQLite must create its WAL/SHM sidecars there " +
+		"to read it; make " + dir + " writable or use another --db"
+
+	err = rootBuild(e, false)
+	require.EqualError(t, err, want)
+	assert.NotErrorIs(t, err, errRootUnknown, "the recorded root may be sound")
+
+	block := e.Index().Database.BuildBlock
+	require.EqualError(t, block, want)
+	assert.NotErrorIs(t, block, errRootUnknown)
+}
+
 // TestForeignRootErrorTellsTheSettingsItsRoute covers the answer that a
 // settings block carries to the view.
 func TestForeignRootErrorTellsTheSettingsItsRoute(t *testing.T) {

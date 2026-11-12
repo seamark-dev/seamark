@@ -62,8 +62,9 @@ an existing enforcing policy remains in force. Use
 AI coding agent. This bakes
 `--enforce` into the hook: deny/require_approval verdicts exit 2 and
 block, and the gate **fails closed** on its own failures — a malformed
-payload, a broken policy file, or an internal error exits 2 and blocks
-the command instead of silently allowing it. This needs a gate process
+payload, a broken policy file, a policy file that cannot be read, a `-C`
+that names no directory, or an internal error exits 2 and blocks the
+command instead of silently allowing it. This needs a gate process
 that starts and returns. The client stops a gate hook that runs past its
 timeout (setup writes 15 seconds), and it cannot start a seamark binary
 that was moved or deleted. Then the gate returns no exit status 2 and
@@ -130,6 +131,20 @@ slow diff to a file first
 (`gh pr diff 42 > pr.diff; seamark check --enforce < pr.diff`), or run
 `seamark check </dev/null` to check `git diff HEAD` on purpose.
 
+The fallback runs `git diff HEAD` with fixed options: no color, no
+external diff, no textconv, the `a/` and `b/` path prefixes, raw
+non-ASCII paths, paths from the top of the work tree, the short
+submodule form, and git's default rename detection (renames, not
+copies). A git setting such as `color.ui=always`, `diff.external`, or
+`diff.renames` therefore cannot change the diff that `check` reads.
+
+Outside a git work tree, or before the first commit, `git diff HEAD`
+cannot run, so `check` needs a diff on stdin (MCP `check`: the `diff`
+argument). Without one, `check` says which of the two applies, names
+that route, and exits 1. With a terminal or `/dev/null` on stdin, it
+says so before the index refresh, so the refusal writes no `.seamark`
+folder.
+
 A diff with no changed file never reads as a clean allow. Empty output
 of `git diff HEAD` allows with the note `no changed files in git diff
 HEAD; untracked files are not part of it`, in every mode, because a
@@ -151,7 +166,22 @@ nearest line with text above them in the hunk counts too: a Python
 function ends at its last statement, so a blank line between it and the
 removed lines lies outside it. A cut before the first line, such as the
 deletion of a whole file, counts no line, so the reach of that file
-stays unknown. Policy
+stays unknown. A rename record puts its old path in `diff.files` with
+no changed line and counts it in `diff.unindexed_files`, so the reach
+of that path stays unknown too, as for a deleted file. A rule over `diff.files` can
+therefore match a rename away from a path, and a rule over
+`diff.unindexed_files` can match a rename that edits only symbols of
+the new path. A change group is the added and removed lines of a hunk
+with no context line between them, and it counts for a symbol when one
+of the lines it counts as lies in that symbol. The unknown-reach note
+and `diff.unindexed_files` count a file when one of its change groups
+counts for no symbol, also when another group of the same file touches
+a symbol. A rule over `diff.unindexed_files` can therefore match, and
+under enforcement block, more diffs, for example an import or
+doc-comment edit next to a function edit. A deletion with no context
+line between it and an edit inside a symbol is one group with that
+edit, so it counts for that symbol: the index holds only the symbol
+spans of the new side. Policy
 rules over `diff.effects` gate merges the same way `gate` gates commands, and
 `diff.unindexed_files` exposes coverage blind spots to your rules —
 changed files the index cannot attribute never silently read as safe.

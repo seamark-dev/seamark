@@ -60,19 +60,20 @@ const (
 )
 
 // verifyFixture builds a committed repository under dir with
-// verifyLessonsYAML, the sentinel, and a .gitignore that ignores
-// generated/*.log. The .gitignore also holds the .seamark carve-outs
-// that seamark init writes. Every verification appends a record to
-// .seamark/lesson-check-audit.jsonl, and a later run must not see that
-// file as a change. It returns the git top level, which is dir with its
-// symbolic links resolved, because the rerun commands name that path.
-func verifyFixture(t *testing.T, dir string) (root string, sentinel *invokerSentinel) {
+// verifyLessonsYAML, the agent section of sentinel, and a .gitignore
+// that ignores generated/*.log. The .gitignore also holds the .seamark
+// carve-outs that seamark init writes. Every verification appends a
+// record to .seamark/lesson-check-audit.jsonl, and a later run must not
+// see that file as a change. It returns the git top level, which is dir
+// with its symbolic links resolved, because the rerun commands name
+// that path. The caller owns the sentinel environment and its end
+// check.
+func verifyFixture(t *testing.T, dir string, sentinel *invokerSentinel) (root string) {
 	t.Helper()
 
-	// The command and the fixture run git. A global or system git
-	// configuration must not change what they see.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	if sentinel == nil {
+		t.Skip("the sentinel stubs are shell scripts")
+	}
 
 	verifyGit(t, dir, "init", "-q", "-b", "main")
 
@@ -85,7 +86,7 @@ func verifyFixture(t *testing.T, dir string) (root string, sentinel *invokerSent
 
 	// The sentinel adds .seamark/config.yaml. The commit keeps it out
 	// of the working-tree changes.
-	sentinel = newInvokerSentinel(t, dir)
+	sentinel.install(t, dir)
 
 	verifyGit(t, dir, "add", "-A")
 	verifyGit(t, dir, "commit", "-q", "-m", "Add the fixture")
@@ -93,7 +94,7 @@ func verifyFixture(t *testing.T, dir string) (root string, sentinel *invokerSent
 	root, err := filepath.EvalSymlinks(dir)
 	require.NoError(t, err)
 
-	return root, sentinel
+	return root
 }
 
 // verifyGit runs git in dir with a fixed identity.
@@ -265,6 +266,12 @@ func seamarkLines(stderr string) []string {
 // tier-2 configuration error, a root error, and a --file error. It also
 // checks the stderr line of each case and the error that the in-process
 // run returns.
+//
+// The parent owns the sentinel environment, and its cleanup runs after
+// every parallel child. A stub call in any child fails this table, but
+// the failure names no child: every case appends to the same protected
+// marker. The root-error case stays serial, because it builds no
+// fixture.
 func TestLessonsVerifyExitCodes(t *testing.T) {
 	if encoded, ok := os.LookupEnv(verifyProcessEnv); ok {
 		runAsSeamark(encoded)
@@ -385,9 +392,16 @@ func TestLessonsVerifyExitCodes(t *testing.T) {
 		},
 	}
 
+	sentinel := newInvokerEnvironmentForTable(t)
+	if sentinel != nil {
+		t.Cleanup(func() { sentinel.requireNoCall(t) })
+	}
+
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			root, sentinel := verifyFixture(t, t.TempDir())
+			t.Parallel()
+
+			root := verifyFixture(t, t.TempDir(), sentinel)
 
 			if c.edit != nil {
 				c.edit(t, root)
@@ -429,8 +443,6 @@ func TestLessonsVerifyExitCodes(t *testing.T) {
 			}
 
 			assert.NotErrorIs(t, err, gate.ErrBlocked, "a lesson check is no policy block")
-
-			sentinel.requireNoCall(t)
 		})
 	}
 
@@ -448,7 +460,8 @@ func TestLessonsVerifyExitCodes(t *testing.T) {
 // lesson-verification/1 document that Verify returns, also for a
 // configuration error, and nothing on a usage or root error.
 func TestLessonsVerifyJSON(t *testing.T) {
-	root, sentinel := verifyFixture(t, t.TempDir())
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, t.TempDir(), sentinel)
 
 	verifyEditAsset(t, root)
 	verifyAddTODO(t, root)
@@ -526,7 +539,8 @@ func TestLessonsVerifyJSON(t *testing.T) {
 	})
 
 	t.Run("no executable checks exit 0 with the document", func(t *testing.T) {
-		clean, cleanSentinel := verifyFixture(t, t.TempDir())
+		cleanSentinel := newInvokerEnvironment(t)
+		clean := verifyFixture(t, t.TempDir(), cleanSentinel)
 		verifyWrite(t, clean, ".seamark/lessons.yaml", "pin:\n  - rule: r\n    region: src/\n    note: n\n")
 
 		stdout, err := verifyRun(t, clean, "--json")
@@ -567,7 +581,8 @@ func TestLessonsVerifyJSON(t *testing.T) {
 // refused with the exact text. Without --verify, --file keeps one
 // value.
 func TestLessonsVerifyFileRules(t *testing.T) {
-	root, sentinel := verifyFixture(t, t.TempDir())
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, t.TempDir(), sentinel)
 
 	verifyEditAsset(t, root)
 	verifyAddTODO(t, root)
@@ -679,7 +694,8 @@ func TestLessonsVerifyFileRules(t *testing.T) {
 // above a real repository gives.
 func TestLessonsVerifyFileFromSubdirectory(t *testing.T) {
 	dir := t.TempDir()
-	root, sentinel := verifyFixture(t, dir)
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, dir, sentinel)
 
 	verifyAddTODO(t, root)
 	verifyEditAsset(t, root)
@@ -743,7 +759,8 @@ const verifyGenPin = `  - rule: frozen-gen
 // root alias match. The test builds its own alias, so it also runs on
 // Linux, where no /var link exists.
 func TestLessonsVerifyFileThroughALinkedRoot(t *testing.T) {
-	root, sentinel := verifyFixture(t, t.TempDir())
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, t.TempDir(), sentinel)
 
 	require.NoError(t, os.Symlink("generated", filepath.Join(root, "gen")))
 	verifyWrite(t, root, ".seamark/lessons.yaml", verifyLessonsYAML+verifyGenPin)
@@ -873,7 +890,8 @@ func TestLessonsVerifyFileThroughALinkedRoot(t *testing.T) {
 // error. The value itself stays lexical, so a link that it names is
 // never followed.
 func TestLessonsVerifyFileFromALinkedProcessDirectory(t *testing.T) {
-	root, sentinel := verifyFixture(t, t.TempDir())
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, t.TempDir(), sentinel)
 
 	verifyAddTODO(t, root)
 
@@ -978,7 +996,8 @@ func TestLessonsVerifyFileFromALinkedProcessDirectory(t *testing.T) {
 // extends it. The --hook cases use only forms that stay refused beside
 // the post-edit hook --verify --hook.
 func TestLessonsVerifyFlagConflicts(t *testing.T) {
-	root, sentinel := verifyFixture(t, t.TempDir())
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, t.TempDir(), sentinel)
 
 	verifyEditAsset(t, root)
 
@@ -1075,7 +1094,8 @@ func TestLessonsVerifyFlagConflicts(t *testing.T) {
 // network. The command also writes no index and no state. Its only
 // write is the record of the lesson-check audit stream.
 func TestLessonsVerifyNeverInvokes(t *testing.T) {
-	root, sentinel := verifyFixture(t, t.TempDir())
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, t.TempDir(), sentinel)
 
 	// A model call would need an agent: agent.argv names the stub. A
 	// default agent would start claude or codex, which are stubs too.
@@ -1131,7 +1151,8 @@ const ownAuditExclude = "seamark's own lesson-check audit files"
 // so its text and its JSON name them. An explicit path cannot drop them,
 // so its list does not change.
 func TestLessonsVerifyNamesOwnAudit(t *testing.T) {
-	root, sentinel := verifyFixture(t, t.TempDir())
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, t.TempDir(), sentinel)
 
 	t.Run("the default selection", func(t *testing.T) {
 		stdout, err := verifyRun(t, root)
@@ -1164,7 +1185,8 @@ func TestLessonsVerifyNamesOwnAudit(t *testing.T) {
 // record gives one stderr line on an exit-0 path only. The failure
 // never changes the exit code, and the report keeps its own line.
 func TestLessonsVerifyWritesAuditRecord(t *testing.T) {
-	root, sentinel := verifyFixture(t, t.TempDir())
+	sentinel := newInvokerEnvironment(t)
+	root := verifyFixture(t, t.TempDir(), sentinel)
 
 	verifyWrite(t, root, "src/handler.go", "package src\n\n// Handle serves.\nfunc Handle() {}\n")
 
@@ -1331,7 +1353,8 @@ var staleCases = []struct {
 func TestLessonsVerifyStaleResult(t *testing.T) {
 	for _, c := range staleCases {
 		t.Run(c.name, func(t *testing.T) {
-			root, sentinel := verifyFixture(t, t.TempDir())
+			sentinel := newInvokerEnvironment(t)
+			root := verifyFixture(t, t.TempDir(), sentinel)
 			c.edit(t, root)
 
 			reset := lateChange(t, root)

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -130,6 +131,14 @@ func TestGather(t *testing.T) {
 		{"no file", func(t *testing.T) (string, string) {
 			return plainDir(t), filepath.Join(plainDir(t), "new.db")
 		}, Facts{File: FileAbsent}, Decision{BuildAllowed, WriteNoIndex, RouteIndexHere}},
+		{"a path below a regular file", func(t *testing.T) (string, string) {
+			file := emptyFile(t, filepath.Join(plainDir(t), "main.go"))
+
+			return plainDir(t), filepath.Join(file, "x.db")
+		}, Facts{File: FileAbsent}, Decision{BuildAllowed, WriteNoIndex, RouteIndexHere}},
+		{"a path below a directory that a stat cannot reach", func(t *testing.T) (string, string) {
+			return plainDir(t), filepath.Join(hiddenRoot(t), "x.db")
+		}, Facts{Root: RootUnreadable}, Decision{BuildRefused, WriteRefused, RouteFixFile}},
 		{"an empty file", func(t *testing.T) (string, string) {
 			return plainDir(t), emptyFile(t, filepath.Join(plainDir(t), "empty.db"))
 		}, Facts{File: FileAbsent}, Decision{BuildAllowed, WriteNoIndex, RouteIndexHere}},
@@ -308,6 +317,59 @@ func TestGather(t *testing.T) {
 
 			assert.Equal(t, tc.facts, state.Facts)
 			assert.Equal(t, tc.want, Decide(state.Facts))
+			assert.False(t, state.DirRefusesWrites(), "only a directory that refuses writes gets its words")
+		})
+	}
+}
+
+// TestGatherNamesADirectoryThatRefusesWrites covers a database in a
+// directory with mode 0555 and no sidecars. The facts and the decision
+// stay those of an unreadable root, and only the words name the cause.
+// The second case puts an ESC byte in the path, because -C and --db come
+// from the command line. The cause and the route then reach a terminal or
+// an MCP client.
+func TestGatherNamesADirectoryThatRefusesWrites(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a directory with mode 0555")
+	}
+
+	cases := []struct{ name, dir string }{
+		{"a plain path", "w"},
+		{"a path with a control byte", "w" + string(rune(0x1b)) + "[31mred"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(plainDir(t), tc.dir)
+			require.NoError(t, os.MkdirAll(root, 0o755))
+
+			db := database(t, store.DefaultPath(root), root)
+			dir := filepath.Dir(db)
+
+			require.NoError(t, os.Chmod(dir, 0o555))
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+			state := Gather(root, db)
+
+			assert.Equal(t, Facts{File: FileDefault, Root: RootUnreadable}, state.Facts)
+			assert.Equal(t, Decision{BuildRefused, WriteRefused, RouteFixFile}, Decide(state.Facts))
+			assert.True(t, state.DirRefusesWrites())
+
+			cause := state.ReadOnlyDirCause()
+			assert.NotContains(t, cause, "\x1b")
+			assert.Equal(t, "the index database cannot be read, because its directory refuses writes ("+render.Sanitize(db)+
+				": attempt to write a readonly database (1544)), and SQLite must create its WAL/SHM sidecars there to read it",
+				cause)
+
+			for _, surface := range []Surface{SurfaceBuild, SurfaceCommand, SurfaceConsole} {
+				route := state.Route(RouteFixFile, surface)
+				assert.NotContains(t, route, "\x1b")
+				assert.Equal(t, "make "+render.Sanitize(dir)+" writable or use another --db", route)
+			}
+
+			// After the directory allows writes, the root reads again.
+			require.NoError(t, os.Chmod(dir, 0o755))
+			assert.Equal(t, RootSame, Gather(root, db).Root)
 		})
 	}
 }

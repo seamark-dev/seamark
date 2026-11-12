@@ -8,6 +8,21 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 
 ## Unreleased
 
+- **Faster, quieter test runs.** `make test` and `make test-race` accept
+  `TEST_PKGS`, `TEST_RUN`, `TEST_FLAGS` and `TEST_TIMEOUT`, use Go's own
+  build cache by default, and print a bounded summary from the new
+  `cmd/testsummary` runner. Complete per-invocation logs
+  (`events.jsonl`, `stderr.log`, `output.log`, `summary.json`) stay
+  outside the checkout under `TEST_LOG_DIR`; `RAW=1` restores plain
+  `go test` output. `make verify` replaces the overlapping local
+  release-gate sequence with one ordered run of the ordinary suite, the
+  race suite, lint and smoke. CI keeps the same required coverage: the
+  ordinary suites on both platforms, full race on Linux, lint and smoke.
+- **Six focused tests overlap their independent work.** The hermetic
+  workflow preflight, the co-change variant contract, and four CLI lock
+  tests now run in parallel. Each still owns its repositories and
+  databases; cases, assertions and lock deadlines are unchanged.
+
 v0.9.0 is the planned first release with lesson-check hook handlers,
 not a published release. Shipping is blocked on the
 [mandatory native verification and release fixes](docs/agent-integrations.md#release-checklist).
@@ -94,6 +109,25 @@ model-boundary delivery.
   cannot be read no longer makes doctor and status warn that installed
   seamark hooks never run under `disableAllHooks: true` when no seamark
   hook is installed. The unread-file warning stays.
+- **Multi-line pin notes.** A line break inside a pin note reads as a
+  space on one-line surfaces, for example the edit hook and
+  `lessons --prepare`, so two lines no longer run together.
+- **Gone co-change partners.** Partner lists and the orient hubs leave
+  out deleted and renamed-away files from the next index run. A deleted
+  or renamed-away file keeps its live partners, so `check` lists them
+  for a diff that deletes it or renames it away, also in a directory
+  rename. The old path of a rename record is now in `diff.files` and
+  counts in `diff.unindexed_files`. `seamark index --force` applies
+  this at once to an older index.
+- **Check says why no companion is listed.** `seamark check`, `check
+  --lessons`, and the MCP `check` tool print one `companions` line when
+  they list no partner: every partner is in the diff, the index holds
+  none, or the co-change read failed.
+- **Pin outcomes without GitHub reviews.** When origin names no GitHub
+  repository, `seamark index` records this with the fix findings, and
+  pin outcomes rest on fix findings alone. Such a pin no longer reads
+  `untested — evidence not mined since exposure` forever. The next
+  `seamark index --fixes-only` applies this to an existing index.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.
@@ -173,10 +207,69 @@ model-boundary delivery.
   untracked files are not part of it. Input that names no changed file
   gets a note in warn mode and blocks with exit 2 under enforcement.
 - **Only changed lines count in `check`.** The context lines of a hunk
-  no longer touch the symbols around an edit, so verdicts can change: a
-  comment edit next to an effectful function no longer reaches its
-  effects. An added or removed line whose text starts with `++ ` or
-  `-- ` no longer reads as a file header.
+  no longer touch the symbols around an edit, so verdicts can change. An
+  added line counts only for the symbol that holds it. Removed lines,
+  also replaced ones, count as the line directly above them, and a pure
+  deletion also as the line below. When the first removed line with text
+  is indented, the nearest line with text above counts too, as at the end
+  of a Python function. So a replaced column-0 comment after a blank
+  line, such as a Go doc comment, no longer reaches the function above
+  it. An indented comment, or a comment directly under a function, still
+  reaches that function. A change that counts for no symbol gets the
+  unknown-reach note. An added or removed line whose text starts with
+  `++ ` or `-- ` no longer reads as a file header.
+- **The unknown-reach note for each change.** `check` and MCP `check`
+  decide the note per change group: the added and removed lines of a
+  hunk with no context line between them. A file gets the note, and
+  counts in `diff.unindexed_files`, when one of its groups counts for no
+  symbol. Before, one edit inside a symbol hid a deleted function or an
+  import edit in the same file. A rule over `diff.unindexed_files` can
+  now match, and under enforcement block, more diffs.
+- **Git config and the git output that seamark reads.** `check` and MCP
+  `check` run the `git diff HEAD` fallback with fixed color, external
+  diff, textconv, path prefix, relative path, submodule, and rename
+  detection options, so a setting such as `color.ui=always` or
+  `diff.renames=copies` no longer turns a change into an allow. History
+  mining, the `mostly` names of partners, fix mining, the index
+  freshness check, and the LSP use the same options, plus fixed
+  signature, rename-follow, root-commit, path-quoting, untracked-file,
+  and revert search options. A setting such as `color.ui=always`,
+  `log.showSignature`, `log.showRoot=false`, or `diff.external` no
+  longer drops a `mostly` name, loses or adds a fix finding or a
+  co-change pair, or hides an edit from the next index run. Fix findings
+  store a non-ASCII path raw, as history does, and list a renamed file
+  under its old and its new path, not as `old => new`.
+- **Git reads no longer rewrite `.git/index`.** `index`, `check`, `why`,
+  `status`, `report`, the MCP server, and the LSP server run `git status`
+  and `git diff HEAD` with optional locks off and
+  `diff.autoRefreshIndex=false`, as the console already did. After a
+  `touch`, seamark leaves `.git/index` as it was, so a concurrent `git
+  add` no longer fails on `.git/index.lock`.
+- **`check` without a diff outside git.** In a folder outside a git work
+  tree, or in a repository with no commit, `check` and MCP `check` no
+  longer stop at `exit status 129` or `128`. They say which of the two
+  applies and name a route that runs: pipe a diff on stdin, or pass the
+  MCP `diff` argument. Any other `git diff HEAD` failure shows git's
+  first stderr line. With a terminal or `/dev/null` on stdin, `check`
+  refuses before the index refresh and creates no `.seamark` folder.
+- **The gate and a bad workspace or policy file.** `gate` with a `-C`
+  that names no directory, or with a `.seamark/policy.yaml` that cannot
+  be read, no longer allows under the default policy. Under `--enforce`
+  it blocks with exit 2, also in hook mode, and it creates no directory
+  and writes no audit entry. `doctor` fails the policy line and `status`
+  reports the policy as broken.
+- **`check` and `index` with a `-C` that is no directory.** A `-C` that
+  names a file or a missing path now gets `workspace <path>: not a
+  directory` or `no such file or directory`, as `gate` prints it, and
+  nothing is written. `check` and `index` no longer call such a path a
+  database whose recorded root cannot be read. A `--db` below a file
+  again fails on the directory of the database.
+- **An index in a read-only directory.** When the `.seamark` directory
+  refuses writes and holds no WAL/SHM sidecars, `index`, `check`, the MCP
+  tools and the console build now say that the directory refuses writes
+  and name it to make writable. They no longer say that the recorded
+  root cannot be read or suggest a retry. The refusal still writes
+  nothing.
 - **MCP server after an upgrade.** A running MCP server keeps the
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the

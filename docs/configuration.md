@@ -71,7 +71,9 @@ bounds the git window (default 5000) and `--max-files-per-commit`
 excludes bulk refactors from co-change (default 30). Every command
 takes `-C <dir>` to name the workspace and `--db <path>` to override
 the index location; `status`, `doctor`, `gate`, and `check` speak
-`--json` for machines.
+`--json` for machines. `gate`, `check`, and `index` refuse a `-C` that
+names no directory with `workspace <path>: not a directory` or `no such
+file or directory`, and the gate blocks it under `--enforce`.
 
 `seamark index` refuses a `--db` that records another repository, also
 with `--force`, because that repository would lose its pins and
@@ -81,7 +83,9 @@ such a root by itself. A run that would skip still skips. Run the
 command in that repository, or add `--move-root` to move the recorded
 root to this workspace. The refusal names the flag only when the move
 keeps one repository. A relative `--db` starts at the physical working
-directory, as the system opens it.
+directory, as the system opens it. An index in a directory that refuses
+writes cannot be read, because SQLite must create its WAL/SHM sidecars
+there, so the refusal names that directory to make writable.
 
 ### Console settings
 

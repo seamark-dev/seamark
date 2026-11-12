@@ -55,16 +55,22 @@ is a Codex Bash event.`,
 			// broken policy is itself a bypass. Before the policy loads only
 			// the explicit flag enforces; gate.Decide applies the policy's
 			// own mode after.
-			root, err := index.ResolveRoot(opts.workspace)
+			//
+			// Resolve refuses a -C that names no directory. Without the
+			// check, the gate reads no policy there, allows under the
+			// default, and its audit creates the mistyped directory.
+			ws, err := workspace.Resolve(opts.workspace, "")
+
+			if hookMode {
+				return runGateHook(cmd, gateHookRun{root: ws.Root, rootErr: err,
+					clientID: hookClient, enforce: enforce, asJSON: asJSON})
+			}
+
 			if err != nil {
 				return gate.FailClosed(err, enforce)
 			}
 
-			if hookMode {
-				return runGateHook(cmd, root, hookClient, enforce, asJSON)
-			}
-
-			decision, err := gate.Decide(gate.CommandRequest{Root: root, Command: commandLine, Enforce: enforce}, auditWarning(cmd))
+			decision, err := gate.Decide(gate.CommandRequest{Root: ws.Root, Command: commandLine, Enforce: enforce}, auditWarning(cmd))
 			if err != nil {
 				return err
 			}
@@ -95,8 +101,10 @@ is a Codex Bash event.`,
 // client's own form. A failure that gate.Decide blocks is translated
 // the same way; any other failure is a plain error, and the command
 // proceeds.
-func runGateHook(cmd *cobra.Command, root, clientID string, enforce, asJSON bool) error {
-	client, err := gateHookClient(clientID)
+func runGateHook(cmd *cobra.Command, run gateHookRun) error {
+	enforce, asJSON := run.enforce, run.asJSON
+
+	client, err := gateHookClient(run.clientID)
 	if err != nil {
 		return gate.FailClosed(err, enforce)
 	}
@@ -108,6 +116,15 @@ func runGateHook(cmd *cobra.Command, root, clientID string, enforce, asJSON bool
 
 		return hookReply(cmd, client.Commands.EncodeFailure(err))
 	}
+
+	// A workspace that names no directory is a failure before the policy
+	// loads. It takes the client's failure reply, as a bad payload does,
+	// so each client reads the block in its own form.
+	if run.rootErr != nil {
+		return fail(run.rootErr)
+	}
+
+	root := run.root
 
 	payload, err := integration.ReadHookPayload(cmd.InOrStdin())
 	if err != nil {
@@ -141,6 +158,17 @@ func runGateHook(cmd *cobra.Command, root, clientID string, enforce, asJSON bool
 	}
 
 	return hookReply(cmd, reply)
+}
+
+// gateHookRun holds the inputs of one gate hook run. rootErr is the
+// workspace resolve error. The hook reports it only after the client
+// lookup, because the failure reply needs the client.
+type gateHookRun struct {
+	root     string
+	rootErr  error
+	clientID string
+	enforce  bool
+	asJSON   bool
 }
 
 // gateHookClient returns the client whose native events a gate hook
@@ -224,9 +252,10 @@ executable lesson checks, as "seamark lessons --verify" does, whatever
 diff the policy read. A lesson violation exits 2, as a policy block does.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Locate does not test the directory. For a missing -C, the
-			// index walk below names the missing path.
-			ws, err := workspace.Locate(opts.workspace, opts.dbPath)
+			// Resolve refuses a -C that names no directory before any read
+			// or write. The index refresh would otherwise name a file or a
+			// missing path in the words of its own walk or root check.
+			ws, err := workspace.Resolve(opts.workspace, opts.dbPath)
 			if err != nil {
 				return err
 			}
@@ -242,6 +271,20 @@ diff the policy read. A lesson violation exits 2, as a policy block does.`,
 				if lessonsRoot, err = verifyRoot(opts.workspace); err != nil {
 					return err
 				}
+			}
+
+			// A terminal or /dev/null on stdin sends no diff, so check reads
+			// git diff HEAD. It reads it before the index refresh, as MCP
+			// does, so a folder outside git or before the first commit gets
+			// no .seamark folder.
+			var diffText, policyInput string
+
+			if stdinIsDevice(cmd.InOrStdin()) {
+				if diffText, err = checkGitDiffHead(root); err != nil {
+					return err
+				}
+
+				policyInput = report.PolicyInputGitDiffHead
 			}
 
 			// A stale index makes blast-radius answers WRONG (line spans
@@ -278,10 +321,12 @@ diff the policy read. A lesson violation exits 2, as a policy block does.`,
 				policy.Mode = "enforce"
 			}
 
-			diffText, policyInput, err := readDiff(cmd.InOrStdin(), cmd.ErrOrStderr(), root, stdinIdleWait,
-				policy.Mode == "enforce")
-			if err != nil {
-				return err
+			if policyInput == "" {
+				diffText, policyInput, err = readDiff(cmd.InOrStdin(), cmd.ErrOrStderr(), root, stdinIdleWait,
+					policy.Mode == "enforce")
+				if err != nil {
+					return err
+				}
 			}
 
 			source := gate.SourceGitDiffHead
@@ -359,7 +404,7 @@ const stdinIdleWait = time.Second
 // allow what its own diff blocks. This follows the gate rule that a
 // failure under enforcement must not fail open.
 func readDiff(stdin io.Reader, stderr io.Writer, root string, wait time.Duration, enforced bool) (diff, input string, err error) {
-	if f, ok := stdin.(*os.File); !ok || !isTerminal(f) {
+	if !stdinIsDevice(stdin) {
 		data, idle, err := readStdinDiff(stdin, wait)
 		if err != nil {
 			return "", "", err
@@ -378,12 +423,32 @@ func readDiff(stdin io.Reader, stderr io.Writer, root string, wait time.Duration
 		}
 	}
 
-	out, err := gitOutput(root, "diff", "HEAD")
+	out, err := checkGitDiffHead(root)
 	if err != nil {
-		return "", "", fmt.Errorf("git diff: %w", err)
+		return "", "", err
 	}
 
 	return out, report.PolicyInputGitDiffHead, nil
+}
+
+// checkGitDiffHead runs gate.GitDiffHead and adds the CLI route to its
+// reason. The route needs no git, so it can run when git diff HEAD fails.
+func checkGitDiffHead(root string) (string, error) {
+	out, err := gate.GitDiffHead(root)
+	if err != nil {
+		return "", fmt.Errorf("%w; %s", err, gate.DiffRouteCLI)
+	}
+
+	return out, nil
+}
+
+// stdinIsDevice reports a stdin that is a character device, such as a
+// terminal or /dev/null. check does not read such a stdin, because a
+// terminal sends no diff and would wait for a key.
+func stdinIsDevice(stdin io.Reader) bool {
+	f, ok := stdin.(*os.File)
+
+	return ok && isTerminal(f)
 }
 
 // readStdinDiff reads stdin to EOF when its first byte arrives within

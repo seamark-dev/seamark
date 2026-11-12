@@ -157,7 +157,7 @@ func TestCleanName(t *testing.T) {
 		{name: "empty", in: "", want: Unknown},
 		{name: "only controls", in: "\x1b\x07", want: Unknown},
 		{name: "escape removed", in: "cli\x1b[31ment", want: "cli[31ment"},
-		{name: "one line", in: "a\tb\nc", want: "a bc"},
+		{name: "one line", in: "a\tb\nc", want: "a b c"},
 		{name: "bounded", in: strings.Repeat("x", 200), want: strings.Repeat("x", maxNameBytes)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

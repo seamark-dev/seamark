@@ -1,5 +1,9 @@
 # Seamark build automation. CGO is required (tree-sitter bindings).
 
+# A bare `make` builds the binary. The test runner below is a prerequisite,
+# not the default goal.
+.DEFAULT_GOAL := build
+
 BINARY  := bin/seamark
 MODULE  := github.com/seamark-dev/seamark
 # VERSION lands in shell recipes and file names, and git permits tag
@@ -10,11 +14,46 @@ MODULE  := github.com/seamark-dev/seamark
 VERSION := $(shell (git describe --tags --always --dirty 2>/dev/null || echo dev) | LC_ALL=C tr -cd 'A-Za-z0-9._+-')
 LDFLAGS := -ldflags "-X $(MODULE)/internal/cli.version=$(VERSION)"
 
-# Test builds use an explicit writable cache. This avoids failures when a
-# restricted macOS runner cannot access ~/Library/Caches/go-build.
+# Test builds use Go's own build cache by default, so ordinary `go test`
+# result caching works the same way it does for a hand-run command. A
+# restricted runner that cannot write that cache sets TEST_GOCACHE
+# explicitly; an empty resolved path is an error, never a silent switch to
+# another directory.
 NORMALIZED_TMPDIR := $(patsubst %/,%,$(strip $(TMPDIR)))
 TEST_CACHE_ROOT   := $(if $(NORMALIZED_TMPDIR),$(NORMALIZED_TMPDIR),/tmp)
-TEST_GOCACHE      ?= $(TEST_CACHE_ROOT)/seamark-go-build-$(shell id -u)
+TEST_GOCACHE      ?= $(shell go env GOCACHE)
+ifeq ($(strip $(TEST_GOCACHE)),)
+$(error TEST_GOCACHE is empty: go env GOCACHE returned no path; set TEST_GOCACHE explicitly)
+endif
+
+# Focused iteration: TEST_PKGS selects packages and TEST_RUN is one -run
+# regex. TEST_RUN is passed as a single quoted argument, so write
+# alternation without spaces: TEST_RUN='TestA|TestB'. A literal $ is
+# written $$ because Make expands the recipe before the shell sees it.
+# TEST_FLAGS is a trusted list of ordinary go test flags (for example
+# TEST_FLAGS='-count=1 -p=2 -parallel=2' on a constrained host), not a
+# second package selector.
+TEST_PKGS    ?= ./...
+TEST_RUN     ?=
+TEST_FLAGS   ?=
+TEST_TIMEOUT ?= 10m
+
+# Compact output is the default: the compiled testsummary runner captures
+# complete per-invocation logs and prints a bounded summary. RAW=1 runs
+# plain `go test` with its ordinary output.
+RAW ?=
+TEST_RUNNER     := bin/testsummary
+TEST_RUNNER_DEP := $(if $(RAW),,$(TEST_RUNNER))
+TEST_QUIET      := $(if $(RAW),,@)
+TEST_LOG_DIR    ?= $(TEST_CACHE_ROOT)/seamark-test-logs-$(shell id -u)
+
+TEST_ENV     := CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)"
+TEST_CMD     := $(if $(RAW),go test,$(TEST_RUNNER) -log-dir "$(TEST_LOG_DIR)" -slow 3 --)
+TEST_GOFLAGS := -timeout $(TEST_TIMEOUT) $(TEST_FLAGS)
+TEST_SELECT  := $(TEST_PKGS) $(if $(strip $(TEST_RUN)),-run '$(TEST_RUN)')
+
+$(TEST_RUNNER): $(shell find cmd/testsummary -name '*.go' 2>/dev/null) go.mod
+	$(TEST_QUIET)CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go build -o $(TEST_RUNNER) ./cmd/testsummary
 
 # Release packaging: one archive per platform, built natively (CGO rules
 # out cross-compiling from a single host — the release workflow runs this
@@ -24,7 +63,7 @@ GOOS    := $(shell go env GOOS)
 GOARCH  := $(shell go env GOARCH)
 ARCHIVE := seamark_$(VERSION)_$(GOOS)_$(GOARCH).tar.gz
 
-.PHONY: build test lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race report-bench tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-oracle-record agents-native-smoke native-replay native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
+.PHONY: build test test-race verify install lint fmt tidy index report clean release-archive smoke skills-validate agents-test lesson-check lesson-check-race report-bench tui-test tui-race tui-capture tui-capture-check tui-measure agents-native-check agents-oracle-record agents-native-smoke native-replay native-record lessons-bench lessons-bench-prepare lessons-bench-preflight lessons-bench-report skills-bench skills-bench-preflight skills-bench-report skills-activation
 
 build: ## Build the seamark binary into ./bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(BINARY) ./cmd/seamark
@@ -32,11 +71,23 @@ build: ## Build the seamark binary into ./bin
 install: ## Install seamark into ~/.local/bin
 	CGO_ENABLED=1 go build $(LDFLAGS) -o $(HOME)/.local/bin/seamark ./cmd/seamark
 
-test: ## Run all tests
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./...
+test: $(TEST_RUNNER_DEP) ## Run tests (TEST_PKGS, TEST_RUN, TEST_FLAGS; RAW=1 for plain go test)
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) $(TEST_GOFLAGS) $(TEST_SELECT)
 
-test-race: ## Run all tests with the race detector
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./...
+test-race: $(TEST_RUNNER_DEP) ## Run tests with the race detector (same selectors as test)
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) -race $(TEST_GOFLAGS) $(TEST_SELECT)
+
+# The one full local gate. Each suite runs once, in order, even under
+# make -j: the recursive invocations are recipe lines, not unordered
+# siblings. A narrowing selector is rejected before any test starts.
+verify: ## One full local gate: ordinary tests, race tests, lint, smoke
+	@case '$(strip $(TEST_PKGS))' in './...') ;; *) echo "verify: TEST_PKGS must stay ./... (got '$(strip $(TEST_PKGS))'); use make test for focused runs" >&2; exit 2;; esac
+	@[ -z '$(strip $(TEST_RUN))' ] || { echo "verify: TEST_RUN must be empty; use make test for focused runs" >&2; exit 2; }
+	@[ -z '$(strip $(TEST_FLAGS))' ] || { echo "verify: TEST_FLAGS must be empty; use make test for focused flags" >&2; exit 2; }
+	@$(MAKE) --no-print-directory test TEST_PKGS=./... TEST_RUN= TEST_FLAGS=
+	@$(MAKE) --no-print-directory test-race TEST_PKGS=./... TEST_RUN= TEST_FLAGS=
+	@$(MAKE) --no-print-directory lint
+	@$(MAKE) --no-print-directory smoke
 
 # Run integration and supporting packages in full, plus focused tests
 # for setup, hooks, gates, state, and lesson inference in other packages.
@@ -44,9 +95,9 @@ test-race: ## Run all tests with the race detector
 AGENTS_TEST_PKGS := ./internal/integration/... ./internal/agent/... ./internal/hooks/... ./internal/approve/... ./internal/skills/... ./internal/delivery/... ./internal/gate/... ./internal/doctor/... ./internal/status/...
 AGENTS_TEST_RUN  := 'Test(RunInit|InitClient|InitDefault|InitGateMode|ReportSkills|LessonsHook|GateHook|HookBudgets|HookDelivery|RecordHookDelivery|ResetHookDelivery|ContextDelivery|Summarize|PrintFiringSummary|ApproveTools|Reminder|LessonsForFiles|MergeHooks|ResolveGateMode|LessonsDistill|LessonsExtractTriggers|ExtractTriggers|ResourcesAndPrompts)'
 
-agents-test: ## Run the agent-integration contract and characterization tests
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(AGENTS_TEST_PKGS)
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli ./internal/reviews ./internal/report ./internal/mcp -run $(AGENTS_TEST_RUN)
+agents-test: $(TEST_RUNNER_DEP) ## Run the agent-integration contract and characterization tests
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) $(TEST_GOFLAGS) $(AGENTS_TEST_PKGS)
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) $(TEST_GOFLAGS) ./internal/cli ./internal/reviews ./internal/report ./internal/mcp -run $(AGENTS_TEST_RUN)
 
 # Lesson-check tests: the check configuration, the working-tree
 # snapshot, both /1 checkers, and the verification surfaces. The new
@@ -73,13 +124,13 @@ agents-test: ## Run the agent-integration contract and characterization tests
 LESSON_CHECK_PKGS := ./internal/lessoncheck/... ./internal/privatedir/... ./internal/lessonreport/... ./internal/mcpusage/...
 LESSON_CHECK_RUN  := 'Test(LessonCheck|LessonsVerify|LessonsSetMode|CheckLessons|LessonsPrepare|LessonsExploreHook|ChangeSetPreparation|LessonsHookNeverInvokes|LessonsGuard|LessonsBaseline|LessonsDelivery|MCPUsage|LessonsStats)'
 
-lesson-check: ## Run the lesson-check, guard, preparation, and delivery-report tests (offline, no model)
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(LESSON_CHECK_PKGS)
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
+lesson-check: $(TEST_RUNNER_DEP) ## Run the lesson-check, guard, preparation, and delivery-report tests (offline, no model)
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) $(TEST_GOFLAGS) $(LESSON_CHECK_PKGS)
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) $(TEST_GOFLAGS) ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
 
-lesson-check-race: ## Run the lesson-check tests with the race detector
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race $(LESSON_CHECK_PKGS)
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
+lesson-check-race: $(TEST_RUNNER_DEP) ## Run the lesson-check tests with the race detector
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) -race $(TEST_GOFLAGS) $(LESSON_CHECK_PKGS)
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) -race $(TEST_GOFLAGS) ./internal/cli ./internal/mcp -run $(LESSON_CHECK_RUN)
 
 # The fixture is synthetic and deterministic, so this target reads no real
 # log and no file under .seamark. The numbers depend on the machine.
@@ -176,16 +227,16 @@ TUI_TEST_PKGS := ./internal/tui/... ./internal/workspace/... ./internal/history/
 # how the commands find and open the index through internal/workspace.
 TUI_CLI_PARITY := Test(TUI|Lessons|RunInit|InitClient|IndexFixesOnly|IndexReviews|RetargetKeeps|ExtractSummary|SelectionParsing|Ledger(Shows|Names)|PlanAnnotations|CLIWorkspace)
 
-tui-test: ## Run the workspace console tests (shell, screens, shared engines, CLI goldens)
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test $(TUI_TEST_PKGS)
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test ./internal/cli -run '$(TUI_CLI_PARITY)'
+tui-test: $(TEST_RUNNER_DEP) ## Run the workspace console tests (shell, screens, shared engines, CLI goldens)
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) $(TEST_GOFLAGS) $(TUI_TEST_PKGS)
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) $(TEST_GOFLAGS) ./internal/cli -run '$(TUI_CLI_PARITY)'
 
 # The console runs engine work on goroutines (refresh, distillation,
 # saves, the selection sample), so its packages also run under the race
 # detector. Every package of TUI_TEST_PKGS passes under the race
 # detector, so the target runs all of them.
-tui-race: ## Run the workspace console packages with the race detector
-	CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -race $(TUI_TEST_PKGS)
+tui-race: $(TEST_RUNNER_DEP) ## Run the workspace console packages with the race detector
+	$(TEST_QUIET)$(TEST_ENV) $(TEST_CMD) -race $(TEST_GOFLAGS) $(TUI_TEST_PKGS)
 
 # Captures are plain-text renders of representative console states at
 # several terminal sizes, for the visual review (they stay local). The

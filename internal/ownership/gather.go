@@ -2,6 +2,7 @@ package ownership
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -33,7 +34,9 @@ func Gather(root, db string) State {
 	info, err := os.Stat(db)
 
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		// A path below a regular file holds no database, as statRoot
+		// reads it. The build then fails on its directory in its own words.
 		s.File = FileAbsent
 
 		return s
@@ -78,6 +81,23 @@ func Gather(root, db string) State {
 	s.RootOwnsFile = s.RootDefault || (s.Root != RootGone && errors.Is(err, fs.ErrNotExist))
 
 	return s
+}
+
+// DirRefusesWrites reports a database whose recorded root does not read,
+// because its directory refuses writes. SQLite then cannot create its
+// sidecars, so no read works until the directory is writable. The facts
+// and the decision stay those of an unreadable root: only the words change.
+func (s State) DirRefusesWrites() bool {
+	return s.Root == RootUnreadable && store.IsReadOnlyDirectory(s.ReadErr)
+}
+
+// ReadOnlyDirCause says why the database gives no answer when
+// DirRefusesWrites holds. The path and the error are sanitized, because
+// both reach a terminal or an MCP client.
+func (s State) ReadOnlyDirCause() string {
+	return fmt.Sprintf("the index database cannot be read, because its directory refuses writes (%s: %s), "+
+		"and SQLite must create its WAL/SHM sidecars there to read it",
+		render.Sanitize(s.DB), render.Sanitize(s.ReadErr.Error()))
 }
 
 // GatherCommand is Gather for a CLI pin write. Outside git, a directory
@@ -248,6 +268,8 @@ func (s State) Route(r Route, surface Surface) string {
 		return "run `seamark index --db " + db + "` in " + there
 	case r == RouteAnotherDB:
 		return "use another --db"
+	case r == RouteFixFile && s.DirRefusesWrites():
+		return "make " + render.Sanitize(filepath.Dir(s.DB)) + " writable or use another --db"
 	case r == RouteFixFile:
 		return "fix the file or use another --db"
 	default:

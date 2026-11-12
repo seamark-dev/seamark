@@ -20,6 +20,7 @@ package store
 import (
 	"database/sql"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -331,6 +332,40 @@ const (
 	MetaParseCacheVersion = "parse_cache_version"
 )
 
+// MetaGoneFiles holds the gone paths of the last index run as a JSON
+// array of gone keys, sorted and distinct (see goneKey). A gone path is
+// a path that a stored co-change pair names and the workspace no longer
+// has. Rebuild wipes the key with the pairs, and Tx.SetGoneFiles writes
+// it in the same transaction, so the list and the pairs never disagree.
+// The partner and hub reads leave these paths out. No key reads as an
+// empty list, because an index written by an older binary has none.
+const MetaGoneFiles = "gone_files"
+
+// goneFilesSQL is the subquery that gives the gone keys to the
+// co-change reads. A value that is not a JSON array makes the read
+// fail, so a damaged index never reads as "nothing is gone".
+const goneFilesSQL = `(SELECT value FROM json_each(COALESCE(
+	(SELECT value FROM meta WHERE key = '` + MetaGoneFiles + `'), '[]')))`
+
+// notGoneSQL returns the SQL condition that the path from the column
+// expression expr is not gone. CoChangePartners and HotFiles use this
+// one condition, so the two reads always leave out the same paths.
+// SQLite hex() gives the same key as goneKey, also for bytes that are
+// not valid UTF-8.
+func notGoneSQL(expr string) string {
+	return "hex(" + expr + ") NOT IN " + goneFilesSQL
+}
+
+// goneKey returns the key that the gone list stores for path: the
+// upper-case hex of its bytes. History keeps the raw bytes of a path,
+// and these bytes need not be valid UTF-8. JSON text replaces each
+// invalid byte with U+FFFD, so a stored path would not match its pair.
+// The hex key keeps every byte. Keys sort in the byte order of their
+// paths.
+func goneKey(path string) string {
+	return strings.ToUpper(hex.EncodeToString([]byte(path)))
+}
+
 // SetMeta stores an index bookkeeping value (schema version, repo root, …).
 func (s *Store) SetMeta(key, value string) error {
 	_, err := s.db.Exec(
@@ -361,7 +396,11 @@ type Tx struct {
 // Rebuild atomically replaces the derived tables (structure + history +
 // effects). Policy and learning tables (rule, lesson) and meta survive, as
 // they are user/agent state rather than derivations of the current tree.
-// The FTS index is rebuilt after the callback succeeds.
+// The one exception is the gone list (MetaGoneFiles). It describes the
+// co-change rows, so Rebuild wipes it with them. A callback that writes
+// pairs and no list then leaves no list from an earlier run, which would
+// hide a file that came back. The FTS index is rebuilt after the callback
+// succeeds.
 func (s *Store) Rebuild(fn func(tx *Tx) error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -380,6 +419,10 @@ func (s *Store) Rebuild(fn func(tx *Tx) error) error {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return fmt.Errorf("store: wipe %s: %w", table, err)
 		}
+	}
+
+	if _, err := tx.Exec(`DELETE FROM meta WHERE key = ?`, MetaGoneFiles); err != nil {
+		return fmt.Errorf("store: wipe %s: %w", MetaGoneFiles, err)
 	}
 
 	if err := fn(&Tx{tx: tx}); err != nil {
@@ -441,6 +484,40 @@ func (t *Tx) InsertCoChange(c model.CoChange) error {
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert cochange %s/%s: %w", c.FileA, c.FileB, err)
+	}
+
+	return nil
+}
+
+// SetGoneFiles stores the gone list (MetaGoneFiles) in the Rebuild
+// transaction, so it always matches the co-change rows of that run. The
+// list holds the gone key of each path, sorted and distinct. An empty
+// path is dropped, because an empty key matches no file. No path gives
+// "[]".
+func (t *Tx) SetGoneFiles(paths []string) error {
+	list := make([]string, 0, len(paths))
+
+	for _, p := range paths {
+		if p != "" {
+			list = append(list, goneKey(p))
+		}
+	}
+
+	slices.Sort(list)
+	list = slices.Compact(list)
+
+	data, err := json.Marshal(list)
+	if err != nil {
+		return fmt.Errorf("store: encode %s: %w", MetaGoneFiles, err)
+	}
+
+	_, err = t.tx.Exec(
+		`INSERT INTO meta (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		MetaGoneFiles, string(data),
+	)
+	if err != nil {
+		return fmt.Errorf("store: set %s: %w", MetaGoneFiles, err)
 	}
 
 	return nil
@@ -640,8 +717,11 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 
 // ReplaceFixFindings atomically swaps the fix-derived findings — their
 // own lifecycle, independent of the review set — and stamps
-// MetaFixesMinedAt in the same transaction.
-func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
+// MetaFixesMinedAt in the same transaction. noReviewRepository tells
+// that origin names no GitHub repository at the mined root. The write
+// then sets MetaNoReviewRepositoryAt to the fixes stamp, and otherwise
+// deletes it.
+func (s *Store) ReplaceFixFindings(findings []model.Finding, noReviewRepository bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: begin fix findings: %w", err)
@@ -671,14 +751,34 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	// Stamp the mine time in the same transaction, as ReplaceLessons
 	// does. A crash between two writes would leave fresh rows with an old
 	// stamp, and the outcome loop trusts the stamp.
+	minedAt := fmt.Sprint(time.Now().Unix())
+
 	_, err = tx.Exec(
 		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		MetaFixesMinedAt,
-		fmt.Sprint(time.Now().Unix()),
+		minedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("store: stamp fix mine: %w", err)
+	}
+
+	// Each fix write decides the record again, in the same transaction.
+	// The record then always describes the root whose fix commits this
+	// write stored, and an origin that moved to GitHub clears it at once.
+	if noReviewRepository {
+		_, err = tx.Exec(
+			`INSERT INTO meta (key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			MetaNoReviewRepositoryAt,
+			minedAt,
+		)
+	} else {
+		_, err = tx.Exec(`DELETE FROM meta WHERE key = ?`, MetaNoReviewRepositoryAt)
+	}
+
+	if err != nil {
+		return fmt.Errorf("store: record the review repository state: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1644,6 +1744,11 @@ type CoChangePartner struct {
 // CoChangePartners returns files that historically change together with
 // file, strongest coupling first. minLift filters chance-level pairs;
 // 1.0 is the neutral threshold.
+//
+// A gone partner (MetaGoneFiles) is left out before LIMIT, so limit
+// counts live partners only. An agent cannot open a gone file. The
+// queried file is never filtered, because an agent that deletes a file
+// still needs its live partners.
 func (s *Store) CoChangePartners(file string, minLift float64, limit int) ([]CoChangePartner, error) {
 	if limit <= 0 {
 		limit = 15
@@ -1654,8 +1759,9 @@ func (s *Store) CoChangePartners(file string, minLift float64, limit int) ([]CoC
 		        together, total, lift
 		 FROM cochange
 		 WHERE (file_a = ? OR file_b = ?) AND lift >= ?
+		   AND `+notGoneSQL(`CASE WHEN file_a = ? THEN file_b ELSE file_a END`)+`
 		 ORDER BY together DESC, lift DESC
-		 LIMIT ?`, file, file, file, minLift, limit,
+		 LIMIT ?`, file, file, file, minLift, file, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -1777,6 +1883,13 @@ const (
 	MetaReviewsMinedAt = "reviews_mined_at"
 )
 
+// MetaNoReviewRepositoryAt records that origin names no GitHub
+// repository, so seamark can mine no review findings there. Its value
+// is the fixes stamp of the fix write that found this state. The fix
+// write sets it and deletes it in the same transaction as the fixes
+// stamp.
+const MetaNoReviewRepositoryAt = "no_review_repository_at"
+
 // MetaUnix reads a Unix-seconds meta value. It returns 0 when the value
 // is absent or malformed, or when the read fails. A stamp that cannot be
 // read then counts as "never mined".
@@ -1795,14 +1908,28 @@ func (s *Store) MetaUnix(key string) int64 {
 }
 
 // EvidenceHorizon returns the timestamp the finding corpus is known
-// current through: the older of the two mining stamps, because a
-// recurrence can arrive through either channel. Zero when either
-// stamp is missing — a store that cannot prove it looked cannot claim
-// nothing was found, so verdicts stay untested until
-// `seamark index --reviews` runs once.
+// current through. Usually it is the older of the two mining stamps,
+// because a recurrence can arrive through either channel. It is zero
+// when a needed stamp is missing. A store that cannot prove it looked
+// cannot claim that nothing was found.
+//
+// When origin names no GitHub repository, no review finding can
+// arrive. The horizon is then the fixes stamp alone, but only while
+// MetaNoReviewRepositoryAt equals it. A record with another value is
+// stale. A later fix write, for example by an older binary, left it
+// unchanged, so it proves nothing about the current origin.
 func (s *Store) EvidenceHorizon() int64 {
-	fixes, reviews := s.MetaUnix(MetaFixesMinedAt), s.MetaUnix(MetaReviewsMinedAt)
-	if fixes == 0 || reviews == 0 {
+	fixes := s.MetaUnix(MetaFixesMinedAt)
+	if fixes == 0 {
+		return 0
+	}
+
+	if s.MetaUnix(MetaNoReviewRepositoryAt) == fixes {
+		return fixes
+	}
+
+	reviews := s.MetaUnix(MetaReviewsMinedAt)
+	if reviews == 0 {
 		return 0
 	}
 
@@ -1852,16 +1979,25 @@ type HotFile struct {
 
 // HotFiles returns the files most coupled to the rest of the repo by
 // history. Pairs are stored once per (a, b), so both columns count.
+//
+// A pair with a gone side (MetaGoneFiles) does not count. So a gone file
+// is never a hub, and a live hub counts only the partners that an agent
+// can open.
 func (s *Store) HotFiles(limit int) ([]HotFile, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
 	rows, err := s.db.Query(
-		`SELECT f, COUNT(*) AS partners, MAX(lift)
-		 FROM (SELECT file_a AS f, lift FROM cochange WHERE lift >= 1.0
+		`WITH live AS (
+		   SELECT file_a, file_b, lift FROM cochange
+		   WHERE lift >= 1.0
+		     AND `+notGoneSQL("file_a")+`
+		     AND `+notGoneSQL("file_b")+`)
+		 SELECT f, COUNT(*) AS partners, MAX(lift)
+		 FROM (SELECT file_a AS f, lift FROM live
 		       UNION ALL
-		       SELECT file_b AS f, lift FROM cochange WHERE lift >= 1.0)
+		       SELECT file_b AS f, lift FROM live)
 		 GROUP BY f ORDER BY partners DESC, f LIMIT ?`, limit,
 	)
 	if err != nil {

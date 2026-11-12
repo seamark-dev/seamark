@@ -24,11 +24,6 @@ const emptyHeadNote = "no changed files in git diff HEAD; untracked files are no
 func noFileFixture(t *testing.T) string {
 	t.Helper()
 
-	// check runs git itself. A global or system git configuration must
-	// not change the diff that check reads.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-
 	root := writeFixture(t)
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".seamark/\n"), 0o644))
 	gitify(t, root)

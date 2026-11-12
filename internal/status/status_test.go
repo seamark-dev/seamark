@@ -199,6 +199,27 @@ func TestGatherReportsBrokenPolicy(t *testing.T) {
 	assert.Contains(t, b.String(), "POLICY BROKEN")
 }
 
+func TestGatherReportsAPolicyItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file with mode 0000")
+	}
+
+	st, root := seededStore(t)
+	policyPath := filepath.Join(root, ".seamark", "policy.yaml")
+
+	require.NoError(t, os.WriteFile(policyPath, []byte("mode: enforce\n"), 0o644))
+	require.NoError(t, os.Chmod(policyPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(policyPath, 0o644) })
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, "gate: "+policyPath+": permission denied", s.GatePolicyError)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "gate           POLICY BROKEN (gate: "+policyPath+": permission denied)")
+}
+
 func TestGatherResolvesTheCodexAgentThroughTheRegistry(t *testing.T) {
 	st, root := seededStore(t)
 
@@ -243,7 +264,7 @@ func TestPrintSeparatesFixMiningFromReviews(t *testing.T) {
 	// say so instead of dressing fix findings up as review evidence.
 	require.NoError(t, st.ReplaceFixFindings([]model.Finding{
 		{ID: 1, Path: "a.go", Body: "fix: reset state", Source: "fix:subject"},
-	}))
+	}, false))
 
 	s, err := Gather(st, root)
 	require.NoError(t, err)

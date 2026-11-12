@@ -14,12 +14,15 @@ import (
 	"strconv"
 
 	"github.com/seamark-dev/seamark/internal/history"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
 // ErrNotDirectory reports a workspace path that does not name a
 // directory. The console checks this before it enters full-screen mode.
-var ErrNotDirectory = errors.New("workspace is not a directory")
+// Resolve prints it after the path, as it prints a missing path, so the
+// two causes read alike.
+var ErrNotDirectory = errors.New("not a directory")
 
 // Workspace is a resolved repository root and its index database path.
 type Workspace struct {
@@ -33,7 +36,9 @@ type Workspace struct {
 }
 
 // Resolve validates dir and derives the database path. It creates
-// nothing and runs only `git rev-parse`.
+// nothing and runs only `git rev-parse`. The error names the path after
+// render.Sanitize, because the path comes from the command line and
+// reaches a terminal or an MCP client.
 func Resolve(dir, dbFlag string) (Workspace, error) {
 	if dir == "" {
 		dir = "."
@@ -41,23 +46,23 @@ func Resolve(dir, dbFlag string) (Workspace, error) {
 
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("workspace %s: %w", dir, err)
+		return Workspace{}, fmt.Errorf("workspace %s: %w", render.Sanitize(dir), err)
 	}
 
 	// Locate ignores a missing directory, because git fails and the
 	// root falls back to the path. This check makes the error visible.
 	info, err := os.Stat(abs)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("workspace %s: %w", abs, statCause(err))
+		return Workspace{}, fmt.Errorf("workspace %s: %w", render.Sanitize(abs), statCause(err))
 	}
 
 	if !info.IsDir() {
-		return Workspace{}, fmt.Errorf("%w: %s", ErrNotDirectory, abs)
+		return Workspace{}, fmt.Errorf("workspace %s: %w", render.Sanitize(abs), ErrNotDirectory)
 	}
 
 	ws, err := Locate(abs, dbFlag)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("workspace %s: %w", abs, err)
+		return Workspace{}, fmt.Errorf("workspace %s: %w", render.Sanitize(abs), err)
 	}
 
 	// index.Run opens a relative --db against the process directory.

@@ -76,11 +76,6 @@ const guardProcessEnv = "SEAMARK_TEST_GUARD_PROCESS_ARGS"
 func guardFixture(t *testing.T) (root string, sentinel *invokerSentinel) {
 	t.Helper()
 
-	// The hooks and the fixture run git. A global or system git
-	// configuration must not change what they see.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-
 	dir := t.TempDir()
 	verifyGit(t, dir, "init", "-q", "-b", "main")
 

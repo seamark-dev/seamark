@@ -2,8 +2,12 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // Read-only diagnostics for `seamark doctor`. Unlike Open, nothing here
@@ -38,6 +42,16 @@ func ProbeRoot(path string) (string, error) {
 	root, _, err := probeMeta(path, MetaRepoRoot)
 
 	return root, err
+}
+
+// IsReadOnlyDirectory reports a SQLite failure because the directory of a
+// WAL database refuses writes. SQLite must create the -wal and -shm files
+// beside the database, also to read it, so no read can work in that state.
+// The store package owns the driver, so the code test stays here.
+func IsReadOnlyDirectory(err error) bool {
+	var sqlErr *sqlite.Error
+
+	return errors.As(err, &sqlErr) && sqlErr.Code() == sqlite3.SQLITE_READONLY_DIRECTORY
 }
 
 // probeMeta reads one meta value without schema or migration. found is

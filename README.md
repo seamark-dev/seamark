@@ -308,11 +308,48 @@ extend the [effect catalogue](docs/configuration.md#effect-catalogue).
 Source builds need Go 1.25 or newer and a C compiler:
 
 ```bash
-make test
-make lint
-make build
-make smoke
+make verify   # one full gate: ordinary tests, race tests, lint, smoke
 ```
+
+`make verify` ends with the smoke test, which builds `bin/seamark`; run
+`make build` alone when you only need the binary.
+
+During editing, run only the packages you changed; a focused run is
+cached like any other `go test`:
+
+```bash
+make test TEST_PKGS=./internal/cli TEST_RUN='TestCheckLessons|TestLessonsVerify'
+make test-race TEST_PKGS=./internal/lessoncheck
+```
+
+A literal `$` in `TEST_RUN` or `TEST_FLAGS` must be doubled for Make:
+`TEST_RUN='^TestFoo$$'` reaches `go test` as `^TestFoo$`.
+
+`make test` and `make test-race` print a bounded summary: status, wall
+time, package and test counts, the slowest uncached packages, and the
+directory holding the complete evidence (`events.jsonl`, `stderr.log`,
+`output.log`, `summary.json`). A failed run names the failing packages
+and tests, keeps the beginning and end of each diagnostic, and points at
+the same directory. Read the summary and the named failures first; never
+paste `events.jsonl` into an agent. `RAW=1 make test` runs plain
+`go test` with its ordinary output.
+
+`make verify` runs each full suite once, in order, even under parallel make,
+and refuses `TEST_PKGS`, `TEST_RUN` or `TEST_FLAGS` that would narrow it.
+One owner runs it before review; several agents may run focused packages
+at once. Docs-only changes do not need the Go suites.
+
+`TEST_GOCACHE` overrides the Go build/result cache (the default is
+`go env GOCACHE`), `TEST_LOG_DIR` overrides where run directories are
+written, and `TEST_TIMEOUT` changes the per-package timeout (10m). On a
+constrained host, bound parallelism with
+`TEST_FLAGS='-count=1 -p=2 -parallel=2'`: `-p` caps packages and
+`-parallel` caps tests inside each package.
+
+Native client checks, recordings, captures and benchmarks keep their own
+targets and output paths; `make verify` does not replace the release
+prerequisites in
+[agent integrations](docs/agent-integrations.md#release-checklist).
 
 See the [Makefile](Makefile) for additional checks and benchmark commands.
 

@@ -8,16 +8,21 @@ package gate
 import (
 	"crypto/sha256"
 	_ "embed"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
 	"gopkg.in/yaml.v3"
+
+	"github.com/seamark-dev/seamark/internal/render"
 )
 
 //go:embed policy.yaml
@@ -63,14 +68,29 @@ type Policy struct {
 // default rule set (policy is a whole, not a patch — partial merges would
 // make the effective rules unreviewable). All CEL expressions compile at
 // load time so a broken rule fails loudly, not at decision time.
+//
+// A policy file that exists but cannot be read is an error, as a broken
+// file is. The default would replace the rules of the workspace without
+// a word, and an enforce gate would allow what the file denies.
+//
+// Each error names the path after render.Sanitize. The path comes from
+// -C, and the error reaches a terminal, a hook reply, or an MCP client.
 func LoadPolicy(root string) (*Policy, error) {
 	data := defaultPolicy
 	source := "embedded default"
 
 	workspacePath := filepath.Join(root, ".seamark", "policy.yaml")
-	if b, err := os.ReadFile(workspacePath); err == nil {
+
+	b, err := os.ReadFile(workspacePath)
+
+	switch {
+	case err == nil:
 		data = b
-		source = workspacePath
+		source = render.Sanitize(workspacePath)
+	case policyAbsent(err):
+		// No policy file: the embedded default applies.
+	default:
+		return nil, fmt.Errorf("gate: %s: %w", render.Sanitize(workspacePath), readCause(err))
 	}
 
 	var p Policy
@@ -110,6 +130,25 @@ func LoadPolicy(root string) (*Policy, error) {
 	}
 
 	return &p, nil
+}
+
+// policyAbsent reports a read error that means no policy file exists. A
+// path below a regular file cannot hold a file, so ENOTDIR counts as
+// absent too. The index root check reads ENOTDIR the same way.
+func policyAbsent(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// readCause removes the path wrapper from a read error. The message
+// names the path once, in the form of the YAML error. The cause still
+// matches fs.ErrPermission and the other errno values.
+func readCause(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+
+	return err
 }
 
 // celEnv declares the policy vocabulary. `contains` is added as a member

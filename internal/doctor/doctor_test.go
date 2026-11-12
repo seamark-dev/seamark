@@ -148,6 +148,27 @@ func TestRunDetectsBrokenPolicyAndEffects(t *testing.T) {
 	assert.Equal(t, StateFail, checks["effects"].State)
 }
 
+func TestRunFailsAPolicyItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file with mode 0000")
+	}
+
+	root, dbPath := fixtureRoot(t)
+	policyPath := filepath.Join(root, ".seamark", "policy.yaml")
+
+	// An unreadable policy is a broken policy, not the embedded default.
+	require.NoError(t, os.WriteFile(policyPath, []byte("mode: enforce\n"), 0o644))
+	require.NoError(t, os.Chmod(policyPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(policyPath, 0o644) })
+
+	r := Run(root, dbPath, "test")
+	checks := byName(r)
+
+	assert.Equal(t, StateFail, checks["policy"].State)
+	assert.Equal(t, "gate: "+policyPath+": permission denied", checks["policy"].Detail)
+	assert.Contains(t, checks["policy"].Fix, "fails closed")
+}
+
 func TestRunDetectsIgnoredPolicyOverlays(t *testing.T) {
 	root, dbPath := fixtureRoot(t)
 

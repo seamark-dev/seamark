@@ -125,7 +125,7 @@ func TestListFilesSeparatesUnstagedDeletions(t *testing.T) {
 	writeRepoFile(t, root, moved, "package gone\n\nfunc Vanished() {}\n")
 	gitIn(t, root, "add", "-N", moved)
 
-	files, deleted, err := listFiles(root)
+	files, deleted, _, err := listFiles(root)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{goneFile, replaced}, deleted, "only the unstaged deletions outside skipped directories count")
@@ -145,7 +145,7 @@ func TestListFilesLeavesOutMissingSkipWorktreePaths(t *testing.T) {
 	gitIn(t, root, "update-index", "--skip-worktree", goneFile, "main.go")
 	require.NoError(t, os.Remove(filepath.Join(root, filepath.FromSlash(goneFile))))
 
-	files, deleted, err := listFiles(root)
+	files, deleted, _, err := listFiles(root)
 	require.NoError(t, err)
 
 	assert.Empty(t, deleted, "git status does not show a skip-worktree path as deleted")
@@ -157,7 +157,7 @@ func TestListFilesWalkHasNoDeletions(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root)
 
-	files, deleted, err := listFiles(root)
+	files, deleted, _, err := listFiles(root)
 	require.NoError(t, err)
 
 	assert.Nil(t, deleted, "a plain directory has no tracked paths")

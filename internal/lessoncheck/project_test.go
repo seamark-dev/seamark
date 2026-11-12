@@ -902,8 +902,6 @@ func TestLessonCheckProjectBoundsAndDeadline(t *testing.T) {
 	})
 
 	t.Run("a root outside a git work tree is an error", func(t *testing.T) {
-		isolateGit(t)
-
 		_, err := ProjectOperation(context.Background(), t.TempDir(), claudeOp("Write", writeOp("a.go", "x")), DefaultLimits())
 		require.ErrorContains(t, err, "is not inside a git work tree")
 	})

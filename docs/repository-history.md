@@ -44,15 +44,23 @@ Read it top to bottom: this function _can ultimately spawn a process_
 a count instead of burying it), and here is the commit trail. Every call
 edge declares how it was derived (`[qualified]`, `[same-package]`,
 `[same-class]`, or the low-confidence `[unique-name]`), so you always
-know how much to trust an edge. Resolved edges lead each list and
-name-match guesses follow, so the 15-line cut drops guesses first. A
-function or method with no resolved caller prints
+know how much to trust an edge. Edges of the `[qualified]`,
+`[same-package]`, and `[same-class]` tiers lead each list, and
+`[unique-name]` guesses follow, so the 15-line cut drops guesses first.
+A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
-several methods share, or through a function value, gets no edge. The
+several methods share, or through a function value, gets no edge. When
+every caller edge is a guess, `why` lists them under
+`callers (N)  — N resolved by name match only`. The
 `usually changed with` lines carry **function grain**: `· mostly …`
 names the functions git's hunk headers show actually moved in the shared
-commits — a factual report, not a statistical claim. On a repo with real
-history, this section is where the surprises live.
+commits — a factual report, not a statistical claim. Hunk headers
+describe each old commit, so `mostly` leaves out a name that a parsed
+partner no longer defines. `seamark check` lists the partners that the
+diff leaves out; when it lists none, one `companions` line says why:
+every partner is in the diff, the index holds no partner, or the read
+failed. On a repo with real history, this section is where the
+surprises live.
 
 ### Languages
 
@@ -65,6 +73,35 @@ history, this section is where the surprises live.
 
 The history layer (co-change, decisions) is language-agnostic — it works
 on every file git tracks.
+
+History mining, the `mostly` names, fix mining, and the index freshness
+check run git with fixed options: no color, no external diff, no
+textconv, no signature lines, no rename following, a fixed rename
+detection, the diff of the root commit, the `a/` and `b/` path
+prefixes, raw non-ASCII paths, paths from the top of the work tree, the
+short submodule form, the listing of untracked files, and basic regular
+expressions for the revert search. A setting such as `color.ui=always`,
+`diff.external`, `diff.renames`, `log.showRoot=false`,
+`log.showSignature`, `grep.patternType`, or
+`status.showUntrackedFiles=no` therefore cannot change what seamark
+reads.
+
+The rename detection differs by reader:
+
+- History mining and the `mostly` names read history without rename
+  detection. A rename is a deletion of the old path and an addition of
+  the new path, so a renamed file starts new history at its new path.
+- Fix mining reads the file list of a fix without rename detection, so
+  a finding lists a renamed file under its old and its new path. It
+  reads the patch of a fix, and the patch identity that drops a
+  duplicate fix, with git's default rename detection.
+- The index freshness check reads `git diff HEAD` with git's default
+  rename detection.
+
+The index freshness check, the `check` fallback, and the LSP server run
+git so that it does not rewrite `.git/index`. A change to file metadata
+only, such as `touch`, then leaves the git index as it was, so a
+concurrent git command does not meet `.git/index.lock`.
 
 ## How much can the answers be trusted?
 
@@ -115,8 +152,8 @@ whose exit status the wrapper discards (`… || true`) reads
 Every safety-sensitive answer needs this context: **"no effects found"
 from a half-parsed index is not "no effects."** The same honesty runs
 through the other surfaces — `orient` warns when files failed to parse,
-and `seamark check` attaches a note when changed files have no indexed
-symbols, so absence of evidence never silently reads as evidence of
+and `seamark check` attaches a note when a changed file has changes
+outside every indexed symbol, so absence of evidence never silently reads as evidence of
 safety.
 
 Installation health is the other half:
@@ -177,6 +214,20 @@ table in [Data flow](data-flow.md).
   tags conservatively as `db:write`.
 - Co-change needs history: on a young repo the empirical layer is thin
   until commits accumulate.
+- From the next index run, a deleted or renamed-away file is never
+  named as a partner or a hub, and its commits still count in lift. It
+  keeps its live partners. `why` and `change_set` list them when you
+  ask for the old path. `check` and the MCP `check` tool list them for
+  a diff that deletes the file or renames it away, also as part of a
+  directory rename, in a piped diff and in the `git diff HEAD`
+  fallback, because check reads the old path of a rename record as a
+  changed file. A directory rename moves the partners inside that
+  directory too, so the old paths keep only the partners outside it,
+  and a live file whose partners all moved shows none. A file that
+  comes back is a partner again at the next index run. A renamed file
+  starts new history at its new path (see the rename detection of
+  history mining above), so it has no partners until commits
+  accumulate there.
 - Seamark is a navigator, not an oracle. It tells you where to look and
   what usually travels together; "usually changes with" is empirical
   evidence, never a guarantee that _your_ edit is safe or complete. For

@@ -83,7 +83,7 @@ func evWorkspace(t *testing.T, origin string) workspace.Workspace {
 	}}))
 	require.NoError(t, st.ReplaceFixFindings([]model.Finding{{
 		ID: 901, Path: "a.go", Body: "fix: seeded", Source: model.SourceFixSubject,
-	}}))
+	}}, false))
 	require.NoError(t, st.SetMeta(store.MetaReviewsMinedAt, "1000"))
 	require.NoError(t, st.SetMeta(store.MetaFixesMinedAt, "1000"))
 

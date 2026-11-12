@@ -1,6 +1,7 @@
 package report
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
@@ -941,17 +942,102 @@ func TestCheckCompanionsListsOnlyFilesAbsentFromTheDiff(t *testing.T) {
 	assert.Contains(t, out, "last fix here")
 	assert.NotContains(t, out, "  server/presenters.py", "a file in the diff is not a companion")
 
+	// A diff that carries every partner gets no list, but one line that
+	// says so. The line names no path and does not start with the title,
+	// so a reader of the list finds no path in it.
 	b.Reset()
 	CheckCompanions(&b, st, root, []string{"server/schema.py", "web/src/api/generated.ts", "server/presenters.py"})
-	assert.Empty(t, b.String(), "a diff that carries every partner gets no section")
+	assert.Equal(t, "\ncompanions  none outside this diff (co-change partners in the diff: 3)\n", b.String())
 
 	b.Reset()
 	CheckCompanions(&b, st, root, nil)
-	assert.Empty(t, b.String())
+	assert.Empty(t, b.String(), "an empty file list stays silent")
 
 	b.Reset()
 	CheckCompanions(&b, st, root, []string{"docs/new.md"})
-	assert.Empty(t, b.String(), "an unindexed file has no partners and prints nothing")
+	assert.Equal(t, "\ncompanions  none (the index holds no co-change partner for the diff's files)\n", b.String(),
+		"an unindexed file has no commits, so it has no partner")
+}
+
+func TestCheckCompanionsSaysWhyNoneIsListed(t *testing.T) {
+	st, root := seedCompanions(t)
+
+	// scripts/task.py has a symbol but no co-change pair. pkg/gone.go and
+	// pkg/old.go are gone from the workspace: their pairs stay stored, and
+	// the gone list keeps them out of every partner list.
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		for _, sym := range []model.Symbol{
+			{FQN: "scripts/task.run", Name: "run", Kind: model.KindFunction,
+				File: "scripts/task.py", Span: model.Span{StartLine: 1, EndLine: 3}},
+			{FQN: "pkg.Live", Name: "Live", Kind: model.KindFunction,
+				File: "pkg/live.go", Span: model.Span{StartLine: 1, EndLine: 3}},
+		} {
+			if err := tx.InsertSymbol(&sym); err != nil {
+				return err
+			}
+		}
+
+		for i, f := range []string{"pkg/gone.go", "pkg/old.go"} {
+			d := model.Decision{Kind: model.DecisionCommit, Ref: strings.Repeat(fmt.Sprint(i), 40), TS: 100,
+				Title: "Add the gone helper", Files: []string{f}}
+			if err := tx.InsertDecision(&d); err != nil {
+				return err
+			}
+		}
+
+		for _, p := range []model.CoChange{
+			{FileA: "pkg/gone.go", FileB: "pkg/live.go", Together: 3, Total: 4, Lift: 2},
+			{FileA: "pkg/gone.go", FileB: "pkg/old.go", Together: 3, Total: 4, Lift: 2},
+		} {
+			if err := tx.InsertCoChange(p); err != nil {
+				return err
+			}
+		}
+
+		return tx.SetGoneFiles([]string{"pkg/gone.go", "pkg/old.go"})
+	}))
+
+	none := "\ncompanions  none (the index holds no co-change partner for the diff's files)\n"
+
+	var b strings.Builder
+	CheckCompanions(&b, st, root, []string{"scripts/task.py"})
+	assert.Equal(t, none, b.String())
+	assert.NotContains(t, b.String(), CompanionsTitle)
+
+	// A deleted diff file is an anchor with its live partners, and a gone
+	// partner stays out.
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"pkg/gone.go"})
+	assert.Contains(t, b.String(), CompanionsTitle)
+	assert.Contains(t, b.String(), "pkg/live.go")
+	assert.NotContains(t, b.String(), "pkg/old.go")
+
+	// A gone file never counts as a partner in the diff.
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"pkg/gone.go", "pkg/live.go"})
+	assert.Equal(t, "\ncompanions  none outside this diff (co-change partners in the diff: 1)\n", b.String())
+
+	// History can show partners of a gone file whose partners are all
+	// gone, but no live partner exists. The line must not claim that
+	// history shows none.
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"pkg/old.go"})
+	assert.Equal(t, none, b.String())
+	assert.NotContains(t, b.String(), "history")
+
+	// A failed read is not the same as no partner, so it gets its own
+	// line. The error text stays out, because it can carry paths.
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+
+	_, err = raw.Exec("DROP TABLE cochange")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"scripts/task.py"})
+	assert.Equal(t, "\ncompanions  not shown (the co-change read failed)\n", b.String())
+	assert.NotContains(t, b.String(), "scripts/task.py")
 }
 
 func TestRankCompanionsOrdersByEvidenceThenModule(t *testing.T) {
@@ -1118,6 +1204,191 @@ func TestCompanionReasonNamesFunctionsFromSharedCommitsOnly(t *testing.T) {
 	assert.Contains(t, out, "mostly WorkspaceSummary")
 	assert.NotContains(t, out, "Solo")
 	assert.Contains(t, out, "last fix here", "the index reason still prints beside the git one")
+}
+
+// companionLine returns the line after the closing-list line of file, or
+// "" when the list has no such line. The closing list prints the reason
+// of a partner on the line below its numbers.
+func companionLine(out, file string) string {
+	start := strings.Index(out, CompanionsTitle)
+	if start == -1 {
+		return ""
+	}
+
+	lines := strings.Split(out[start:], "\n")
+
+	for i, line := range lines {
+		if strings.HasPrefix(line, "  "+file+" ") && i+1 < len(lines) {
+			return lines[i+1]
+		}
+	}
+
+	return ""
+}
+
+// whyLine returns the line of the why report that lists partner file.
+func whyLine(out, file string) string {
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasSuffix(line, " "+file) || strings.Contains(line, " "+file+"  ·") {
+			return line
+		}
+	}
+
+	return ""
+}
+
+func TestCompanionReasonLeavesOutRemovedFunctions(t *testing.T) {
+	// Hunk headers name functions as they were in each shared commit. A
+	// later rename or removal must not leave the old name in the reason,
+	// because the agent cannot open it.
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	init := exec.Command("git", "init", "-q", "-b", "main")
+	init.Dir = root
+	require.NoError(t, init.Run())
+
+	schema := func(v int) string { return fmt.Sprintf("def SCHEMAS():\n    return %d\n", v) }
+	client := func(legacy string, a, b int) string {
+		return fmt.Sprintf("export function %s() {\n  return %d;\n}\n\n"+
+			"export function WorkspaceSummary() {\n  return %d;\n}\n", legacy, a, b)
+	}
+
+	// ranked holds four functions. Each value is the body of one, so a
+	// commit edits exactly the functions whose value changes.
+	ranked := func(removed, a, b, c int) string {
+		return fmt.Sprintf("package ranked\n\nfunc Removed() int {\n\treturn %d\n}\n\n"+
+			"func A() int {\n\treturn %d\n}\n\nfunc B() int {\n\treturn %d\n}\n\n"+
+			"func C() int {\n\treturn %d\n}\n", removed, a, b, c)
+	}
+	deploy := func(v int) string { return fmt.Sprintf("def old_step\n  %d\nend\n", v) }
+	gone := func(v int) string { return fmt.Sprintf("def Gone():\n    return %d\n", v) }
+
+	gitCommit(t, root, "create all", map[string]string{
+		"server/schema.py": schema(1), "web/src/api/generated.ts": client("LegacySummary", 1, 1),
+		"server/ranked.go": ranked(1, 1, 1, 1), "ops/deploy.rb": deploy(1), "server/gone.py": gone(1),
+	})
+
+	// Three shared commits: Removed moves three times, A twice, B and C once.
+	gitCommit(t, root, "shared one", map[string]string{
+		"server/schema.py": schema(2), "web/src/api/generated.ts": client("LegacySummary", 2, 2),
+		"server/ranked.go": ranked(2, 2, 2, 2), "ops/deploy.rb": deploy(2), "server/gone.py": gone(2),
+	})
+	gitCommit(t, root, "shared two", map[string]string{
+		"server/schema.py": schema(3), "server/ranked.go": ranked(3, 3, 2, 2),
+	})
+	gitCommit(t, root, "shared three", map[string]string{
+		"server/schema.py": schema(4), "server/ranked.go": ranked(4, 3, 2, 2),
+	})
+
+	// Partner-only commits rename and remove functions afterwards.
+	gitCommit(t, root, "rename and remove", map[string]string{
+		"web/src/api/generated.ts": client("NewSummary", 2, 2),
+		"server/gone.py":           "def Other():\n    return 1\n",
+	})
+
+	// The index holds the current symbols. ops/deploy.rb has none,
+	// because the index parses no Ruby, and ranked.go no longer has Removed.
+	symbols := map[string][]string{
+		"server/schema.py":         {"SCHEMAS"},
+		"web/src/api/generated.ts": {"NewSummary", "WorkspaceSummary"},
+		"server/ranked.go":         {"A", "B", "C"},
+		"server/gone.py":           {"Other"},
+	}
+
+	require.NoError(t, st.SetMeta(store.MetaRepoRoot, root))
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		for file, names := range symbols {
+			for i, name := range names {
+				sym := model.Symbol{FQN: file + "." + name, Name: name, Kind: model.KindFunction, File: file,
+					Span: model.Span{StartLine: uint32(i*4 + 1), EndLine: uint32(i*4 + 3)}}
+				if err := tx.InsertSymbol(&sym); err != nil {
+					return err
+				}
+			}
+		}
+
+		for _, partner := range []string{"web/src/api/generated.ts", "server/ranked.go", "ops/deploy.rb", "server/gone.py"} {
+			if err := tx.InsertCoChange(model.CoChange{FileA: "server/schema.py", FileB: partner, Together: 2, Total: 6, Lift: 1.3}); err != nil {
+				return err
+			}
+		}
+
+		fix := model.Decision{Kind: model.DecisionCommit, Ref: strings.Repeat("c", 40), TS: 300,
+			Title: "fix: drop the gone helper", Files: []string{"server/gone.py"}}
+
+		return tx.InsertDecision(&fix)
+	}))
+
+	var b strings.Builder
+	require.NoError(t, ChangeSet(&b, st, root, []string{"server/schema.py"}))
+	changeSet := b.String()
+
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"server/schema.py"})
+	check := b.String()
+
+	for name, out := range map[string]string{"change_set": changeSet, "check": check} {
+		assert.Equal(t, "    mostly WorkspaceSummary", companionLine(out, "web/src/api/generated.ts"), name)
+		assert.Equal(t, "    mostly A, B, C", companionLine(out, "server/ranked.go"),
+			"%s: a removed name leaves before the cut, so a live fourth name moves up", name)
+		assert.Equal(t, "    mostly old_step", companionLine(out, "ops/deploy.rb"),
+			"%s: a partner without indexed symbols keeps its names", name)
+		assert.Equal(t, "    last fix here: fix: drop the gone helper (ccccccc)", companionLine(out, "server/gone.py"),
+			"%s: with no live name left, only the fix reason prints", name)
+		assert.NotContains(t, out, "LegacySummary", name)
+		assert.NotContains(t, out, "Removed", name)
+	}
+
+	b.Reset()
+	require.NoError(t, Why(&b, st, root, "server/schema.py"))
+	why := b.String()
+
+	assert.True(t, strings.HasSuffix(whyLine(why, "web/src/api/generated.ts"), "· mostly WorkspaceSummary"), why)
+	assert.True(t, strings.HasSuffix(whyLine(why, "server/ranked.go"), "· mostly A, B, C"), why)
+	assert.True(t, strings.HasSuffix(whyLine(why, "ops/deploy.rb"), "· mostly old_step"), why)
+	assert.True(t, strings.HasSuffix(whyLine(why, "server/gone.py"), " server/gone.py"),
+		"no live name means no mostly suffix:\n%s", why)
+	assert.NotContains(t, why, "LegacySummary")
+	assert.NotContains(t, why, "Removed")
+}
+
+func TestLiveFunctionsFiltersBeforeTheCut(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	// pkg/live.go defines five functions. The exported spelling Helper is
+	// the only form of that name in the index.
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		for i, name := range []string{"A", "B", "C", "D", "Helper"} {
+			sym := model.Symbol{FQN: "pkg/live." + name, Name: name, Kind: model.KindFunction, File: "pkg/live.go",
+				Span: model.Span{StartLine: uint32(i*4 + 1), EndLine: uint32(i*4 + 3)}}
+			if err := tx.InsertSymbol(&sym); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	// The cut runs after the filter, so it also stops a fourth live name.
+	assert.Equal(t, []string{"A", "B", "C"}, liveFunctions(st, "pkg/live.go", []string{"Removed", "A", "B", "C", "D"}))
+
+	// The match is case-sensitive. A rename for export, such as helper to
+	// Helper, leaves the old name out of the reason.
+	assert.Equal(t, []string{"Helper"}, liveFunctions(st, "pkg/live.go", []string{"helper", "Helper"}))
+
+	// A file without indexed symbols keeps its names, cut to three.
+	assert.Equal(t, []string{"s1", "s2", "s3"}, liveFunctions(st, "ops/many.rb", []string{"s1", "s2", "s3", "s4"}))
+
+	// A failed symbol read also keeps the names unfiltered, because the
+	// reason is only a hint. A closed store fails every read.
+	require.NoError(t, st.Close())
+	assert.Equal(t, []string{"Removed", "A", "B"}, liveFunctions(st, "pkg/live.go", []string{"Removed", "A", "B", "C"}))
 }
 
 func TestAsIndexedFileNamesAMissByItsRepositoryPath(t *testing.T) {

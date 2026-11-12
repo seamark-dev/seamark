@@ -69,8 +69,8 @@ func FileCommits(ctx context.Context, repoRoot, file string) map[string]bool {
 		if h := strings.TrimSpace(line); h != "" {
 			set[h] = true
 		}
-	}, "-c", "core.quotePath=off", "log", "--no-renames",
-		"-n", strconv.Itoa(grainMaxCommits), "--format=%H", "--", file)
+	}, ParsedGitArgs("log", "--no-renames",
+		"-n", strconv.Itoa(grainMaxCommits), "--format=%H", "--", file)...)
 
 	if len(set) == 0 {
 		return nil
@@ -128,8 +128,8 @@ func PartnerFunctions(ctx context.Context, repoRoot, partner string, shared map[
 
 			counts[name]++
 		}
-	}, "-c", "core.quotePath=off", "log", "--no-renames", "--no-walk", "--stdin",
-		"-U0", "-p", "--format=", "--", partner)
+	}, ParsedGitArgs("log", "--no-renames", "--no-walk", "--stdin",
+		"-U0", "-p", "--format=", "--", partner)...)
 
 	return topByCount(counts, order, limit)
 }

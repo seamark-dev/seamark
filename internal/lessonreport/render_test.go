@@ -272,7 +272,7 @@ func TestRenderTextSourcesAndSanitization(t *testing.T) {
 	cfg := &reviews.Config{Pin: []reviews.PinRule{{Rule: "safe\x1b\nrule", Note: "PRIVATE-pin-note"}}}
 	r := mustBuild(t, Inputs{Config: cfg, AuditError: "bad\x1b\naudit", CheckAuditError: "check\x00audit"}, "")
 	out := rendered(t, r)
-	for _, needle := range []string{"delivery audit: unreadable", "check audit: unreadable", "safe", "badaudit", "prevented: 0"} {
+	for _, needle := range []string{"delivery audit: unreadable", "check audit: unreadable", "safe", "bad audit", "prevented: 0"} {
 		assert.Contains(t, out, needle)
 	}
 

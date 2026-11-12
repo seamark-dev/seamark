@@ -1,6 +1,9 @@
 package gate
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,17 +111,87 @@ func TestEvalDiffWalksHunkBodies(t *testing.T) {
 			notes:   []string{probeNote},
 		},
 		{
+			// The package clause lies outside every symbol, so its edit
+			// keeps the note while the edit of b gives the effects.
 			name: "two hunks, the second adds a line inside b",
 			diff: probeHeader +
 				"@@ -1,1 +1,1 @@\n-package  main\n+package main\n" +
 				"@@ -6,2 +6,2 @@\n \texec.Command(\"kubectl\", \"apply\").Run()\n-\t_ = 2\n+\t_ = 1\n",
 			effects: infra,
+			notes:   []string{probeNote},
 		},
 		{
 			name: "two hunks, only the context of the second lies in b",
 			diff: probeHeader +
 				"@@ -1,1 +1,1 @@\n-package  main\n+package main\n" +
 				"@@ -8,4 +8,4 @@\n }\n \n // c does nothing.\n-func c() { }\n+func c() {}\n",
+			effects: []string{},
+			notes:   []string{probeNote},
+		},
+	}
+
+	for _, c := range cases {
+		d := eval(c.diff)
+
+		effects := d.Effects
+		if effects == nil {
+			effects = []string{}
+		}
+
+		assert.Equal(t, c.effects, effects, c.name)
+		assert.Equal(t, c.notes, d.Notes, c.name)
+	}
+}
+
+func TestEvalDiffDecidesTheNotePerChangeGroup(t *testing.T) {
+	eval := probeFixture(t)
+
+	infra := []string{"infra:mutate", "proc:exec"}
+
+	cases := []struct {
+		name    string
+		diff    string
+		effects []string
+		notes   []string
+	}{
+		{
+			// The old side has a function a with a doc comment between b
+			// and c. Its cut records lines 9 and 10, both outside every
+			// symbol, so the edit of b must not hide it.
+			name: "a deleted function next to an added line inside b",
+			diff: probeHeader + "@@ -6,0 +7,1 @@\n+\t_ = 1\n" +
+				"@@ -9,3 +9,0 @@\n-// a does nothing.\n-func a() {}\n-\n",
+			effects: infra,
+			notes:   []string{probeNote},
+		},
+		{
+			name: "an import edit next to an edit inside b",
+			diff: probeHeader + "@@ -3 +3 @@\n-import \"os\"\n+import \"os/exec\"\n" +
+				"@@ -7 +7 @@\n-\t_ = 2\n+\t_ = 1\n",
+			effects: infra,
+			notes:   []string{probeNote},
+		},
+		{
+			// A cut before line 1 records no line, so its group counts
+			// for no symbol.
+			name: "a cut before line 1 next to an edit inside b",
+			diff: probeHeader + "@@ -1,1 +0,0 @@\n-package main\n" +
+				"@@ -8 +7 @@\n-\t_ = 2\n+\t_ = 1\n",
+			effects: infra,
+			notes:   []string{probeNote},
+		},
+		{
+			// The line above is the doc comment, outside c. The added line
+			// lies in c, so the one group counts for c.
+			name:    "a replacement of the first line of c",
+			diff:    probeHeader + "@@ -11 +11 @@\n-func c() { }\n+func c() {}\n",
+			effects: []string{},
+		},
+		{
+			// The doc comment lies outside c, but it is in one group with
+			// the func line.
+			name:    "a new function with its doc comment",
+			diff:    probeHeader + "@@ -9,0 +10,2 @@\n+// c does nothing.\n+func c() {}\n",
 			effects: []string{},
 		},
 	}
@@ -134,6 +207,38 @@ func TestEvalDiffWalksHunkBodies(t *testing.T) {
 		assert.Equal(t, c.effects, effects, c.name)
 		assert.Equal(t, c.notes, d.Notes, c.name)
 	}
+}
+
+func TestEvalDiffLetsARuleSeeAnUnattributedChangeGroup(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{
+		"go.mod":  "module example.com/cx\n",
+		"main.go": probeFile,
+	})
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: unknown-reach
+    when: 'diff.unindexed_files > 0'
+    message: part of this change has unknown reach
+`), 0o644))
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	// A deleted function next to an added line inside b. The file counts
+	// once, so the rule sees the deletion that the edit of b sits next to.
+	d, err := EvalDiff(p, st, probeHeader+"@@ -6,0 +7,1 @@\n+\t_ = 1\n"+
+		"@@ -9,3 +9,0 @@\n-// a does nothing.\n-func a() {}\n-\n", SourceStdin)
+	require.NoError(t, err)
+
+	ids := make([]string, 0, len(d.Matches))
+	for _, m := range d.Matches {
+		ids = append(ids, m.RuleID)
+	}
+
+	assert.Equal(t, VerdictApproval, d.Verdict)
+	assert.Contains(t, ids, "unknown-reach")
+	assert.Equal(t, []string{probeNote}, d.Notes)
 }
 
 func TestEvalDiffReadsNoHeaderInsideAHunk(t *testing.T) {
@@ -271,7 +376,7 @@ func TestEvalDiffAttributesAPythonTailBelowABlankLine(t *testing.T) {
 
 	// Git writes these hunks for the two edits. In both, the line
 	// directly above the removed guard is a blank line outside the span
-	// of b. Another symbol of the file is touched, so the file has no
+	// of b. Each change group is attributed, so the file has no
 	// unknown-reach note. Only the indented guard can attribute b.
 	cases := []struct {
 		name string
@@ -300,6 +405,97 @@ func TestEvalDiffAttributesAPythonTailBelowABlankLine(t *testing.T) {
 
 		assert.Equal(t, []string{"proc:exec"}, d.Effects, c.name)
 		assert.Empty(t, d.Notes, c.name)
+	}
+}
+
+// runnerFile is tools/runner.py of TestEvalDiffCommentEditsNextToAFunction.
+// clean and purge reach fs:write through shutil.rmtree.
+//
+//	 1 import shutil
+//	 2
+//	 3
+//	 4 class Runner:
+//	 5     def clean(self, p):
+//	 6         shutil.rmtree(p)
+//	 7
+//	 8     # name returns the runner name.
+//	 9     def name(self):
+//	10         return "runner"
+//	11
+//	12
+//	13 def purge(p):
+//	14     shutil.rmtree(p)
+//	15 # helper is a plain function.
+//	16 def helper():
+//	17     return 1
+//	18
+//	19
+//	20 # tidy is a plain function.
+//	21 def tidy():
+//	22     return 2
+const runnerFile = "import shutil\n\n\nclass Runner:\n    def clean(self, p):\n        shutil.rmtree(p)\n\n" +
+	"    # name returns the runner name.\n    def name(self):\n        return \"runner\"\n\n\n" +
+	"def purge(p):\n    shutil.rmtree(p)\n# helper is a plain function.\ndef helper():\n    return 1\n\n\n" +
+	"# tidy is a plain function.\ndef tidy():\n    return 2\n"
+
+func TestEvalDiffCommentEditsNextToAFunction(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{"tools/runner.py": runnerFile})
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	const header = "diff --git a/tools/runner.py b/tools/runner.py\n--- a/tools/runner.py\n+++ b/tools/runner.py\n"
+
+	note := "1 of 1 changed files have changes outside any indexed symbol (tools/runner.py) — " +
+		"their effect reach is unknown, not clean"
+
+	// Git writes these hunks for three comment edits. Only a column-0
+	// comment after a blank line counts for no symbol. The other two
+	// count for the function above them, which reaches fs:write.
+	cases := []struct {
+		name    string
+		diff    string
+		effects []string
+		notes   []string
+	}{
+		{
+			name: "an indented comment below a blank line",
+			diff: header + "@@ -5,7 +5,7 @@\n" +
+				"     def clean(self, p):\n         shutil.rmtree(p)\n \n" +
+				"-    # name returns a name.\n+    # name returns the runner name.\n" +
+				"     def name(self):\n         return \"runner\"\n \n",
+			effects: []string{"fs:write"},
+		},
+		{
+			name: "a column-0 comment directly under a function",
+			diff: header + "@@ -12,7 +12,7 @@\n" +
+				" \n def purge(p):\n     shutil.rmtree(p)\n" +
+				"-# helper is a function.\n+# helper is a plain function.\n" +
+				" def helper():\n     return 1\n \n",
+			effects: []string{"fs:write"},
+		},
+		{
+			name: "a column-0 comment after a blank line",
+			diff: header + "@@ -17,6 +17,6 @@\n" +
+				"     return 1\n \n \n" +
+				"-# tidy is a function.\n+# tidy is a plain function.\n" +
+				" def tidy():\n     return 2\n",
+			effects: []string{},
+			notes:   []string{note},
+		},
+	}
+
+	for _, c := range cases {
+		d, err := EvalDiff(p, st, c.diff, SourceStdin)
+		require.NoError(t, err, c.name)
+
+		effects := d.Effects
+		if effects == nil {
+			effects = []string{}
+		}
+
+		assert.Equal(t, c.effects, effects, c.name)
+		assert.Equal(t, c.notes, d.Notes, c.name)
 	}
 }
 
@@ -449,6 +645,66 @@ func TestParseDiffChangedLines(t *testing.T) {
 	assert.Equal(t, []uint32{1, 2}, got.lines["m.go"])
 }
 
+func TestParseDiffChangeGroups(t *testing.T) {
+	// next is a second record. Each case must leave it readable, which
+	// shows that the hunk before it closed its last group.
+	const next = "diff --git a/z.go b/z.go\n--- a/z.go\n+++ b/z.go\n@@ -1 +1 @@\n-x\n+y\n"
+
+	cases := []struct {
+		name string
+		diff string
+		want [][]uint32
+	}{
+		{
+			name: "a replacement is one group with the line above",
+			diff: "@@ -3,3 +3,3 @@\n a\n-b\n+c\n d\n",
+			want: [][]uint32{{3, 4}},
+		},
+		{
+			name: "a cut is one group with both neighbours",
+			diff: "@@ -3,3 +3,2 @@\n a\n-b\n d\n",
+			want: [][]uint32{{3, 4}},
+		},
+		{
+			name: "one context line splits two groups",
+			diff: "@@ -3,4 +3,4 @@\n-a\n+b\n c\n-d\n+e\n",
+			want: [][]uint32{{2, 3}, {4, 5}},
+		},
+		{
+			name: "a no-newline line keeps the group open",
+			diff: "@@ -3 +3 @@\n-old\n\\ No newline at end of file\n+new\n",
+			want: [][]uint32{{2, 3}},
+		},
+		{
+			name: "a cut before line 1 is one group with no line",
+			diff: "@@ -1,1 +0,0 @@\n-x\n",
+			want: [][]uint32{nil},
+		},
+		{
+			name: "interleaved removed and added lines are one group",
+			diff: "@@ -3,3 +3,2 @@\n-a\n+b\n-c\n d\n",
+			want: [][]uint32{{2, 3, 3, 4}},
+		},
+		{
+			name: "a hunk that ends at a record start closes its group",
+			diff: "@@ -1,5 +1,6 @@\n-a\n+b\n+c\n",
+			want: [][]uint32{{1, 2}},
+		},
+	}
+
+	for _, c := range cases {
+		got := parseDiff("--- a/m.go\n+++ b/m.go\n" + c.diff + "--- a/z.go\n+++ b/z.go\n@@ -1 +1 @@\n-x\n+y\n")
+
+		assert.Equal(t, []string{"m.go", "z.go"}, got.paths, c.name)
+		assert.Equal(t, c.want, got.groups["m.go"], c.name)
+		assert.Equal(t, [][]uint32{{1}}, got.groups["z.go"], c.name)
+		assert.Equal(t, slices.Concat(c.want...), got.lines["m.go"], c.name)
+
+		got = parseDiff("diff --git a/m.go b/m.go\n--- a/m.go\n+++ b/m.go\n" + c.diff + next)
+		assert.Equal(t, c.want, got.groups["m.go"], c.name)
+	}
+}
+
 func TestParseDiffEndsAHunkAtAFileHeader(t *testing.T) {
 	const m = "--- a/m.go\n+++ b/m.go\n"
 
@@ -524,4 +780,81 @@ func TestParseDiffEndsAHunkAtAFileHeader(t *testing.T) {
 		assert.Equal(t, c.paths, got.paths, c.name)
 		assert.Equal(t, c.lines, got.lines, c.name)
 	}
+}
+
+func TestParseDiffRegistersTheOldPathOfARename(t *testing.T) {
+	cases := []struct {
+		name  string
+		diff  string
+		paths []string
+		lines map[string][]uint32
+	}{
+		{
+			name:  "a rename with no hunk registers both paths",
+			diff:  "diff --git a/old.go b/new.go\nsimilarity index 100%\nrename from old.go\nrename to new.go\n",
+			paths: []string{"new.go", "old.go"},
+			lines: map[string][]uint32{"new.go": nil, "old.go": nil},
+		},
+		{
+			name: "the hunk lines of a rename stay on the new path",
+			diff: "diff --git a/old.go b/new.go\nsimilarity index 90%\nrename from old.go\nrename to new.go\n" +
+				"--- a/old.go\n+++ b/new.go\n@@ -1 +1 @@\n-x\n+y\n",
+			paths: []string{"new.go", "old.go"},
+			lines: map[string][]uint32{"new.go": {1}, "old.go": nil},
+		},
+		{
+			// The rename lines carry no a/ or b/ side prefix, so a top
+			// directory named a keeps its name.
+			name:  "an old path under a directory named a keeps that directory",
+			diff:  "diff --git a/a/x.go b/a/y.go\nsimilarity index 100%\nrename from a/x.go\nrename to a/y.go\n",
+			paths: []string{"a/y.go", "a/x.go"},
+			lines: map[string][]uint32{"a/y.go": nil, "a/x.go": nil},
+		},
+		{
+			// An agent can send a hand-made diff with no rename to line and
+			// no file headers. The hunk then belongs to the diff --git path.
+			name:  "a hunk after a lone rename from line stays on the new path",
+			diff:  "diff --git a/old.go b/new.go\nrename from old.go\n@@ -1 +1 @@\n-x\n+y\n",
+			paths: []string{"new.go", "old.go"},
+			lines: map[string][]uint32{"new.go": {1}, "old.go": nil},
+		},
+		{
+			name: "a C-quoted old path unwraps",
+			diff: "diff --git \"a/pkg/\\303\\251.go\" b/pkg/e.go\nsimilarity index 100%\n" +
+				"rename from \"pkg/\\303\\251.go\"\nrename to pkg/e.go\n",
+			paths: []string{"pkg/e.go", "pkg/é.go"},
+			lines: map[string][]uint32{"pkg/e.go": nil, "pkg/é.go": nil},
+		},
+		{
+			name:  "a rename from line with no value registers no path",
+			diff:  "diff --git a/old.go b/new.go\nrename from \nrename to new.go\n",
+			paths: []string{"new.go"},
+			lines: map[string][]uint32{"new.go": nil},
+		},
+		{
+			// A copy keeps its source file, so only the target changes.
+			name:  "a copy registers only its target",
+			diff:  "diff --git a/a.go b/b.go\nsimilarity index 100%\ncopy from a.go\ncopy to b.go\n",
+			paths: []string{"b.go"},
+			lines: map[string][]uint32{"b.go": nil},
+		},
+	}
+
+	for _, c := range cases {
+		got := parseDiff(c.diff)
+
+		assert.Equal(t, c.paths, got.paths, c.name)
+		assert.Equal(t, c.lines, got.lines, c.name)
+	}
+}
+
+func TestParseDiffRegistersTheRenameToPath(t *testing.T) {
+	// Git writes this record for git mv "dir b/x.go" "dir b/y.go". The
+	// diff --git line cannot show where a new path with " b/" starts.
+	// So only the rename lines give both full paths.
+	got := parseDiff("diff --git a/dir b/x.go b/dir b/y.go\nsimilarity index 100%\n" +
+		"rename from dir b/x.go\nrename to dir b/y.go\n")
+
+	assert.Contains(t, got.paths, "dir b/y.go", "the rename to line registers the new path")
+	assert.Contains(t, got.paths, "dir b/x.go", "the rename from line registers the old path")
 }

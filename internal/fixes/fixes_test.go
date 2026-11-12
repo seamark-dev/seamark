@@ -569,3 +569,384 @@ func TestOutOfWindowNeutralMemberKeepsBranchFix(t *testing.T) {
 	assert.Equal(t, model.SourceFixBranch, res.Findings[0].Source)
 	assert.Equal(t, 51, res.Findings[0].PR)
 }
+
+// configRepo builds a repository that reaches every git call of the miner:
+// a fix commit, a cherry-picked copy of it, a merge of a fix/ branch with
+// an old commit, and a fix that a later commit reverts. sign holds git
+// options that sign each commit, or nil.
+func configRepo(t *testing.T, sign []string) string {
+	t.Helper()
+
+	root := t.TempDir()
+	hour := 0
+	shift := time.Duration(0)
+
+	// Each git call gets its own date inside the mining window, so the
+	// log order and every object ID are fixed. A nonzero shift moves the
+	// date back by that duration.
+	git := func(args ...string) string {
+		t.Helper()
+
+		hour++
+		date := time.Now().Add(shift + time.Duration(hour-200)*time.Hour).UTC().Format(time.RFC3339)
+
+		cmd := exec.Command("git", append(append([]string{}, sign...), args...)...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_AUTHOR_DATE="+date, "GIT_COMMITTER_DATE="+date,
+			"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
+
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+
+		return strings.TrimSpace(string(out))
+	}
+
+	commit := func(msg string, files map[string]string) {
+		t.Helper()
+
+		for rel, content := range files {
+			p := filepath.Join(root, rel)
+			require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+			require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+		}
+
+		git("add", "-A")
+		git("commit", "-q", "-m", msg)
+	}
+
+	run := func(body string) string {
+		return "package a\n\nfunc Run() int {\n" + body + "\treturn 1\n}\n"
+	}
+
+	git("init", "-q", "-b", "main")
+	commit("initial", map[string]string{
+		"a.go": run(""),
+		"b.go": "package a\n\nfunc Load() int {\n\treturn 0\n}\n",
+		"c.go": "package a\n\nfunc Limit() int {\n\treturn 1\n}\n",
+	})
+	git("branch", "backport")
+
+	commit("fix: guard Run against a nil store", map[string]string{"a.go": run("\tif store == nil {\n\t\treturn 0\n\t}\n")})
+	fix := git("rev-parse", "HEAD")
+
+	git("checkout", "-q", "backport")
+	git("cherry-pick", fix)
+	git("checkout", "-q", "main")
+	git("merge", "-q", "--no-ff", "-m", "Merge branch 'backport'", "backport")
+
+	// The branch commit predates the mining window, so the windowed log
+	// skips it. The miner then reads it with a separate show call.
+	git("checkout", "-q", "-b", "fix/empty-load")
+	shift = -2 * DefaultWindow
+	commit("handle an empty load", map[string]string{"b.go": "package a\n\nfunc Load() int {\n\treturn -1\n}\n"})
+	shift = 0
+	git("checkout", "-q", "main")
+	git("merge", "-q", "--no-ff", "-m", "Merge branch 'fix/empty-load'", "fix/empty-load")
+
+	commit("fix: raise the limit", map[string]string{"c.go": "package a\n\nfunc Limit() int {\n\treturn 2\n}\n"})
+	wrong := git("rev-parse", "HEAD")
+	commit("Revert \"fix: raise the limit\"\n\nThis reverts commit "+wrong+".",
+		map[string]string{"c.go": "package a\n\nfunc Limit() int {\n\treturn 1\n}\n"})
+
+	return root
+}
+
+// markerScript writes an executable script that prints a constant line and
+// touches marker when it runs. It stands in for an external diff program
+// and a textconv driver.
+func markerScript(t *testing.T) (script, marker string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	script = filepath.Join(dir, "const.sh")
+	marker = filepath.Join(dir, "ran")
+	body := "#!/bin/sh\ntouch '" + marker + "'\necho constant\n"
+
+	require.NoError(t, os.WriteFile(script, []byte(body), 0o755))
+
+	return script, marker
+}
+
+// sshSigning returns git options that sign a commit with a new SSH key,
+// and the config that lets git log check that signature. It skips the
+// test when ssh-keygen is missing.
+func sshSigning(t *testing.T) (sign []string, verify [][2]string) {
+	t.Helper()
+
+	if _, err := exec.LookPath("ssh-keygen"); err != nil {
+		t.Skip("ssh-keygen is missing")
+	}
+
+	dir := t.TempDir()
+	key := filepath.Join(dir, "key")
+
+	out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "t", "-f", key).CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	pub, err := os.ReadFile(key + ".pub")
+	require.NoError(t, err)
+
+	signers := filepath.Join(dir, "allowed")
+	require.NoError(t, os.WriteFile(signers, []byte("t@example.com "+string(pub)), 0o644))
+
+	sign = []string{"-c", "gpg.format=ssh", "-c", "user.signingKey=" + key, "-c", "commit.gpgSign=true"}
+	verify = [][2]string{{"gpg.format", "ssh"}, {"gpg.ssh.allowedSignersFile", signers}}
+
+	return sign, verify
+}
+
+func TestMineIgnoresGitConfig(t *testing.T) {
+	// Each case sets a config that changes a diff, log, or show text that
+	// the miner parses. Mine must still return the findings of a
+	// repository with no config, and no external program may run.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	script, marker := markerScript(t)
+
+	cases := []struct {
+		name   string
+		config [][2]string
+		attrs  string
+		env    [2]string
+		signed bool
+	}{
+		{name: "color.ui always", config: [][2]string{{"color.ui", "always"}}},
+		{name: "color.diff always", config: [][2]string{{"color.diff", "always"}}},
+		{name: "log.showSignature", config: [][2]string{{"log.showSignature", "true"}}, signed: true},
+		{name: "diff.external", config: [][2]string{{"diff.external", script}}},
+		{name: "GIT_EXTERNAL_DIFF", env: [2]string{"GIT_EXTERNAL_DIFF", script}},
+		{
+			name:   "textconv",
+			config: [][2]string{{"diff.hide.textconv", script}},
+			attrs:  "*.go diff=hide\n",
+		},
+		{name: "diff.noprefix", config: [][2]string{{"diff.noprefix", "true"}}},
+		{name: "grep.patternType fixed", config: [][2]string{{"grep.patternType", "fixed"}}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var (
+				sign   []string
+				verify [][2]string
+			)
+
+			if c.signed {
+				sign, verify = sshSigning(t)
+			}
+
+			root := configRepo(t, sign)
+
+			want, err := Mine(root, Options{})
+			require.NoError(t, err)
+			require.True(t, want.Mined)
+			require.Len(t, want.Findings, 3, "the signed fix, the branch fix, and the revert")
+
+			sources := []string{}
+			for _, f := range want.Findings {
+				sources = append(sources, f.Source)
+			}
+
+			assert.ElementsMatch(t, []string{model.SourceFixConventional, model.SourceFixBranch, model.SourceRevert}, sources)
+
+			for _, kv := range append(verify, c.config...) {
+				cmd := exec.Command("git", "config", kv[0], kv[1])
+				cmd.Dir = root
+				out, err := cmd.CombinedOutput()
+				require.NoError(t, err, "%s", out)
+			}
+
+			if c.attrs != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "info", "attributes"), []byte(c.attrs), 0o644))
+			}
+
+			if c.env[0] != "" {
+				t.Setenv(c.env[0], c.env[1])
+			}
+
+			_ = os.Remove(marker)
+
+			got, err := Mine(root, Options{})
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+			assert.NoFileExists(t, marker, "no external program runs")
+		})
+	}
+}
+
+func TestMineStoresRawNonASCIIPaths(t *testing.T) {
+	// git C-quotes a non-ASCII path by default. The history layer and the
+	// index store the raw path, so a fix finding must name the same file.
+	// The empty user and system config stop a core.quotePath setting of the
+	// test machine from hiding that default.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root, commit, git := repo(t)
+
+	commit("initial", map[string]string{
+		"pkg/é.go": "package a\n\nfunc F() {}\n",
+		"pkg/ü.go": "package a\n\nfunc G() {}\n",
+	})
+	commit("fix: guard the accented path", map[string]string{
+		"pkg/é.go": "package a\n\nfunc F() { if ok { return } }\n"})
+
+	// A fix/ branch merge reads its paths with a different git call than a
+	// fix commit, so the test covers both.
+	git("checkout", "-b", "fix/umlaut")
+	commit("handle the umlaut path", map[string]string{
+		"pkg/ü.go": "package a\n\nfunc G() { if ok { return } }\n"})
+	git("checkout", "main")
+	git("merge", "--no-ff", "fix/umlaut", "-m", "Merge branch 'fix/umlaut'")
+
+	res, err := Mine(root, Options{})
+	require.NoError(t, err)
+	require.Len(t, res.Findings, 2)
+
+	want := map[string]string{
+		model.SourceFixConventional: "pkg/é.go",
+		model.SourceFixBranch:       "pkg/ü.go",
+	}
+
+	for _, f := range res.Findings {
+		path, ok := want[f.Source]
+		require.True(t, ok, "unexpected source %q", f.Source)
+
+		assert.Equal(t, path, f.Path, f.Source)
+		assert.Equal(t, []string{path}, f.Paths, f.Source)
+		assert.Contains(t, f.Body, path, f.Source)
+
+		delete(want, f.Source)
+	}
+
+	assert.Empty(t, want, "each source yields one finding")
+}
+
+// numberedGo returns a Go file with n numbered functions, so git can
+// match a rename or a copy of the file by its content.
+func numberedGo(pkg string, n int) string {
+	var b strings.Builder
+
+	b.WriteString("package " + pkg + "\n")
+
+	for i := range n {
+		fmt.Fprintf(&b, "\nfunc F%d() int { return %d }\n", i, i)
+	}
+
+	return b.String()
+}
+
+// renameRepo builds a repository whose root commit is a fix, then a fix
+// commit that renames a file, a fix/ branch merge that renames a file,
+// and a fix commit that edits a file and adds a near copy of it.
+func renameRepo(t *testing.T) string {
+	t.Helper()
+
+	root, commit, git := repo(t)
+
+	commit("fix: guard the loader against a nil store", map[string]string{
+		"pkg/load.go":  numberedGo("pkg", 12),
+		"pkg/save.go":  numberedGo("pkg", 14),
+		"pkg/cache.go": numberedGo("pkg", 16),
+	})
+
+	git("mv", "pkg/load.go", "pkg/loader.go")
+	commit("fix: keep the loader under its package name", nil)
+
+	git("checkout", "-b", "fix/save-name")
+	git("mv", "pkg/save.go", "pkg/saver.go")
+	commit("name the saver after its role", nil)
+	git("checkout", "main")
+	git("merge", "--no-ff", "fix/save-name", "-m", "Merge branch 'fix/save-name'")
+
+	cache := numberedGo("pkg", 16)
+	edited := strings.Replace(cache, "return 3 }", "return -3 }", 1)
+	commit("fix: return a negative cache marker", map[string]string{
+		"pkg/cache.go":     edited,
+		"pkg/cachecopy.go": edited + "\n// Copy keeps the old marker.\n",
+	})
+
+	return root
+}
+
+func TestMineIgnoresRenameAndRootConfig(t *testing.T) {
+	// Fix mining lists a renamed file under its old and its new path, as
+	// history mining does. diff.renames and log.showRoot must not change
+	// the findings: false or copies changed the paths, and log.showRoot=false
+	// dropped the root fix commit.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root := renameRepo(t)
+
+	want, err := Mine(root, Options{})
+	require.NoError(t, err)
+	require.Len(t, want.Findings, 4, "the root fix, the rename fix, the branch rename, and the copy fix")
+
+	var rooted, renamed, branch bool
+
+	for _, f := range want.Findings {
+		for _, p := range f.Paths {
+			assert.NotContains(t, p, "=>", "a stored path is a real path")
+		}
+
+		switch {
+		case strings.Contains(f.Body, "against a nil store"):
+			rooted = true
+		case f.Source == model.SourceFixBranch:
+			branch = true
+
+			assert.ElementsMatch(t, []string{"pkg/save.go", "pkg/saver.go"}, f.Paths)
+		case strings.Contains(f.Body, "under its package name"):
+			renamed = true
+
+			assert.ElementsMatch(t, []string{"pkg/load.go", "pkg/loader.go"}, f.Paths)
+		}
+	}
+
+	assert.True(t, rooted, "the root fix is a finding")
+	assert.True(t, renamed, "the rename fix is a finding")
+	assert.True(t, branch, "the branch rename is a finding")
+
+	cases := []struct {
+		key, value string
+		// args is a plain git call whose text the setting changes.
+		args []string
+	}{
+		{key: "diff.renames", value: "copies", args: []string{"show", "--numstat", "--format=", "HEAD"}},
+		{key: "diff.renames", value: "false", args: []string{"show", "--numstat", "--format=", "HEAD~1^2"}},
+		{key: "log.showRoot", value: "false", args: []string{"log", "--numstat", "--format=%s"}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.key+"="+c.value, func(t *testing.T) {
+			plain := func() string {
+				out, err := exec.Command("git", append([]string{"-C", root}, c.args...)...).Output()
+				require.NoError(t, err)
+
+				return string(out)
+			}
+
+			before := plain()
+
+			gitConfig := func(args ...string) {
+				out, err := exec.Command("git", append([]string{"-C", root, "config"}, args...)...).CombinedOutput()
+				require.NoError(t, err, "%s", out)
+			}
+
+			gitConfig(c.key, c.value)
+			t.Cleanup(func() { gitConfig("--unset", c.key) })
+
+			// The case is real only when it changes the plain git text.
+			require.NotEqual(t, before, plain(), "plain git %v", c.args)
+
+			got, err := Mine(root, Options{})
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+}

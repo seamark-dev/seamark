@@ -51,12 +51,6 @@ index 0000000..d839dd2
 func checkLegacyFixture(t *testing.T) string {
 	t.Helper()
 
-	// The CLI runs git itself. A global or system git configuration,
-	// for example diff prefixes or colors, must not change the diff that
-	// check reads.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
-
 	root := t.TempDir()
 
 	git := func(args ...string) {
@@ -220,17 +214,17 @@ const (
 
 // checkLessonsFixture builds a committed repository under a new
 // temporary directory: verifyLessonsYAML, checkLessonsPolicy, a Go
-// file under src/, an asset under generated/, and the sentinel. Check
-// writes its index and audit files under .seamark. The .gitignore keeps
-// them out of the working-tree snapshot, because a lesson result must
-// not depend on them. It returns the git top level.
-func checkLessonsFixture(t *testing.T) (root string, sentinel *invokerSentinel) {
+// file under src/, an asset under generated/, and the agent section of
+// sentinel. Check writes its index and audit files under .seamark. The
+// .gitignore keeps them out of the working-tree snapshot, because a
+// lesson result must not depend on them. It returns the git top level;
+// the caller owns the sentinel environment and its end check.
+func checkLessonsFixture(t *testing.T, sentinel *invokerSentinel) (root string) {
 	t.Helper()
 
-	// The command and the fixture run git. A global or system git
-	// configuration must not change what they see.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	if sentinel == nil {
+		t.Skip("the sentinel stubs are shell scripts")
+	}
 
 	dir := t.TempDir()
 
@@ -247,7 +241,7 @@ func checkLessonsFixture(t *testing.T) (root string, sentinel *invokerSentinel) 
 
 	// The sentinel adds .seamark/config.yaml. The commit keeps it out
 	// of the working-tree changes.
-	sentinel = newInvokerSentinel(t, dir)
+	sentinel.install(t, dir)
 
 	verifyGit(t, dir, "add", "-A")
 	verifyGit(t, dir, "commit", "-q", "-m", "Add the fixture")
@@ -255,7 +249,7 @@ func checkLessonsFixture(t *testing.T) (root string, sentinel *invokerSentinel) 
 	root, err := filepath.EvalSymlinks(dir)
 	require.NoError(t, err)
 
-	return root, sentinel
+	return root
 }
 
 // The working-tree edits of the check --lessons tests. A comment in
@@ -336,7 +330,18 @@ func combinedLine(state, policy, lessons string) string {
 // blocking policy keeps its stderr line. The JSON exit code equals the
 // process exit code. The text form is the plain check text, a blank
 // line, the lessons --verify text, and the combined line.
+//
+// The parent owns the sentinel environment, and its cleanup runs after
+// every parallel child. A stub call in any child fails this table, but
+// the failure names no child: every case appends to the same protected
+// marker. The extra cases stay serial, because they cover the paths
+// before the evaluation.
 func TestCheckLessonsExitTable(t *testing.T) {
+	sentinel := newInvokerEnvironmentForTable(t)
+	if sentinel != nil {
+		t.Cleanup(func() { sentinel.requireNoCall(t) })
+	}
+
 	cases := []struct {
 		name    string
 		edit    func(t *testing.T, root string)
@@ -408,7 +413,9 @@ func TestCheckLessonsExitTable(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			root, sentinel := checkLessonsFixture(t)
+			t.Parallel()
+
+			root := checkLessonsFixture(t, sentinel)
 			c.edit(t, root)
 
 			args := []string{"-C", root, "check", "--lessons"}
@@ -472,13 +479,11 @@ func TestCheckLessonsExitTable(t *testing.T) {
 				assert.NotErrorIs(t, err, lessoncheck.ErrViolation)
 				assert.NotErrorIs(t, err, gate.ErrBlocked)
 			}
-
-			sentinel.requireNoCall(t)
 		})
 	}
 
 	t.Run("a policy error comes before the evaluation", func(t *testing.T) {
-		root, sentinel := checkLessonsFixture(t)
+		root := checkLessonsFixture(t, sentinel)
 		verifyEditAsset(t, root)
 		verifyWrite(t, root, ".seamark/policy.yaml", "mode: sometimes\n")
 
@@ -493,8 +498,6 @@ func TestCheckLessonsExitTable(t *testing.T) {
 			require.Len(t, lines, 1)
 			assert.Contains(t, lines[0], "mode must be warn or enforce")
 		}
-
-		sentinel.requireNoCall(t)
 	})
 
 	t.Run("a directory outside git is refused before the policy path", func(t *testing.T) {
@@ -522,7 +525,8 @@ func TestCheckLessonsExitTable(t *testing.T) {
 // untracked file in scope is evaluated although the piped diff omits
 // it.
 func TestCheckLessonsJSONEnvelope(t *testing.T) {
-	root, sentinel := checkLessonsFixture(t)
+	sentinel := newInvokerEnvironment(t)
+	root := checkLessonsFixture(t, sentinel)
 	checkLessonsEditHandler(t, root)
 	checkLessonsAddAsset(t, root)
 
@@ -633,7 +637,8 @@ func resultOfRule(t *testing.T, v lessoncheck.Verification, rule string) lessonc
 // own-state exclusion. It runs the default selection, so its text and
 // its lessons member name the audit files.
 func TestCheckLessonsNamesOwnAudit(t *testing.T) {
-	root, sentinel := checkLessonsFixture(t)
+	sentinel := newInvokerEnvironment(t)
+	root := checkLessonsFixture(t, sentinel)
 	checkLessonsEditHandler(t, root)
 
 	stdout, _, err := runIn(t, "", "-C", root, "check", "--lessons")
@@ -654,7 +659,8 @@ func TestCheckLessonsNamesOwnAudit(t *testing.T) {
 // model: the text and JSON forms, a piped diff, and --enforce start no
 // agent, no model CLI, and no network client.
 func TestCheckLessonsNeverInvokes(t *testing.T) {
-	root, sentinel := checkLessonsFixture(t)
+	sentinel := newInvokerEnvironment(t)
+	root := checkLessonsFixture(t, sentinel)
 	verifyEditAsset(t, root)
 	checkLessonsAddAsset(t, root)
 	verifyAddTODO(t, root)
@@ -683,7 +689,8 @@ func TestCheckLessonsNeverInvokes(t *testing.T) {
 func TestCheckLessonsStaleResult(t *testing.T) {
 	for _, c := range staleCases {
 		t.Run(c.name, func(t *testing.T) {
-			root, sentinel := checkLessonsFixture(t)
+			sentinel := newInvokerEnvironment(t)
+			root := checkLessonsFixture(t, sentinel)
 			c.edit(t, root)
 
 			reset := lateChange(t, root)

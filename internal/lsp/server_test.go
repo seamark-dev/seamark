@@ -499,3 +499,72 @@ func TestDidSaveKeepsARootOnADetachedDisk(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, resolved, recorded)
 }
+
+func TestModifiedFilesIgnoresHiddenUntrackedConfig(t *testing.T) {
+	// status.showUntrackedFiles=no drops new files from git status. A saved
+	// new file must still read as modified, so it gets diagnostics.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root := fixtureRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "new.go"), []byte("package main\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", "fresh.go"), []byte("package pkg\n"), 0o644))
+
+	cmd := exec.Command("git", "config", "status.showUntrackedFiles", "no")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	modified, err := (&Server{root: root}).modifiedFiles()
+	require.NoError(t, err)
+
+	assert.True(t, modified("new.go"), "an untracked file")
+	assert.True(t, modified("pkg/fresh.go"), "a file under an untracked directory")
+	assert.True(t, modified("a.go"), "a modified tracked file")
+	assert.False(t, modified("b.go"), "an unchanged tracked file")
+}
+
+func TestModifiedFilesKeepsGitIndex(t *testing.T) {
+	// The server reads git status on each save. A touch changes no
+	// content, so the read must not rewrite .git/index and take
+	// .git/index.lock away from a concurrent git command of the user.
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "GIT_OPTIONAL_LOCKS" || strings.HasPrefix(k, "GIT_CONFIG_") {
+			t.Setenv(k, "")
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root := fixtureRepo(t)
+	gitIndex := filepath.Join(root, ".git", "index")
+
+	at := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(filepath.Join(root, "b.go"), at, at))
+
+	beforeInfo, err := os.Stat(gitIndex)
+	require.NoError(t, err)
+
+	beforeBytes, err := os.ReadFile(gitIndex)
+	require.NoError(t, err)
+
+	modified, err := (&Server{root: root}).modifiedFiles()
+	require.NoError(t, err)
+
+	assert.True(t, modified("a.go"), "a modified tracked file")
+	assert.False(t, modified("b.go"), "a touched tracked file has no change")
+
+	afterInfo, err := os.Stat(gitIndex)
+	require.NoError(t, err)
+
+	afterBytes, err := os.ReadFile(gitIndex)
+	require.NoError(t, err)
+
+	assert.True(t, os.SameFile(beforeInfo, afterInfo), ".git/index has a new inode")
+	assert.Equal(t, beforeInfo.ModTime(), afterInfo.ModTime(), ".git/index has a new mtime")
+	assert.Equal(t, beforeBytes, afterBytes, ".git/index has new bytes")
+}

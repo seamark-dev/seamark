@@ -2,6 +2,7 @@ package gate
 
 import (
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/effects"
+	"github.com/seamark-dev/seamark/internal/render"
 )
 
 func testSetup(t *testing.T) (*Policy, *effects.Catalog, string) {
@@ -312,6 +314,64 @@ deny:
 	_, err := LoadPolicy(root)
 	require.Error(t, err, "CEL errors surface at load, not at decision time")
 	assert.Contains(t, err.Error(), "broken")
+}
+
+// TestLoadPolicyReadErrors covers a policy file that exists but cannot be
+// read. The embedded default must not replace it, because an enforce
+// gate would then allow what the file denies.
+func TestLoadPolicyReadErrors(t *testing.T) {
+	// A missing file, and a path below a regular file, load the default.
+	p, err := LoadPolicy(filepath.Join(t.TempDir(), "missing"))
+	require.NoError(t, err)
+	assert.Equal(t, "warn", p.Mode)
+
+	fileRoot := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fileRoot, ".seamark"), []byte("x"), 0o644))
+
+	_, err = LoadPolicy(fileRoot)
+	require.NoError(t, err, "no policy file can exist below a regular file")
+
+	// A directory at the policy path is a read error.
+	dirRoot := t.TempDir()
+	dirPath := filepath.Join(dirRoot, ".seamark", "policy.yaml")
+	require.NoError(t, os.MkdirAll(dirPath, 0o755))
+
+	_, err = LoadPolicy(dirRoot)
+	assert.EqualError(t, err, "gate: "+dirPath+": is a directory")
+
+	// A control byte in the root must not reach a terminal raw. The read
+	// error and the YAML error both name the path after Sanitize.
+	escRoot := filepath.Join(t.TempDir(), "a"+string(rune(0x1b))+"[2Jb")
+	escPath := filepath.Join(escRoot, ".seamark", "policy.yaml")
+	require.NoError(t, os.MkdirAll(escPath, 0o755))
+
+	_, err = LoadPolicy(escRoot)
+	assert.EqualError(t, err, "gate: "+render.Sanitize(escPath)+": is a directory")
+	assert.NotContains(t, err.Error(), "\x1b")
+
+	require.NoError(t, os.Remove(escPath))
+	require.NoError(t, os.WriteFile(escPath, []byte("mode: [\n"), 0o644))
+
+	_, err = LoadPolicy(escRoot)
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "\x1b")
+	assert.Contains(t, err.Error(), "gate: "+render.Sanitize(escPath)+": ")
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file with mode 0000")
+	}
+
+	// A file with mode 000 is a read error that keeps its cause.
+	modeRoot := t.TempDir()
+	modePath := filepath.Join(modeRoot, ".seamark", "policy.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(modePath), 0o755))
+	require.NoError(t, os.WriteFile(modePath, []byte("mode: enforce\n"), 0o644))
+	require.NoError(t, os.Chmod(modePath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(modePath, 0o644) })
+
+	_, err = LoadPolicy(modeRoot)
+	assert.EqualError(t, err, "gate: "+modePath+": permission denied")
+	assert.ErrorIs(t, err, fs.ErrPermission)
 }
 
 func TestEvalCommandSortsEffects(t *testing.T) {

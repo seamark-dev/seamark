@@ -75,13 +75,12 @@ type GitOutput struct {
 //     an unborn HEAD need all three.
 //   - The other runners live in packages that lesson checks must not
 //     import (index, cli, fixes, learning).
-//   - A plain `git status` rewrites the stat cache in .git/index. RunGit
-//     cannot import cli.readOnlyGitEnv, so it sets GIT_OPTIONAL_LOCKS=0
-//     itself.
+//   - A plain `git status` rewrites the stat cache in .git/index.
+//     GIT_OPTIONAL_LOCKS=0 stops that write.
 //
-// RunGit does not set diff.autoRefreshIndex=false, so a `git diff` through
-// it can still write .git/index. The working-tree snapshot runs no
-// `git diff`.
+// RunGit sets only the status part of ReadOnlyGitEnv, because the
+// working-tree snapshot runs no `git diff`. A `git diff` through RunGit
+// can still write .git/index.
 func RunGit(ctx context.Context, call GitCall) (GitOutput, error) {
 	// runCtx also ends when stdout passes the limit, so that exec kills
 	// git at once instead of after the next write.
