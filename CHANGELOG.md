@@ -206,6 +206,13 @@ model-boundary delivery.
   comment edit next to an effectful function no longer reaches its
   effects. An added or removed line whose text starts with `++ ` or
   `-- ` no longer reads as a file header.
+- **The unknown-reach note for each change.** `check` and MCP `check`
+  decide the note per change group: the added and removed lines of a
+  hunk with no context line between them. A file gets the note, and
+  counts in `diff.unindexed_files`, when one of its groups counts for no
+  symbol. Before, one edit inside a symbol hid a deleted function or an
+  import edit in the same file. A rule over `diff.unindexed_files` can
+  now match, and under enforcement block, more diffs.
 - **Git config and the git output that seamark reads.** `check` and MCP
   `check` run the `git diff HEAD` fallback with fixed color, external
   diff, textconv, path prefix, relative path, submodule, and rename

@@ -152,8 +152,8 @@ whose exit status the wrapper discards (`… || true`) reads
 Every safety-sensitive answer needs this context: **"no effects found"
 from a half-parsed index is not "no effects."** The same honesty runs
 through the other surfaces — `orient` warns when files failed to parse,
-and `seamark check` attaches a note when changed files have no indexed
-symbols, so absence of evidence never silently reads as evidence of
+and `seamark check` attaches a note when a changed file has changes
+outside every indexed symbol, so absence of evidence never silently reads as evidence of
 safety.
 
 Installation health is the other half:

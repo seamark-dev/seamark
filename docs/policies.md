@@ -171,7 +171,17 @@ no changed line and counts it in `diff.unindexed_files`, so the reach
 of that path stays unknown too, as for a deleted file. A rule over `diff.files` can
 therefore match a rename away from a path, and a rule over
 `diff.unindexed_files` can match a rename that edits only symbols of
-the new path. Policy
+the new path. A change group is the added and removed lines of a hunk
+with no context line between them, and it counts for a symbol when one
+of the lines it counts as lies in that symbol. The unknown-reach note
+and `diff.unindexed_files` count a file when one of its change groups
+counts for no symbol, also when another group of the same file touches
+a symbol. A rule over `diff.unindexed_files` can therefore match, and
+under enforcement block, more diffs, for example an import or
+doc-comment edit next to a function edit. A deletion with no context
+line between it and an edit inside a symbol is one group with that
+edit, so it counts for that symbol: the index holds only the symbol
+spans of the new side. Policy
 rules over `diff.effects` gate merges the same way `gate` gates commands, and
 `diff.unindexed_files` exposes coverage blind spots to your rules —
 changed files the index cannot attribute never silently read as safe.

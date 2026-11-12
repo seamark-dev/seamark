@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -32,10 +33,15 @@ const (
 // noFileHeader says why input with bytes in it gives no changed file.
 const noFileHeader = "names no changed file (no diff --git, ---, +++ or rename header with a path)"
 
-// EvalDiff computes a unified diff's blast radius and evaluates policy
-// over it: changed lines map to symbols, and symbols already carry the
-// transitively-propagated effect tags — their union is what this change
-// can ultimately reach (RFC-001 §5.5, pre-edit enforcement).
+// EvalDiff computes the blast radius of a unified diff and evaluates
+// policy over it. Changed lines map to symbols. Each symbol already
+// carries the effect tags that it reaches through its callees. The union
+// of these tags is what the change can reach.
+//
+// The gate decides the unknown-reach note per change group. A file gets
+// the note when one of its change groups has no recorded line in an
+// indexed symbol. So one edit inside a symbol cannot hide a deleted
+// function or an import edit in the same file.
 //
 // source names where diffText comes from, one of the Source constants.
 // A diff with no changed file never reads as a clean allow. Empty text
@@ -67,20 +73,13 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 			return nil, err
 		}
 
-		covered := false
-
 		for i := range syms {
 			sym := &syms[i]
 
 			// A symbol is touched when a changed line lies in its span.
-			touches := slices.ContainsFunc(changed, func(n uint32) bool {
-				return sym.Span.StartLine <= n && n <= sym.Span.EndLine
-			})
-			if !touches {
+			if !slices.ContainsFunc(changed, func(n uint32) bool { return inSpan(sym, n) }) {
 				continue
 			}
-
-			covered = true
 
 			effs, err := st.EffectsForSymbol(sym.ID)
 			if err != nil {
@@ -92,13 +91,13 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 			}
 		}
 
-		// No changed line landed inside any indexed symbol — an unparsed
-		// file, a deleted one, or edits between symbols (imports!) that
-		// can still change resolution and reach. Either way the index
-		// cannot attribute this change: its effect reach is UNKNOWN, and
-		// absence of evidence must never quietly read as evidence of
-		// safety (RFC-001 §5.2).
-		if !covered {
+		// A file with no change group, or with a group that counts for no
+		// symbol, has a change that the index cannot attribute. Examples
+		// are an unparsed or deleted file, a deleted function, and an
+		// import edit, which can change resolution and reach. The reach of
+		// such a change is unknown, and missing evidence never reads as safe.
+		groups := parsed.groups[f]
+		if len(groups) == 0 || slices.ContainsFunc(groups, func(g []uint32) bool { return !attributed(g, syms) }) {
 			unindexed = append(unindexed, f)
 		}
 	}
@@ -149,6 +148,24 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 	}
 
 	return d, nil
+}
+
+// attributed reports whether a change group has a recorded line in the
+// span of one of syms. A group with no line is not attributed, because
+// an empty set matches no symbol.
+func attributed(group []uint32, syms []model.Symbol) bool {
+	for i := range syms {
+		if slices.ContainsFunc(group, func(n uint32) bool { return inSpan(&syms[i], n) }) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// inSpan reports whether new-side line n lies in the span of sym.
+func inSpan(sym *model.Symbol, n uint32) bool {
+	return sym.Span.StartLine <= n && n <= sym.Span.EndLine
 }
 
 // gitHeaderPath extracts the new-side path from a `diff --git a/X b/Y`
