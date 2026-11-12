@@ -44,11 +44,14 @@ Read it top to bottom: this function _can ultimately spawn a process_
 a count instead of burying it), and here is the commit trail. Every call
 edge declares how it was derived (`[qualified]`, `[same-package]`,
 `[same-class]`, or the low-confidence `[unique-name]`), so you always
-know how much to trust an edge. Resolved edges lead each list and
-name-match guesses follow, so the 15-line cut drops guesses first. A
-function or method with no resolved caller prints
+know how much to trust an edge. Edges of the `[qualified]`,
+`[same-package]`, and `[same-class]` tiers lead each list, and
+`[unique-name]` guesses follow, so the 15-line cut drops guesses first.
+A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
-several methods share, or through a function value, gets no edge. The
+several methods share, or through a function value, gets no edge. When
+every caller edge is a guess, `why` lists them under
+`callers (N)  — N resolved by name match only`. The
 `usually changed with` lines carry **function grain**: `· mostly …`
 names the functions git's hunk headers show actually moved in the shared
 commits — a factual report, not a statistical claim. Hunk headers
