@@ -17,7 +17,9 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/seamark-dev/seamark/internal/lessonreport"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/scaffold"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -395,10 +397,22 @@ func TestLessonsDeliverySourceFailures(t *testing.T) {
 			require.NoError(t, os.Remove(path))
 			require.NoError(t, os.Mkdir(path, 0o755))
 			before := deliveryTree(t, f.root)
+			var text string
 			for _, args := range [][]string{nil, {"--json"}} {
 				out, err := deliveryRun(t, f.root, args...)
 				require.NoError(t, err, "source failures are report data")
 				require.NotEmpty(t, out)
+
+				if args == nil {
+					text = out
+				}
+			}
+
+			assertNoEmptySlot(t, text)
+
+			if source != "config" {
+				assert.Contains(t, text, "unreadable (.seamark/", "the failed source names its state")
+				assert.Regexp(t, `unreadable \(\.seamark/[^)]*\);[^\n]*; error \S`, text, "the failed read names its error")
 			}
 
 			r, _ := deliveryReport(t, f.root)
@@ -413,6 +427,85 @@ func TestLessonsDeliverySourceFailures(t *testing.T) {
 
 			assert.Equal(t, before, deliveryTree(t, f.root))
 		})
+	}
+}
+
+// TestLessonsDeliveryTextHasNoEmptySlot runs the text on the fixture, with
+// lessons.yaml and both audits removed, and with the starter lessons.yaml
+// that seamark init writes. An empty slot would end a line with a stray
+// separator or space.
+func TestLessonsDeliveryTextHasNoEmptySlot(t *testing.T) {
+	f := newDeliveryFixture(t, "")
+	out, err := deliveryRun(t, f.root)
+	require.NoError(t, err)
+	assertNoEmptySlot(t, out)
+
+	assert.Contains(t, out, "\n  pin ", "the fixture prints its pins")
+	assert.Contains(t, out, "rule: keep-docs-current\n    scope: repository-wide\n", "a pin without a region is repository-wide")
+	assert.Contains(t, out, "rule: close-db-handles\n    scope: api\n")
+
+	for _, name := range []string{"lessons.yaml", "lessons-audit.jsonl", "lesson-check-audit.jsonl"} {
+		require.NoError(t, os.Remove(filepath.Join(f.root, ".seamark", name)))
+	}
+
+	out, err = deliveryRun(t, f.root)
+	require.NoError(t, err)
+	assertNoEmptySlot(t, out)
+
+	lines := strings.Split(out, "\n")
+	require.Greater(t, len(lines), 5)
+	assert.Equal(t, "delivery audit: absent (.seamark/lessons-audit.jsonl); generations 0; bytes 0; records 0; "+
+		"legacy 0; malformed 0; newer schema 0; partial tail false", lines[2])
+	assert.Equal(t, "check audit: absent (.seamark/lesson-check-audit.jsonl); generations 0; bytes 0; records 0; "+
+		"legacy 0; malformed 0; newer schema 0; partial tail false", lines[3])
+	assert.Equal(t, "config: absent; pins 0", lines[4])
+
+	// The starter reads and has no pins. Its config line still names the
+	// guidance digest, because every config that reads has one.
+	starter := starterLessonsYAML(t)
+	verifyWrite(t, f.root, pinfile.File, starter)
+
+	cfg, err := reviews.ParseConfig([]byte(starter))
+	require.NoError(t, err)
+	require.Empty(t, cfg.Pin, "the starter has no pins")
+
+	out, err = deliveryRun(t, f.root)
+	require.NoError(t, err)
+	assertNoEmptySlot(t, out)
+
+	lines = strings.Split(out, "\n")
+	require.Greater(t, len(lines), 5)
+	assert.Equal(t, "config: ok; pins 0; guidance "+cfg.GuidanceDigest(), lines[4])
+}
+
+// starterLessonsYAML returns the lessons.yaml that seamark init writes. The
+// test reads it from the scaffold, so it follows the template.
+func starterLessonsYAML(t *testing.T) string {
+	t.Helper()
+
+	for _, doc := range scaffold.Documents(gateModeWarn) {
+		if doc.Path == pinfile.File {
+			body, err := doc.Compose(nil, false)
+			require.NoError(t, err)
+
+			return string(body)
+		}
+	}
+
+	require.FailNow(t, "the scaffold has no lessons.yaml")
+
+	return ""
+}
+
+// assertNoEmptySlot fails when a line of the text ends with a space or a
+// separator, the mark of a slot that printed with no value.
+func assertNoEmptySlot(t *testing.T, text string) {
+	t.Helper()
+
+	require.NotEmpty(t, text)
+
+	for _, line := range strings.Split(strings.TrimSuffix(text, "\n"), "\n") {
+		assert.False(t, strings.HasSuffix(line, " ") || strings.HasSuffix(line, ";"), "line %q ends with a stray separator", line)
 	}
 }
 
