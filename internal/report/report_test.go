@@ -2154,3 +2154,57 @@ func TestLessonLedgerEmptyLinesNameTheGitHubCondition(t *testing.T) {
 	assert.NotContains(t, b.String(), "\x1b", "the scope is sanitized before it reaches the terminal")
 	assert.Contains(t, b.String(), "(needs gh authenticated and a github.com remote)")
 }
+
+// TestWhyPartnerLineKeepsItsForm pins the header and the partner line of
+// "usually changed with". The skills quote both texts in their reference on
+// reading Seamark, and the bench preflight parses the line, so both must stay.
+func TestWhyPartnerLineKeepsItsForm(t *testing.T) {
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	tax := model.Symbol{FQN: "internal/billing.Tax", Name: "Tax", Kind: model.KindFunction,
+		File: "internal/billing/tax.go", Span: model.Span{StartLine: 1, EndLine: 3}}
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		if err := tx.InsertSymbol(&tax); err != nil {
+			return err
+		}
+
+		for _, partner := range []string{"internal/billing/rates.go", "internal/billing/round.go"} {
+			pair := model.CoChange{FileA: "internal/billing/tax.go", FileB: partner, Together: 4, Total: 18, Lift: 2.5}
+			if err := tx.InsertCoChange(pair); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	var b strings.Builder
+	require.NoError(t, Why(&b, st, root, "internal/billing/tax.go"))
+
+	lines := strings.Split(b.String(), "\n")
+	header := -1
+
+	for i, l := range lines {
+		if l == "usually changed with  (empirical, lift > 1 means beyond chance)" {
+			header = i
+		}
+	}
+
+	require.NotEqual(t, -1, header, "the skills quote this header:\n%s", b.String())
+	require.Greater(t, len(lines), header+2)
+
+	// A copy of the bench preflight parser, so a change of the line form fails here first.
+	partnerLine := regexp.MustCompile(`^\s*(\d+)/(\d+)\s+commits\s+lift\s+\S+\s+(\S+)`)
+
+	for _, l := range lines[header+1 : header+3] {
+		m := partnerLine.FindStringSubmatch(l)
+		require.NotNil(t, m, "the skills quote and the bench parser read %q", l)
+		assert.Equal(t, "4", m[1])
+		assert.Equal(t, "18", m[2], "M is the same on every partner line")
+	}
+}

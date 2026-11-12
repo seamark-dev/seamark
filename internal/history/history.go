@@ -209,6 +209,8 @@ func gitLog(repoRoot string, maxCommits int) ([]model.Decision, error) {
 // Lift rather than raw counts keeps hub files (touched in half the commits)
 // from dominating: a pair must co-occur beyond what its members' individual
 // churn predicts.
+// A bulk commit, a merge, or a commit with only excluded files adds to no count in the formula.
+// git log lists no files for a merge.
 func coChange(commits []model.Decision, opts Options) []model.CoChange {
 	type pair struct{ a, b string }
 

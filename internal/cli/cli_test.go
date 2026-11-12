@@ -2526,6 +2526,26 @@ func TestUserDocsCoverEveryCommand(t *testing.T) {
 	}
 }
 
+// TestDocsSayWhatMCounts keeps the docs explaining M in "N/M commits".
+// The editors page must quote the real LSP diagnostic text.
+func TestDocsSayWhatMCounts(t *testing.T) {
+	read := func(path string) string {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		require.NoError(t, err)
+
+		return strings.Join(strings.Fields(string(data)), " ")
+	}
+
+	history := read("docs/repository-history.md")
+	assert.Contains(t, history, "counts in the mined window")
+	assert.Contains(t, history, "not the commit count of either file")
+	assert.Contains(t, history, "more than 30 other changed files")
+
+	editors := read("docs/editors.md")
+	assert.Contains(t, editors, "usually changed together, not in this change:")
+	assert.NotContains(t, editors, "38 of 58", "a diagnostic needs lift 2.0, which 38/58 cannot reach")
+}
+
 // TestSkillsNameOnlyRealCommands mirrors TestUserDocsCoverEveryCommand
 // for the embedded skill text: every backticked `seamark <command>` and
 // every Bash(seamark <command> ...) grant must name a shipped command, or

@@ -314,6 +314,9 @@ model-boundary delivery.
 - **Empty region ledger.** `seamark lessons --region` and MCP
   `expand lessons:<dir>` now say that `seamark index --reviews` needs gh
   authenticated and a github.com remote, as the repository-wide line does.
+- **why partner counts.** The `why` help, the MCP `why` description and
+  the docs now say that M in `N/M commits` counts the commits in the
+  mined window, the same for every partner.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

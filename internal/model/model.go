@@ -117,7 +117,7 @@ type CoChange struct {
 	FileA    string // canonical order: FileA < FileB
 	FileB    string
 	Together int // commits touching both
-	Total    int // commits in the mined window
+	Total    int // commits that co-change counts in the mined window
 	Lift     float64
 }
 

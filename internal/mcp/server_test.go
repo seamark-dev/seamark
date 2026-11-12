@@ -444,3 +444,18 @@ func TestApproveToolsMatchToolDefs(t *testing.T) {
 
 	assert.Equal(t, approve.Tools, names)
 }
+
+// TestWhyDescriptionSaysWhatMCounts keeps the meaning of M in "N/M commits"
+// in the tool description, because agents read the partner line without a label.
+func TestWhyDescriptionSaysWhatMCounts(t *testing.T) {
+	var desc string
+
+	for _, d := range toolDefs {
+		if d["name"] == "why" {
+			desc, _ = d["description"].(string)
+		}
+	}
+
+	assert.Contains(t, desc, "N/M commits")
+	assert.Contains(t, desc, "M counted in the mined window")
+}
