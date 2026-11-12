@@ -137,9 +137,12 @@ func TestClaudeHookWithAMissingBinaryWarnsAndCountsForNothing(t *testing.T) {
 		assert.Equal(t, StatePartial, entry.State, capability)
 		assert.Contains(t, entry.Detail, "cannot start from .claude/settings.json: "+absentBinary+" is missing", capability)
 		assert.Contains(t, entry.Action, "run `seamark init --client claude`", capability)
+		assert.True(t, entry.Inert, capability)
 	}
 
-	assert.Contains(t, insp.DescribeHooks(), "gate hook cannot start from .claude/settings.json")
+	// No hook runs, so the hooks line calls none installed.
+	assert.Equal(t, "no hook runs; gate hook cannot start from .claude/settings.json: "+absentBinary+" is missing; "+
+		"lessons hook cannot start from .claude/settings.json: "+absentBinary+" is missing", insp.DescribeHooks())
 }
 
 func TestClaudeMissingBinaryActionFollowsTheRouteThatRuns(t *testing.T) {
@@ -387,6 +390,12 @@ func TestClaudeHookBinaryWarningNamesTheCause(t *testing.T) {
 			assert.Equal(t, StatePartial, commands.State)
 			assert.Contains(t, commands.Detail, "gate hook cannot start from .claude/settings.json: "+binary+" "+cause)
 			assert.NotContains(t, commands.Detail, binaryAbsent)
+
+			// Each cause stops the client, so the entry is inert. The hooks
+			// line then does not call the hook installed, and it keeps the cause.
+			assert.True(t, commands.Inert, "the client never starts the hook")
+			assert.Equal(t, "no hook runs; gate hook cannot start from .claude/settings.json: "+binary+" "+cause,
+				insp.DescribeHooks())
 		})
 	}
 }

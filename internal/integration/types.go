@@ -656,6 +656,12 @@ type CapabilityInspection struct {
 	// print it as the corrective action, so the three never disagree on
 	// the fix.
 	Action string `json:"action,omitempty"`
+	// Inert is true when the hook is present and the client never runs
+	// it. Its binary cannot start, its managed matcher never fires, or an
+	// if field sits on an event without a tool. Narration reads this
+	// field, so it never parses Detail. The field has no JSON form, so
+	// the clients list keeps its bytes.
+	Inert bool `json:"-"`
 }
 
 // Validate checks one capability inspection. It rejects incomplete

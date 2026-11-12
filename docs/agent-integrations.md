@@ -80,22 +80,22 @@ your user settings (`~/.claude/settings.json`), settings passed with
 (`managed-settings.json`), so a hook or a `disableAllHooks: true` there is
 not in their reports.
 
-Doctor warns when a seamark hook command names a binary that does not
-exist, or that is not an executable file. The warning names the cause:
-the path is missing, is not a regular file, or has no execute bit. The
-client cannot start such a hook, so it blocks nothing and delivers
-nothing. A committed hook file with an absolute path from another
-machine is one example. For the file that setup manages, the fix is a
-setup run, which rewrites the command to the running binary; Codex then
-asks for a new review in `/hooks`.
+Doctor and status warn when a seamark hook command names a binary that
+does not exist, or that is not an executable file. The warning names the
+cause: the path is missing, is not a regular file, or has no execute
+bit. The client cannot start such a hook, so it blocks nothing and
+delivers nothing. A committed hook file with an absolute path from
+another machine is one example. For the file that setup manages, the
+fix is a setup run, which rewrites the command to the running binary;
+Codex then asks for a new review in `/hooks`.
 
 Setup keeps the matcher of an existing hook, because a narrow matcher can
 be your choice. When the matcher of a seamark hook in the file that setup
-manages never fires for the hook's tools, init and doctor warn and name
-the matcher to set in that file. A setup run does not change it. When
-another handler of setup in that file already runs the hook for each of
-its tools, init and doctor name the removal of the idle handler instead,
-because a matcher edit would make the hook run twice. A Codex
+manages never fires for the hook's tools, init, doctor, and status warn
+and name the matcher to set in that file. A setup run does not change
+it. When another handler of setup in that file already runs the hook for
+each of its tools, these commands name the removal of the idle handler
+instead, because a matcher edit would make the hook run twice. A Codex
 gate handler in the Claude Code form is the exception when `seamark init
 --client codex` removes it, because another gate handler stays: doctor
 names that setup run instead.

@@ -105,6 +105,12 @@ func TestInspectionNamesTheMatcherOfAManagedHookThatNeverFires(t *testing.T) {
 		assert.Equal(t, `gate hook never runs from .claude/settings.json: its matcher "Shell" does not fire for Bash`, commands.Detail)
 		assert.Equal(t, `set the matcher of that hook to "Bash" in .claude/settings.json`, commands.Action)
 		assert.Len(t, warningsWith(insp.Findings, commands.Action), 1)
+
+		// The client never runs the hook, so the hooks line does not call
+		// it installed.
+		assert.True(t, commands.Inert)
+		assert.Equal(t, `lessons hook installed; gate hook never runs from .claude/settings.json: its matcher "Shell" does not fire for Bash`,
+			insp.DescribeHooks())
 	})
 
 	t.Run("codex gate", func(t *testing.T) {
@@ -118,6 +124,9 @@ func TestInspectionNamesTheMatcherOfAManagedHookThatNeverFires(t *testing.T) {
 		assert.Equal(t, StatePartial, commands.State)
 		assert.Contains(t, commands.Detail, `its matcher "ash" does not fire for Bash`)
 		assert.Equal(t, `set the matcher of that hook to "Bash" in .codex/hooks.json`, commands.Action)
+		assert.True(t, commands.Inert)
+		assert.Equal(t, `lessons hook installed; gate hook never runs from .codex/hooks.json: its matcher "ash" does not fire for Bash`,
+			insp.DescribeHooks())
 	})
 
 	t.Run("another definition runs the hook", func(t *testing.T) {

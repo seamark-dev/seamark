@@ -971,6 +971,8 @@ func missingTools(spec hooks.Spec, covered []string) []string {
 // start counts for nothing. When no other definition runs the hook, it
 // makes the hook partial with the repair of its binary. So does a managed
 // definition under a matcher that never fires, with the matcher to set.
+// These three cases mark the entry inert, because the client never runs
+// the hook. Narration then does not call such a hook installed.
 func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource) {
 	broken := slices.IndexFunc(all, hookSource.cannotStart)
 	idle := slices.IndexFunc(all, func(s hookSource) bool { return s.idle })
@@ -1017,16 +1019,16 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource
 			entry.Action = FilteredHookRoute
 		}
 	case never >= 0:
-		entry.State = StatePartial
+		entry.State, entry.Inert = StatePartial, true
 		entry.Detail = fmt.Sprintf("%s never runs from %s: it has an if field on %s", name, sources[never].path, spec.Event)
 		entry.Action = fmt.Sprintf("remove the `if` field from the %s hook in %s", spec.Event, sources[never].path)
 	case broken >= 0:
-		entry.State = StatePartial
+		entry.State, entry.Inert = StatePartial, true
 		entry.Detail = fmt.Sprintf("%s cannot start from %s: %s %s", name, all[broken].path,
 			render.Sanitize(all[broken].missing), all[broken].cause)
 		entry.Action = all[broken].missingAction
 	case idle >= 0:
-		entry.State = StatePartial
+		entry.State, entry.Inert = StatePartial, true
 		entry.Detail = fmt.Sprintf("%s never runs from %s: its matcher %q does not fire for %s", name, all[idle].path,
 			render.Sanitize(all[idle].matcher), strings.Join(toolNames(spec.Tools()), ", "))
 		entry.Action = idleMatcherAction(all[idle], spec)
@@ -1367,9 +1369,12 @@ func (c CapabilityInspection) Describe() string {
 // DescribeHooks renders the lifecycle hooks of the client in the words
 // doctor always used: "gate (warn) + lessons hooks installed",
 // "lessons hook installed, gate hook missing", "no hooks installed".
-// A hook is missing only when Setup says setup installs it; a
-// capability the client does not declare is never missing. A partial
-// hook carries its detail, because "installed" would overstate it.
+// A hook is missing only when its entry is absent and Setup says setup
+// installs it; a capability the client does not declare is never
+// missing. A partial hook carries its detail, because "installed" would
+// overstate it. An inert hook is not installed: the client never runs
+// it, so only its detail names it. With no running hook and an inert
+// one, the line starts "no hook runs".
 func (i Inspection) DescribeHooks() string {
 	edits, _ := i.Entry(CapabilityEdits)
 	commands, _ := i.Entry(CapabilityCommands)
@@ -1385,28 +1390,40 @@ func (i Inspection) DescribeHooks() string {
 		}
 	}
 
-	gate := commands.Supported && commands.State != StateAbsent
-	lessons := edits.Supported && edits.State != StateAbsent
+	gate := runningHook(commands)
+	lessons := runningHook(edits)
+	gateMissing := i.Setup.GateHook && commands.State == StateAbsent
+	lessonsMissing := i.Setup.Hooks && edits.Supported && edits.State == StateAbsent
 
 	var line string
 
 	switch {
-	case !gate && !lessons:
-		return "no hooks installed"
 	case gate && lessons:
 		line = fmt.Sprintf("gate (%s) + lessons hooks installed", i.gateWord(commands))
 	case gate:
 		line = fmt.Sprintf("gate hook installed (%s)", i.gateWord(commands))
 
-		if i.Setup.Hooks && edits.Supported {
+		if lessonsMissing {
 			line += ", lessons hook missing"
 		}
-	default:
+	case lessons:
 		line = "lessons hook installed"
 
-		if i.Setup.GateHook {
+		if gateMissing {
 			line += ", gate hook missing"
 		}
+	case commands.Inert || edits.Inert:
+		line = "no hook runs"
+
+		if lessonsMissing {
+			line += ", lessons hook missing"
+		}
+
+		if gateMissing {
+			line += ", gate hook missing"
+		}
+	default:
+		return "no hooks installed"
 	}
 
 	var qualifiers []string
@@ -1426,6 +1443,12 @@ func (i Inspection) DescribeHooks() string {
 	}
 
 	return line
+}
+
+// runningHook reports whether the client runs the hook of the entry: the
+// client declares it, the entry is present, and the hook is not inert.
+func runningHook(entry CapabilityInspection) bool {
+	return entry.Supported && entry.State != StateAbsent && !entry.Inert
 }
 
 // gateWord is the mode word of the gate line: the installed mode, or

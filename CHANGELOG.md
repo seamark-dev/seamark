@@ -87,7 +87,8 @@ model-boundary delivery.
   no longer report such a hook as installed or count its gate mode. The
   warning says why: the path is missing, is not a regular file, or has
   no execute bit. It names the setup run that rewrites the command, or
-  the hand edit for `.claude/settings.local.json`.
+  the hand edit for `.claude/settings.local.json`. The status gate line
+  says that no gate hook runs, in place of "no gate hook installed".
 - **Codex gate in the Claude Code form.** A `gate --hook` or
   `gate --enforce --hook` handler without `--client codex` in
   `.codex/hooks.json` runs and blocks in Codex. Doctor and status now
@@ -96,15 +97,16 @@ model-boundary delivery.
   one, keeps enforce unless `--gate-mode` asks otherwise, and asks for a
   new review in /hooks.
 - **Hooks under a matcher that never fires.** For a seamark hook in the
-  managed file under such a matcher, doctor and init for both clients
-  now warn and name the matcher to set in that file, in place of a
-  `seamark init` run that changes nothing. Setup still keeps the matcher.
+  managed file under such a matcher, doctor, init, and status for both
+  clients now warn and name the matcher to set in that file, in place of
+  a `seamark init` run that changes nothing. Such a hook no longer reads
+  as installed. Setup still keeps the matcher.
   For a Codex gate handler in the Claude Code form that
   `init --client codex` removes, doctor names that run instead. When
-  another handler of setup already runs the hook for its tools, both
-  commands name the removal of the idle handler, not a matcher edit, and
-  two Codex handlers of the gate or lessons hook that both run now get a
-  warning that the hook runs twice.
+  another handler of setup already runs the hook for its tools, doctor,
+  init, and status name the removal of the idle handler, not a matcher
+  edit, and two Codex handlers of the gate or lessons hook that both run
+  now get a warning that the hook runs twice.
 - **Gate failure wording.** `init` and the docs no longer say that
   every gate failure fails closed under enforce. The gate's own failures
   still exit 2 and block. A hook that the client stops at its timeout,

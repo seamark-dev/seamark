@@ -81,9 +81,12 @@ type Status struct {
 	// controlled config and flows to terminals and MCP clients.
 	DistillAgent string `json:"distill_agent,omitempty"`
 
-	// GatePolicyMode is the mode of policy.yaml. GateHookMode is the mode
-	// of the Claude Code gate hook that setup manages, or "" when none
-	// runs. The two can differ, and a reader must see the difference.
+	// GatePolicyMode is the mode of policy.yaml. GateHookMode is the
+	// marker mode of the Claude Code gate hook that setup manages, or ""
+	// when setup manages none. It keeps that mode also for a hook that
+	// cannot start, because setup keeps it, so a reader pairs it with the
+	// Claude Code entry of Clients. The policy mode and the hook mode can
+	// differ, and a reader must see the difference.
 	// Both hook fields come from the reader of the Claude Code inspection,
 	// so they agree with the Claude Code entry of Clients.
 	GatePolicyMode string `json:"gate_policy_mode"`
@@ -486,8 +489,16 @@ func printGate(w io.Writer, s *Status) {
 	case integration.GateEffectUnknown:
 		fmt.Fprintf(w, "gate           policy mode %s; %s\n", s.GatePolicyMode, unknownGate(g))
 	case integration.GateEffectNone:
-		fmt.Fprintf(w, "gate           policy mode %s; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n",
-			s.GatePolicyMode)
+		// A setup run does not repair a matcher that never fires, so
+		// this line offers no setup run. The clients line and the warning
+		// of each inert client already name the cause and the repair, so
+		// this line does not repeat them.
+		if len(g.Inert) > 0 {
+			fmt.Fprintf(w, "gate           policy mode %s; no gate hook runs for shell commands\n", s.GatePolicyMode)
+		} else {
+			fmt.Fprintf(w, "gate           policy mode %s; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n",
+				s.GatePolicyMode)
+		}
 	case integration.GateEffectReportOnly:
 		// A verdict blocks only by exit status 2, so the policy mode cannot
 		// make such a hook block.

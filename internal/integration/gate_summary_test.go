@@ -139,3 +139,21 @@ func TestSummarizeInspectionsReadsOnlyClientsWithAGate(t *testing.T) {
 	assert.Equal(t, GateSummary{ReportOnly: []string{"claude"}}, g)
 	assert.Equal(t, GateEffectReportOnly, g.Effect())
 }
+
+func TestSummarizeInspectionsListsAnInertGateApart(t *testing.T) {
+	// An inert gate blocks nothing, so the effect does not count it. The
+	// list keeps it, so status can name the hook and its repair.
+	inert := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StatePartial, Inert: true}
+	current := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StateCurrent}
+
+	g := SummarizeInspections([]Inspection{
+		{ClientID: "claude", Capabilities: []CapabilityInspection{inert}},
+		{ClientID: "codex", GateMode: hooks.ModeEnforce, Capabilities: []CapabilityInspection{current}},
+	})
+
+	assert.Equal(t, GateSummary{Enforce: []string{"codex"}, Inert: []string{"claude"}}, g)
+	assert.Equal(t, GateEffectBlocks, g.Effect())
+
+	g = SummarizeInspections([]Inspection{{ClientID: "claude", Capabilities: []CapabilityInspection{inert}}})
+	assert.Equal(t, GateEffectNone, g.Effect())
+}

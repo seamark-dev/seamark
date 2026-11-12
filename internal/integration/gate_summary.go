@@ -41,6 +41,12 @@ type GateSummary struct {
 	// Unreadable lists the hook documents that cannot be read. What
 	// their hooks do is unknown, not nothing.
 	Unreadable []string
+	// Inert lists the clients whose gate hook is present and never runs:
+	// its binary cannot start, or its matcher never fires. Such a hook
+	// blocks nothing, so the effect does not count it. Status names it
+	// apart, because "no gate hook installed" would send the reader to a
+	// setup run that does not repair it. Init leaves it empty.
+	Inert []string
 }
 
 // GateEffect is what the gate hooks of a workspace do with a blocking
@@ -179,7 +185,8 @@ func (g *GateSummary) addHook(label, mode string, uncertain bool) bool {
 // command gate by its client ID. A client whose hook document cannot be
 // read is unreadable, with the detail of its commands entry. A client
 // with a definition that may run a gate is possible, beside the mode of
-// the definitions that certainly run one.
+// the definitions that certainly run one. A client whose gate entry is
+// inert is listed as inert.
 func SummarizeInspections(inspections []Inspection) GateSummary {
 	var g GateSummary
 
@@ -196,6 +203,10 @@ func SummarizeInspections(inspections []Inspection) GateSummary {
 		}
 
 		g.Add(insp.ClientID, insp.GateMode)
+
+		if commands.Inert {
+			g.Inert = appendOnce(g.Inert, insp.ClientID)
+		}
 
 		if insp.GateMode == GateModeReportOnly && insp.GateBackground {
 			g.Background = appendOnce(g.Background, insp.ClientID)

@@ -871,6 +871,7 @@ func TestClaudeGateThatMayRunIsPossibleNotInstalled(t *testing.T) {
 	commands, _ := insp.Entry(CapabilityCommands)
 	assert.Equal(t, StatePartial, commands.State)
 	assert.Equal(t, "gate hook (enforce) may run from .claude/settings.json: `"+printed+"`", commands.Detail)
+	assert.False(t, commands.Inert, "a hook that may run is not inert")
 
 	// The definition has no if field, so the route asks for a direct run.
 	// The init gate line prints the same words, so the test pins them here.

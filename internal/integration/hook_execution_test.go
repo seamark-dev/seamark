@@ -727,6 +727,7 @@ func TestClaudeFilteredResetHookNeverRuns(t *testing.T) {
 	assert.Equal(t, StatePartial, resets.State, "a re-run of setup cannot repair it")
 	assert.Equal(t, "context reset hook never runs from .claude/settings.json: it has an if field on PostCompact", resets.Detail)
 	assert.Equal(t, "remove the `if` field from the PostCompact hook in .claude/settings.json", resets.Action)
+	assert.True(t, resets.Inert, "the client never runs the hook")
 
 	never := findingsWith(insp.Findings, "with an if field on PostCompact")
 	require.Len(t, never, 1)
