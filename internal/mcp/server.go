@@ -483,6 +483,12 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 			return toolOutput{}, fmt.Errorf("change_set needs {\"files\": [\"path\", …]}")
 		}
 
+		// The check runs before withStore. So a rejected call refreshes
+		// no index and writes no firing record.
+		if err := report.CheckChangeSetFiles(p.Files); err != nil {
+			return toolOutput{}, err
+		}
+
 		// The preparation needs the open store, and withStore closes it
 		// when the callback returns. So the callback keeps the result here.
 		// The first text part goes through withStore, which can add a note.

@@ -301,6 +301,12 @@ model-boundary delivery.
   in the CLI, `seamark why` and `seamark lessons --region`, and labels
   `change_set` and `expand` as MCP tools. The MCP orient text does not
   change.
+- **change_set path check.** MCP `change_set` now rejects a `files`
+  entry that is empty, holds only white space, or holds a NUL byte,
+  with one error that names the entry. Before, an empty path listed
+  package nodes and every pin, while the preparation part rejected it.
+  An entry of `./` now reads as `.` in `change_set` and `why`, and no
+  longer lists every pin.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

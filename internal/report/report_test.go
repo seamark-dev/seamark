@@ -1552,6 +1552,90 @@ func TestChangeSetSanitizesCompanionFileNames(t *testing.T) {
 	assert.NotContains(t, b.String(), "\x1b")
 }
 
+// emptyFileStore returns a store with one file symbol and one package
+// node, and a root whose only pin is on an unrelated region. A package
+// node has an empty file, so an empty name matches it. An empty lesson
+// scope reads as the whole repository, so the pin then prints and
+// writes a firing record.
+func emptyFileStore(t *testing.T) (st *store.Store, root, audit string) {
+	t.Helper()
+
+	root = t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	run := model.Symbol{FQN: "scripts/task.run", Name: "run", Kind: model.KindFunction,
+		File: "scripts/task.py", Span: model.Span{StartLine: 1, EndLine: 5}}
+	pkg := model.Symbol{FQN: "scripts", Name: "scripts", Kind: model.KindPackage}
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		if err := tx.InsertSymbol(&run); err != nil {
+			return err
+		}
+
+		return tx.InsertSymbol(&pkg)
+	}))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+		"pin:\n  - rule: other-area\n    region: other\n    note: Applies to the other area.\n",
+	), 0o644))
+
+	return st, root, filepath.Join(root, ".seamark", "lessons-audit.jsonl")
+}
+
+// TestChangeSetReadsTheRootSpellingAsADirectory proves that the entry
+// "./" never becomes the empty name. Before, ChangeSet listed the
+// package nodes and every pin for it, and why printed the same report.
+// The entry now names the directory ".", which no file has.
+func TestChangeSetReadsTheRootSpellingAsADirectory(t *testing.T) {
+	st, root, audit := emptyFileStore(t)
+
+	var b strings.Builder
+	require.NoError(t, ChangeSet(&b, st, root, []string{"./"}))
+	assert.Equal(t, ".: not in the index (new file, or run `seamark index`)\n\n", b.String())
+	assert.NoFileExists(t, audit)
+
+	var w strings.Builder
+	require.EqualError(t, Why(&w, st, root, "./"), `nothing in the index matches "./"`)
+	assert.NotContains(t, w.String(), "defines")
+	assert.NotContains(t, w.String(), "other-area")
+}
+
+// TestChangeSetRejectsAnEmptyPathBeforeItWrites proves that ChangeSet
+// checks every entry before it reads the store or writes. The first bad
+// entry names the error, also when a later entry is bad too.
+func TestChangeSetRejectsAnEmptyPathBeforeItWrites(t *testing.T) {
+	const prefix = "change_set needs a path in every files entry: "
+
+	st, root, audit := emptyFileStore(t)
+
+	cases := []struct {
+		files []string
+		want  string
+	}{
+		{[]string{""}, prefix + "entry 1 is empty"},
+		{[]string{"  "}, prefix + "entry 1 holds only white space"},
+		{[]string{"scripts/task.py", ""}, prefix + "entry 2 is empty"},
+		{[]string{"scripts/task.py", " ", ""}, prefix + "entry 2 holds only white space"},
+	}
+
+	for _, c := range cases {
+		var b strings.Builder
+
+		err := ChangeSet(&b, st, root, c.files)
+		require.EqualError(t, err, c.want, "%q", c.files)
+		assert.Empty(t, b.String(), "%q", c.files)
+		assert.NoFileExists(t, audit, "%q", c.files)
+	}
+
+	var b strings.Builder
+	require.NoError(t, ChangeSet(&b, st, root, []string{"scripts/task.py"}))
+	assert.Contains(t, b.String(), "scripts/task.py\n")
+}
+
 // TestReminderTextIsStable freezes the single-file reminder byte for
 // byte. The shared delivery service renders the same block for a
 // single-path event; equality against this text is its parity check.

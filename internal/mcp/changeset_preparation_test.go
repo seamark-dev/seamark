@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -120,6 +122,19 @@ func changeSetPrepFixture(t *testing.T) string {
 	return root
 }
 
+// prepIndexedText is content[0] of change_set for store.go in the
+// fixture of changeSetPrepFixture under the pinned configuration.
+const prepIndexedText = `store.go
+  usually changes with  load.go                                         3/5 commits, lift 1.7
+  defines                1 symbols
+  called from outside    save (1)
+  effects reachable      fs:write
+
+history suggests also reviewing
+  load.go                                            3 shared commits with store.go, lift 1.7
+    mostly load · last fix here: fix: State the path trust in load and save (f564665)
+`
+
 // toolParts is a tools/call result with every content part. toolText
 // requires exactly one part, and change_set has a second part. So the
 // preparation tests decode the parts themselves.
@@ -225,16 +240,7 @@ func TestChangeSetPreparationKeepsText(t *testing.T) {
 	// the file block ends with one and the lesson block starts with one.
 	// The bytes stay as they are.
 	const (
-		indexedText = `store.go
-  usually changes with  load.go                                         3/5 commits, lift 1.7
-  defines                1 symbols
-  called from outside    save (1)
-  effects reachable      fs:write
-
-history suggests also reviewing
-  load.go                                            3 shared commits with store.go, lift 1.7
-    mostly load · last fix here: fix: State the path trust in load and save (f564665)
-`
+		indexedText = prepIndexedText
 		newPathText = "docs/new.md: not in the index (new file, or run `seamark index`)\n\n"
 		pinnedText  = `internal/parse/strict.go
   defines                1 symbols
@@ -1088,5 +1094,161 @@ func TestChangeSetPreparationGuidance(t *testing.T) {
 	// clients replay it on every turn.
 	for _, name := range []string{"instructions", "onboard prompt"} {
 		assert.Contains(t, surfaces[name], "again when the file set grows", name)
+	}
+}
+
+// TestChangeSetRejectsAnEmptyBlankOrNULPath proves that change_set
+// fails a call with an entry that names no path. Before the check, the
+// text listed the package nodes and every pin for an empty entry, while
+// the preparation rejected the same entry. The first bad entry names the
+// error. A rejected call refreshes no index, runs neither part, and
+// writes no firing record. The session still answers a later valid call.
+func TestChangeSetRejectsAnEmptyBlankOrNULPath(t *testing.T) {
+	const prefix = "change_set needs a path in every files entry: "
+
+	root := changeSetPrepFixture(t)
+
+	// JSON null decodes to the empty string, so it is an empty entry.
+	nullCall := `{"jsonrpc":"2.0","id":7,"method":"tools/call",` +
+		`"params":{"name":"change_set","arguments":{"files":[null]}}}`
+
+	cases := []struct {
+		id      string
+		request string
+		want    string
+	}{
+		{"1", changeSetCall(t, 1, ""), prefix + "entry 1 is empty"},
+		{"2", changeSetCall(t, 2, "  "), prefix + "entry 1 holds only white space"},
+		{"3", changeSetCall(t, 3, "\t"), prefix + "entry 1 holds only white space"},
+		{"4", changeSetCall(t, 4, "store.go", ""), prefix + "entry 2 is empty"},
+		{"5", changeSetCall(t, 5, "internal/parse/x\x00.go"), prefix + "entry 1 holds a NUL byte"},
+		{"6", changeSetCall(t, 6, "store.go", " ", ""), prefix + "entry 2 holds only white space"},
+		{"7", nullCall, prefix + "entry 1 is empty"},
+	}
+
+	audit := filepath.Join(root, ".seamark", "lessons-audit.jsonl")
+
+	readAudit := func() []byte {
+		data, err := os.ReadFile(audit)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+
+		require.NoError(t, err)
+
+		return data
+	}
+
+	for n, branch := range prepProtocolBranches {
+		t.Run(branch.name, func(t *testing.T) {
+			// The server logs each refresh. The log is the only trace of a
+			// refresh that changes no answer, so the test reads it.
+			var (
+				mu  sync.Mutex
+				log []string
+			)
+
+			logf := func(format string, a ...any) {
+				mu.Lock()
+				defer mu.Unlock()
+
+				log = append(log, fmt.Sprintf(format, a...))
+			}
+
+			takeLog := func() string {
+				mu.Lock()
+				defer mu.Unlock()
+
+				lines := strings.Join(log, "\n")
+				log = nil
+
+				return lines
+			}
+
+			srv := New(root, filepath.Join(root, ".seamark", "index.db"), "test", logf)
+
+			if branch.initialize != "" {
+				callServer(t, srv, branch.initialize)
+			}
+
+			// A new file changes the workspace, so a refresh would rebuild
+			// the index. Each branch needs its own file, because the valid
+			// call of the branch before has indexed the earlier one.
+			fixtureWrite(t, root, fmt.Sprintf("docs/draft%d.md", n), "draft\n")
+			takeLog()
+
+			// The two parts must not run for a rejected call. A rejected
+			// call that reached them would fail here, and not later.
+			savedPrepare, savedText := prepareChangeSet, changeSetText
+
+			prepareChangeSet = func(context.Context, *store.Store, delivery.PrepareRequest) (*delivery.Preparation, error) {
+				t.Error("a rejected call runs no preparation")
+
+				return nil, errors.New("preparation ran")
+			}
+
+			changeSetText = func(io.Writer, *store.Store, string, []string, report.ChangeSetOptions) ([]model.Lesson, error) {
+				t.Error("a rejected call writes no change_set text")
+
+				return nil, errors.New("text ran")
+			}
+
+			restore := func() { prepareChangeSet, changeSetText = savedPrepare, savedText }
+			t.Cleanup(restore)
+
+			before := readAudit()
+
+			requests := make([]string, 0, len(cases))
+			for _, c := range cases {
+				requests = append(requests, c.request)
+			}
+
+			resps := callServer(t, srv, requests...)
+			require.Len(t, resps, len(cases))
+
+			for _, c := range cases {
+				res := decodeToolParts(t, resps[c.id])
+				assert.True(t, res.IsError, c.want)
+				require.Len(t, res.Content, 1, c.want)
+				assert.Equal(t, c.want, res.Content[0].Text)
+				assert.Empty(t, res.StructuredContent, c.want)
+			}
+
+			restore()
+
+			assert.NotContains(t, takeLog(), "mcp: index refresh", "a rejected call refreshes no index")
+			assert.Equal(t, before, readAudit(), "a rejected call writes no firing record")
+
+			valid := decodeToolParts(t, callServer(t, srv, changeSetCall(t, 8, "store.go"))["8"])
+			assert.False(t, valid.IsError)
+			assert.Equal(t, prepIndexedText, valid.Content[0].Text)
+			assert.Contains(t, takeLog(), "mcp: index refreshed", "the new file makes the valid call refresh")
+		})
+	}
+}
+
+// TestChangeSetPathRuleMatchesTheMalformedRule keeps the change_set
+// entry check in step with the malformed rule of the preparation. The
+// check rejects every malformed path, and it rejects nothing else but a
+// blank path.
+func TestChangeSetPathRuleMatchesTheMalformedRule(t *testing.T) {
+	root := t.TempDir()
+
+	inputs := []string{"", "\x00", "a\x00b", " ", "\t\n", "store.go", "./store.go", " store.go",
+		"../x.go", "/etc/passwd", "."}
+
+	for _, in := range inputs {
+		n := delivery.NormalizePaths(root, root, []string{in})
+		malformed := len(n.Rejected) == 1 && n.Rejected[0].Reason == delivery.RejectMalformed
+		rejected := report.CheckChangeSetFiles([]string{in}) != nil
+
+		if malformed {
+			assert.True(t, rejected, "%q is malformed, so change_set must reject it", in)
+		}
+
+		if rejected {
+			assert.True(t, malformed || strings.TrimSpace(in) == "",
+				"%q is not malformed and not blank, so change_set must accept it", in)
+		}
 	}
 }

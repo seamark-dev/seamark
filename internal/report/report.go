@@ -64,7 +64,16 @@ func Why(w io.Writer, st *store.Store, root, query string) error {
 // form is the name the index would use.
 func asIndexedFile(st *store.Store, root, query string) (string, bool) {
 	slashed := filepath.ToSlash(query)
-	candidates := []string{strings.TrimPrefix(slashed, "./")}
+	first := strings.TrimPrefix(slashed, "./")
+
+	// The cut turns "./" into the empty name. Package nodes have an empty
+	// file, so that name matches them, and lessons read it as the whole
+	// repository. So "./" keeps its clean form ".".
+	if slashed == "./" {
+		first = "."
+	}
+
+	candidates := []string{first}
 
 	if abs, err := filepath.Abs(query); err == nil {
 		if rel, err := filepath.Rel(root, abs); err == nil && !strings.HasPrefix(rel, "..") {

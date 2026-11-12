@@ -36,12 +36,49 @@ func ChangeSet(w io.Writer, st *store.Store, root string, files []string) error 
 	return err
 }
 
+// CheckChangeSetFiles rejects the first files entry that names no path:
+// an empty entry, an entry of only white space, or an entry with a NUL
+// byte. The lesson preparation rejects the empty and NUL entries as
+// malformed. This one check runs before both parts, so the text and the
+// preparation never disagree about an entry. The error names the
+// 1-based position and no input bytes, so it needs no sanitizing.
+//
+// The report package cannot import delivery, because delivery imports
+// report. A test in package mcp keeps the two rules in step.
+func CheckChangeSetFiles(files []string) error {
+	for i, f := range files {
+		var problem string
+
+		switch {
+		case f == "":
+			problem = "is empty"
+		case strings.ContainsRune(f, 0):
+			problem = "holds a NUL byte"
+		case strings.TrimSpace(f) == "":
+			problem = "holds only white space"
+		default:
+			continue
+		}
+
+		return fmt.Errorf("change_set needs a path in every files entry: entry %d %s", i+1, problem)
+	}
+
+	return nil
+}
+
 // ChangeSetWith writes the text of ChangeSet and returns the lessons of
 // its lesson block. The text does not depend on opts. MCP change_set
 // needs the lessons for the fallback record of a failed preparation.
 func ChangeSetWith(w io.Writer, st *store.Store, root string, files []string,
 	opts ChangeSetOptions,
 ) (selected []model.Lesson, err error) {
+	// The check comes before the first store read. Package nodes have an
+	// empty file, so an empty name matches them, and an empty lesson
+	// scope matches the whole repository.
+	if err := CheckChangeSetFiles(files); err != nil {
+		return nil, err
+	}
+
 	names, unindexed := ChangeSetNames(st, root, files)
 	notIndexed := make(map[string]bool, len(unindexed))
 
