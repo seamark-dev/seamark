@@ -20,9 +20,9 @@ var authorIdentityNotes = []string{
 	"Earlier deliveries stay recorded under the earlier wording and scope. Nothing is reset or moved. " +
 		"The new wording is a new delivery identity: a context that already saw the old wording can " +
 		"receive it again, also in once-per-context mode.",
-	"Proposal #4 measures its outcome by the live wording, so its Outcome reads 'untested' until the new " +
+	"Proposal p4 measures its outcome by the live wording, so its Outcome reads 'untested' until the new " +
 		"wording is delivered.",
-	"Proposal #4 keeps its recorded rule, note, and evidence. Pins shows the difference as 'edited'. " +
+	"Proposal p4 keeps its recorded rule, note, and evidence. Pins shows the difference as 'edited'. " +
 		"Trigger extraction still asks about the recorded note. Saving does not extract triggers or retarget.",
 	"The proposal ledger does not change.",
 }
@@ -98,7 +98,7 @@ func authorCaptureScenes() []phase4Scene {
 		})},
 		{name: "A2-pin-form-edit-unlinked", want: "Edit pin 5 at line 21",
 			open: phase4OnPins(plain, editNote(5, " Keep it short."))},
-		{name: "A3-pin-form-edit-linked", want: "Read-only: linked to proposal #4", open: phase4OnPins(plain,
+		{name: "A3-pin-form-edit-linked", want: "Read-only: linked to proposal p4", open: phase4OnPins(plain,
 			func(h *harness) {
 				pinsCursorTo(h, 1)
 				h.press("i")

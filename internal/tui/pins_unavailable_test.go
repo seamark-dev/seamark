@@ -769,7 +769,7 @@ func TestPinStoredRefusalKeepsTheReplaceRoute(t *testing.T) {
 
 	form := authorOf(h).form
 	require.NotNil(t, form)
-	assert.Contains(t, form.draft.scopeLock, "linked to proposal #4; "+pinTextLock+"; no retarget: ")
+	assert.Contains(t, form.draft.scopeLock, "linked to proposal p4; "+pinTextLock+"; no retarget: ")
 	assert.Contains(t, form.draft.scopeLock, pinRouteReplace)
 	assert.False(t, pinStoredLock(form.draft.scopeLock), "a reload must keep this lock")
 
@@ -944,13 +944,13 @@ func TestPinRuleLockFollowsTheReplaceGate(t *testing.T) {
 			require.NotNil(t, form)
 
 			d := form.draft
-			assert.Equal(t, "linked to proposal #4; "+c.want, d.ruleLock)
+			assert.Equal(t, "linked to proposal p4; "+c.want, d.ruleLock)
 			assert.NotContains(t, d.ruleLock, "Prune")
 			assert.NotContains(t, d.scopeLock, "Prune")
 			assert.False(t, pinStoredLock(d.ruleLock), "a reload must keep this lock")
 
 			authorReload(h, f, f.pins)
-			assert.Equal(t, "linked to proposal #4; "+c.want, d.ruleLock, "a reload keeps the words")
+			assert.Equal(t, "linked to proposal p4; "+c.want, d.ruleLock, "a reload keeps the words")
 		})
 	}
 }

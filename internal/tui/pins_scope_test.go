@@ -835,7 +835,7 @@ func TestPinDraftReloadThatLocksTheRegionsReportsTheTypedText(t *testing.T) {
 	authorReload(h, f, locked)
 
 	assert.Contains(t, h.m.toast.text, `The scope edit of "wrap-sql-errors" went away`)
-	assert.Contains(t, form.draft.scopeLock, "linked to proposal #4")
+	assert.Contains(t, form.draft.scopeLock, "linked to proposal p4")
 	assert.Equal(t, pinFieldNone, form.field, "a read-only row takes no typing")
 }
 

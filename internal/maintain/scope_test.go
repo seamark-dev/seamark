@@ -593,7 +593,7 @@ func TestPlanAuthorStillRefusesARegionChange(t *testing.T) {
 	p := f.authorPlan(f.deps(), f.linkedDraft("web"))
 
 	assert.False(t, p.Confirmable)
-	assert.Equal(t, []string{"linked to proposal #1; a change of its regions needs the scope preview"}, blockerLines(p))
+	assert.Equal(t, []string{"linked to proposal p1; a change of its regions needs the scope preview"}, blockerLines(p))
 
 	p = f.authorPlan(f.deps(), f.linkedDraft("api", "docs"))
 	assert.False(t, p.Confirmable)
@@ -613,7 +613,7 @@ func TestScopeEditKeepsTheRuleOfTheProposal(t *testing.T) {
 	p := f.scopePlan(f.deps(), edit)
 
 	assert.Equal(t, []string{
-		"linked to proposal #1; only its note, mode, check, and regions can change here; " + routeLinkedPin,
+		"linked to proposal p1; only its note, mode, check, and regions can change here; " + routeLinkedPin,
 	}, p.Blocked)
 	assert.False(t, p.Confirmable)
 }

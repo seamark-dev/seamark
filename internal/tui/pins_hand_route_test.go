@@ -145,7 +145,7 @@ func TestPinStoredLockHoldsInEveryState(t *testing.T) {
 		assert.True(t, pinStoredLock(pinWithHand(pinTextLock, hand)))
 		assert.True(t, pinStoredLock(pinWithHand(pinLengthLock(4), hand)))
 
-		link := "linked to proposal #4; the pin file cannot be edited (x); " + pinRouteByHand(st)
+		link := "linked to proposal p4; the pin file cannot be edited (x); " + pinRouteByHand(st)
 		assert.False(t, pinStoredLock(link))
 		assert.False(t, strings.HasSuffix(link, " by hand"), "a link lock never ends in the stored-text words")
 		assert.False(t, pinStoredLock(pinRouteRetarget))

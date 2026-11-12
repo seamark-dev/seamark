@@ -301,7 +301,7 @@ func (d *pinDraft) load(pin *maintain.Pin, known bool, routes pinLockRoutes) {
 	if pinRuleLocked(pin, known) {
 		// The rule is the recorded rule of the proposal, so a new rule
 		// is a new pin.
-		linked := "linked to proposal #" + strconv.FormatInt(pin.Link.Applied[0].ID, 10)
+		linked := "linked to proposal " + propID(pin.Link.Applied[0].ID)
 		d.ruleLock = linked + "; " + routes.rule
 
 		// Stored regions that the form cannot hold keep a link lock,

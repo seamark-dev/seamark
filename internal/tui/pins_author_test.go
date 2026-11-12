@@ -284,13 +284,13 @@ func TestPinEditLinkedLocksTheRuleAndOpensTheScope(t *testing.T) {
 	frame := lesBoxFlat(h.view())
 	assert.Contains(t, frame, "Edit pin 1 at line 3")
 	assert.Empty(t, form.draft.scopeLock, "the link locks the rule only")
-	assert.Contains(t, frame, "Read-only: linked to proposal #4; to change the rule, use - Prune and add a new pin with n.",
+	assert.Contains(t, frame, "Read-only: linked to proposal p4; to change the rule, use - Prune and add a new pin with n.",
 		"the rule row names the route of a rule, not the retarget")
 
 	// enter on the rule is refused; the note edits.
 	h.press("enter")
 	assert.Equal(t, pinFieldNone, form.field)
-	assert.Equal(t, "Read-only: linked to proposal #4; to change the rule, use - Prune and add a new pin with n.",
+	assert.Equal(t, "Read-only: linked to proposal p4; to change the rule, use - Prune and add a new pin with n.",
 		h.m.toast.text)
 
 	h.press("down", "enter", "end")
@@ -626,7 +626,7 @@ type authorResultCase struct {
 }
 
 func TestPinResultRowsNeverRetry(t *testing.T) {
-	stale := &maintain.StaleError{Differences: []string{"file bytes", "new owner: pending #9"}}
+	stale := &maintain.StaleError{Differences: []string{"file bytes", "new owner: pending p9"}}
 
 	cases := []authorResultCase{
 		{"written", maintain.AuthorResult{Outcome: maintain.Written}, nil, []string{
@@ -647,7 +647,7 @@ func TestPinResultRowsNeverRetry(t *testing.T) {
 		}, true, true, 1},
 		{"stale", maintain.AuthorResult{Outcome: maintain.NotWritten, Err: stale}, stale, []string{
 			"Not written", "Something changed since the review — review again. Nothing was written.", "WHAT CHANGED",
-			"· file bytes", "· new owner: pending #9", "Nothing was written · enter reviews again",
+			"· file bytes", "· new owner: pending p9", "Nothing was written · enter reviews again",
 		}, true, true, 0},
 		{"busy", maintain.AuthorResult{Outcome: maintain.NotWritten, Err: services.ErrBusy}, services.ErrBusy,
 			[]string{"Another operation is running, so this one did not start."}, true, true, 0},
@@ -851,7 +851,7 @@ func authorEditPin1Note(p *maintain.AuthorPlan) {
 }
 
 // authorEditLinkedPin1Note is authorEditPin1Note with the link of pin 1
-// to proposal #4, as in pinsInspection.
+// to proposal p4, as in pinsInspection.
 func authorEditLinkedPin1Note(p *maintain.AuthorPlan) {
 	authorEditPin1Note(p)
 
@@ -864,7 +864,7 @@ func TestPinLinkedNoteSaveCallsNoMaintenanceOrExtraction(t *testing.T) {
 		authorEditLinkedPin1Note(p)
 		p.Notes = []string{
 			"Earlier deliveries stay recorded under the earlier wording and scope.",
-			"Proposal #4 keeps its recorded rule, note, and evidence.",
+			"Proposal p4 keeps its recorded rule, note, and evidence.",
 			"The proposal ledger does not change.",
 		}
 	})
@@ -885,7 +885,7 @@ func TestPinLinkedNoteSaveCallsNoMaintenanceOrExtraction(t *testing.T) {
 	assert.Contains(t, review, del+" pin · internal/store · wrap-sql-errors — Wrap SQL errors with the query name.")
 	assert.Contains(t, review, "+ pin · internal/store · wrap-sql-errors — Wrap SQL errors with the query name. "+
 		"Name the query.")
-	assert.Contains(t, review, "Proposal #4 keeps its recorded rule, note, and evidence.")
+	assert.Contains(t, review, "Proposal p4 keeps its recorded rule, note, and evidence.")
 
 	h.press("y")
 	assert.Equal(t, []string{"PlanAuthor:edit", "CommitAuthor:edit"}, f.called(),
@@ -1277,7 +1277,7 @@ func TestPinEditRegionLockNamesCharactersBeforeLength(t *testing.T) {
 		{"control before long", 4, []string{"docs\u0085", long}, pinTextLock},
 		{"long before plain", 4, []string{long, "docs"}, length},
 		{"plain before long", 4, []string{"docs", long}, length},
-		{"linked", 0, []string{long, "docs\u0085"}, "linked to proposal #4; " + pinTextLock +
+		{"linked", 0, []string{long, "docs\u0085"}, "linked to proposal p4; " + pinTextLock +
 			"; change the scope with w Retarget"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1537,7 +1537,7 @@ func TestPinDraftDropsTheRuleEditWhenTheLinkAppears(t *testing.T) {
 	// No row takes the typing now.
 	h.typeText("-more")
 	assert.Equal(t, "wrap-sql-errors", d.ruleValue())
-	assert.Contains(t, lesBoxFlat(h.view()), "Read-only: linked to proposal #4; "+pinRouteRule+".")
+	assert.Contains(t, lesBoxFlat(h.view()), "Read-only: linked to proposal p4; "+pinRouteRule+".")
 }
 
 // A reload can show a linked pin whose stored regions the form cannot
