@@ -575,6 +575,38 @@ func TestClaudeReadsTheLocalFileForEveryLessonCheckMode(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, reads, slices.Contains(readPaths(plan.Reads), claudeLocalSettings), "mode %q", mode)
+
+		// A read for the lesson rule checks no gate hook. So the plan names
+		// the file in every mode, also when that read fails.
+		assert.Equal(t, []string{claudeLocalSettings}, plan.UncheckedGateSources, "mode %q", mode)
+	}
+}
+
+func TestClaudePlanNamesTheLocalFileItDoesNotCheckForGateHooks(t *testing.T) {
+	// The form without --client never checks the personal file for gate
+	// hooks. The plan names that file, so the gate line can say so. It
+	// names the file without a read, and an explicit run names nothing.
+	root := t.TempDir()
+	writeRel(t, root, claudeLocalSettings, "{ broken")
+
+	legacy, err := LegacySetups(root, "", false, "")
+	require.NoError(t, err)
+
+	plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: legacy})
+	assert.Equal(t, []string{claudeLocalSettings}, plan.UncheckedGateSources)
+	assert.NotContains(t, readPaths(plan.Reads), claudeLocalSettings, "the run does not read the file")
+
+	explicit, err := ExplicitSetups(Builtin(), []string{ClaudeID}, false, false, "")
+	require.NoError(t, err)
+
+	writeRel(t, root, claudeLocalSettings, "{}")
+
+	for name, clients := range map[string][]ClientSetup{
+		"init --client":    explicit,
+		"CheckHookSources": {{ClientID: ClaudeID, Hooks: true, CheckHookSources: true}},
+	} {
+		plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: clients})
+		assert.Empty(t, plan.UncheckedGateSources, name)
 	}
 }
 

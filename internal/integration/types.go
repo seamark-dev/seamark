@@ -1042,7 +1042,10 @@ type ClientPlan struct {
 	Writes    []FileWrite
 	Kept      []FileKeep
 	GateHooks []GateHook
-	Findings  []Finding
+	// UncheckedGateSources lists the hook documents that the client runs
+	// and that the plan did not check for gate hooks.
+	UncheckedGateSources []string
+	Findings             []Finding
 }
 
 // SkillDestination is one skill directory and every selected client
@@ -1078,5 +1081,9 @@ type SetupPlan struct {
 	Destinations []SkillDestination
 	// GateHooks lists the gate hooks the selected clients run after apply.
 	GateHooks []GateHook
-	Findings  []Finding
+	// UncheckedGateSources lists the hook documents that a selected client
+	// runs and that the plan did not check for gate hooks. GateHooks can
+	// then miss a hook, so a gate summary must name these documents.
+	UncheckedGateSources []string
+	Findings             []Finding
 }

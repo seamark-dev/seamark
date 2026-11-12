@@ -573,17 +573,141 @@ func TestInitWithoutClientIgnoresThePersonalSettingsFile(t *testing.T) {
 	// .claude/settings.local.json is personal and usually not committed.
 	// The shared settings that the team commits must hold every hook,
 	// whoever ran init.
+	// The gate line then cannot state the effect of a local gate hook, so
+	// it says that the run did not check that file.
 	root := t.TempDir()
+	local := `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/opt/bin/seamark gate --enforce --hook"}]}]}}`
 	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"), []byte(
-		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/opt/bin/seamark gate --enforce --hook"}]}]}}`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"), []byte(local), 0o644))
 
 	var b testWriter
 	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
 
 	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)), "the gate hook is in the shared file")
 	assert.Len(t, commands(t, readSettings(t, root)), 2)
-	assert.NotContains(t, b.String(), "settings.local.json")
+	assert.Equal(t, local, string(mustRead(t, root, ".claude/settings.local.json")), "the personal file is preserved")
+	assert.Contains(t, b.String(), "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n"+
+		uncheckedLocalNote)
+}
+
+func TestInitWithoutClientNamesTheUncheckedFileWithoutReadingIt(t *testing.T) {
+	// The note comes from the plan, not from a read: a broken or an
+	// unreadable personal file gives the same note and no warning.
+	cases := map[string]os.FileMode{"broken": 0o644}
+	if os.Geteuid() != 0 {
+		cases["unreadable"] = 0o000
+	}
+
+	for name, mode := range cases {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, ".claude", "settings.local.json")
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte("{bad"), mode))
+
+			t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+
+			var b testWriter
+			require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
+
+			assert.Contains(t, b.String(), uncheckedLocalNote)
+			assert.NotContains(t, b.String(), "not checked for duplicate seamark hooks")
+		})
+	}
+}
+
+func TestPrintGateLineNamesTheUncheckedFileUnderEveryGateLine(t *testing.T) {
+	// A local hook can change what any gate line claims, also a blocking
+	// one. So every gate line gets the note. The note comes after the line
+	// and its own notes, and before the notes on other definitions. A run
+	// that checks every file prints the same lines without the note.
+	const (
+		shared = ".claude/settings.json"
+		local  = ".claude/settings.local.json"
+		broken = "mode: [broken\n"
+	)
+
+	managedWarn := integration.GateHook{Path: shared, Mode: gateModeWarn, Managed: true}
+	managedEnforce := integration.GateHook{Path: shared, Mode: gateModeEnforce, Managed: true}
+	localEnforce := integration.GateHook{Path: local, Mode: gateModeEnforce}
+	possible := integration.GateHook{Path: shared, Mode: gateModeEnforce, Uncertain: true}
+	reportOnly := integration.GateHook{Path: shared, Mode: integration.GateModeReportOnly}
+
+	for name, tc := range map[string]struct {
+		gateMode string
+		hooks    []integration.GateHook
+		policy   string // the body of .seamark/policy.yaml; empty means no file
+		last     string // a part of the line just before the note
+		next     string // the start of the line just after the note; empty means no line
+	}{
+		"no gate hook": {gateModeWarn, nil, "", "plain `seamark gate` and `seamark check` runs", ""},
+		"no gate hook and a broken policy": {
+			gateModeWarn, nil, broken, "no gate hook runs for shell commands; .seamark/policy.yaml failed to load (", "",
+		},
+		"unknown and a broken policy": {
+			gateModeWarn, []integration.GateHook{possible}, broken, "note: .seamark/policy.yaml also failed to load (", "",
+		},
+		"a local enforcing hook": {
+			gateModeWarn, []integration.GateHook{managedWarn, localEnforce}, "",
+			"edits a gate hook it does not manage; remove that hook to stop blocking", "",
+		},
+		"a local enforcing hook and a broken policy": {
+			gateModeWarn, []integration.GateHook{managedWarn, localEnforce}, broken,
+			"policy is fixed. The hook setup manages is in warn mode", "",
+		},
+		"report-only": {
+			gateModeWarn, []integration.GateHook{reportOnly}, "", "run the gate last in that hook, or remove it and re-run", "",
+		},
+		"enforce and a broken policy": {
+			gateModeEnforce, []integration.GateHook{managedEnforce}, broken,
+			"the hook fails closed: EVERY hooked command blocks until the policy is fixed", "",
+		},
+		"warn and a broken policy": {
+			gateModeWarn, []integration.GateHook{managedWarn}, broken, "the hook reports the error and fails open", "",
+		},
+		"enforce and a kept warn policy": {
+			gateModeEnforce, []integration.GateHook{managedEnforce}, "mode: warn\n",
+			"`seamark gate` and `seamark check` runs; only a gate hook with --enforce blocks", "",
+		},
+		"warn and a kept enforcing policy": {
+			gateModeWarn, []integration.GateHook{managedWarn}, "mode: enforce\n", "          to stop blocking", "",
+		},
+		"enforce that reaches no gate hook": {
+			gateModeEnforce, []integration.GateHook{managedWarn}, "mode: warn\n",
+			"--gate-mode enforce reached no gate hook of this run", "  note    .claude/settings.json runs its gate hook without --enforce",
+		},
+		"warn beside a possible definition": {
+			gateModeWarn, []integration.GateHook{managedWarn, possible}, "", "(opt in: --gate-mode enforce)",
+			"  note    .claude/settings.json holds a definition that may also run a gate hook",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if tc.policy != "" {
+				require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", tc.policy))
+			}
+
+			var plain, explicit testWriter
+			printGateLine(&plain, root, tc.gateMode, tc.hooks, []string{local})
+			printGateLine(&explicit, root, tc.gateMode, tc.hooks, nil)
+
+			out := plain.String()
+			at := strings.Index(out, uncheckedLocalNote)
+			require.GreaterOrEqual(t, at, 0, "the gate line has the note:\n%s", out)
+
+			head := strings.TrimSuffix(out[:at], "\n")
+			assert.Contains(t, head[strings.LastIndex(head, "\n")+1:], tc.last, "the line before the note:\n%s", out)
+
+			if after := out[at+len(uncheckedLocalNote):]; tc.next == "" {
+				assert.Empty(t, after, "the note ends the gate line")
+			} else {
+				assert.True(t, strings.HasPrefix(after, tc.next), "the line after the note:\n%s", out)
+			}
+
+			assert.Equal(t, strings.Replace(out, uncheckedLocalNote, "", 1), explicit.String(),
+				"a run that checks every file prints the same lines without the note")
+		})
+	}
 }
 
 func TestInitKeepsAScaffoldItCannotRead(t *testing.T) {
@@ -646,6 +770,7 @@ func TestInitClientGateSummaryIncludesALocalEnforcingHook(t *testing.T) {
 	assert.Contains(t, out, "gate    enforce — .claude/settings.local.json runs its own gate hook with --enforce")
 	assert.Contains(t, out, "although the hook setup manages is in warn mode")
 	assert.NotContains(t, out, "nothing blocks")
+	assert.NotContains(t, out, "this run does not check", "an explicit run checks the personal file")
 	assert.Equal(t, local, string(mustRead(t, root, ".claude/settings.local.json")), "the personal file is preserved")
 
 	// A kept enforcing policy is named too, because both then block.

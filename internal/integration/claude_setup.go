@@ -274,6 +274,14 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 
 	localState := claudeLocalStateOf(readsLocal, localErr)
 
+	// Without CheckHookSources the run leaves the local gate hooks out,
+	// also when it reads the file for the lesson rule. The plan names the
+	// file without a read, so the gate line does not claim more than the
+	// run checked.
+	if !req.CheckHookSources {
+		plan.UncheckedGateSources = append(plan.UncheckedGateSources, claudeLocalSettings)
+	}
+
 	rules := claudeHookRules.withSelf(narration.binary)
 
 	for i, spec := range specs {

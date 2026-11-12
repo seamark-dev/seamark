@@ -91,6 +91,7 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 		"pre-write MultiEdit active-unverified; post-edit Edit active-unverified; post-edit Write active-unverified; "+
 		"post-edit MultiEdit active-unverified\n")
 	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks")
+	assert.Contains(t, out, uncheckedLocalNote, "the lesson rule reads the personal file, the gate line still leaves it out")
 	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)), "a lesson-check flag never changes the gate")
 
 	// An omitted flag keeps the installed choice and prints no line.

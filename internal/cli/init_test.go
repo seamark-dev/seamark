@@ -355,11 +355,20 @@ func TestRunInitStatesGateMode(t *testing.T) {
 	require.NoError(t, runInit(&warn, root, "/bin/seamark", gateModeWarn, false, "", false))
 	assert.Contains(t, warn.String(), "gate    warn")
 	assert.Contains(t, warn.String(), "nothing blocks")
+	assert.Contains(t, warn.String(), uncheckedLocalNote, "a run without --client names the file it did not check")
 
+	// A blocking line gets the note too: a local hook can still change
+	// what blocks.
 	var enforce testWriter
 	require.NoError(t, runInit(&enforce, t.TempDir(), "/bin/seamark", gateModeEnforce, false, "", false))
 	assert.Contains(t, enforce.String(), "gate    enforce")
+	assert.Contains(t, enforce.String(), "or cannot start the seamark binary\n"+uncheckedLocalNote)
 }
+
+// uncheckedLocalNote is the note under the gate line of an init run
+// without --client, which does not check the personal settings file.
+const uncheckedLocalNote = "          this run does not check .claude/settings.local.json for gate hooks, so this line leaves\n" +
+	"          them out; `seamark doctor` checks that file\n"
 
 func TestRunInitReportsKeptEnforcePolicy(t *testing.T) {
 	// `init --gate-mode enforce` then `init --gate-mode warn`: the policy

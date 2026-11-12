@@ -398,7 +398,7 @@ func applyInit(run initRun, reg *integration.Registry, setups []integration.Clie
 
 		printNoGateHook(w, run.root, gateMode)
 	} else {
-		printGateLine(w, run.root, gateMode, plan.GateHooks)
+		printGateLine(w, run.root, gateMode, plan.GateHooks, plan.UncheckedGateSources)
 
 		// The gate line describes the clients with a gate hook. A selected
 		// client without one must not look covered by it.
@@ -527,7 +527,12 @@ func printFindings(w io.Writer, findings []integration.Finding, showInfo bool) {
 // command in the shared file. Setup leaves that hook as it is, so it
 // still runs: when it enforces, the run blocks whatever the mode of the
 // hook setup manages.
-func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook) {
+//
+// A run can also leave a source unchecked: init without --client never
+// reads the user's local settings file for gate hooks. The line then
+// names that file and the command that checks it, because a hook there
+// can block or stop blocking without this run knowing.
+func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook, unchecked []string) {
 	policyMode, policyErr := policyFileMode(root, gateMode)
 
 	// The summary comes from the hooks the run leaves, never from the
@@ -647,6 +652,14 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook of this run\n")
 	default:
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n")
+	}
+
+	// The note follows every gate line, also a blocking one: a local copy
+	// of the managed handler in the background makes the managed gate
+	// report-only. The path is an adapter constant, so it needs no scrub.
+	if len(unchecked) > 0 {
+		fmt.Fprintf(w, "          this run does not check %s for gate hooks, so this line leaves\n"+
+			"          them out; `seamark doctor` checks that file\n", strings.Join(unchecked, ", "))
 	}
 
 	// The unknown line above already names the possible definitions.

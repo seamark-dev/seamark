@@ -114,6 +114,10 @@ model-boundary delivery.
   cannot be read no longer makes doctor and status warn that installed
   seamark hooks never run under `disableAllHooks: true` when no seamark
   hook is installed. The unread-file warning stays.
+- **Plain init and the local settings file.** A `seamark init` without
+  `--client` does not check `.claude/settings.local.json` for gate hooks.
+  Its gate line now says so and names `seamark doctor`, which checks that
+  file.
 - **Multi-line pin notes.** A line break inside a pin note reads as a
   space on one-line surfaces, for example the edit hook and
   `lessons --prepare`, so two lines no longer run together.
