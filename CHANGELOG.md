@@ -218,6 +218,12 @@ model-boundary delivery.
   co-change pair, or hides an edit from the next index run. Fix findings
   store a non-ASCII path raw, as history does, and list a renamed file
   under its old and its new path, not as `old => new`.
+- **Git reads no longer rewrite `.git/index`.** `index`, `check`, `why`,
+  `status`, `report`, the MCP server, and the LSP server run `git status`
+  and `git diff HEAD` with optional locks off and
+  `diff.autoRefreshIndex=false`, as the console already did. After a
+  `touch`, seamark leaves `.git/index` as it was, so a concurrent `git
+  add` no longer fails on `.git/index.lock`.
 - **MCP server after an upgrade.** A running MCP server keeps the
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the

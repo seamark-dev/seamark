@@ -116,34 +116,20 @@ func TestTUIDevNullIsNotInteractive(t *testing.T) {
 	require.ErrorIs(t, cmd.Execute(), errNotInteractive)
 }
 
-// TestTUIReadOnlyGitEnv proves the environment changes that keep git
-// from writing .git/index, including the append to existing entries.
-func TestTUIReadOnlyGitEnv(t *testing.T) {
-	lookup := func(env map[string]string) func(string) (string, bool) {
-		return func(k string) (string, bool) {
-			v, ok := env[k]
-
-			return v, ok
-		}
+// TestUseReadOnlyGitSetsBothParts proves that the console sets both
+// parts of the read-only git setting for its process.
+func TestUseReadOnlyGitSetsBothParts(t *testing.T) {
+	for _, k := range tuiGitEnvKeys {
+		t.Setenv(k, "")
+		require.NoError(t, os.Unsetenv(k))
 	}
 
-	assert.Equal(t, [][2]string{
-		{"GIT_OPTIONAL_LOCKS", "0"},
-		{"GIT_CONFIG_KEY_0", "diff.autoRefreshIndex"},
-		{"GIT_CONFIG_VALUE_0", "false"},
-		{"GIT_CONFIG_COUNT", "1"},
-	}, readOnlyGitEnv(lookup(nil)))
+	require.NoError(t, useReadOnlyGit())
 
-	assert.Equal(t, [][2]string{
-		{"GIT_OPTIONAL_LOCKS", "0"},
-		{"GIT_CONFIG_KEY_2", "diff.autoRefreshIndex"},
-		{"GIT_CONFIG_VALUE_2", "false"},
-		{"GIT_CONFIG_COUNT", "3"},
-	}, readOnlyGitEnv(lookup(map[string]string{"GIT_CONFIG_COUNT": "2"})), "existing entries stay")
-
-	assert.Equal(t, [][2]string{{"GIT_OPTIONAL_LOCKS", "0"}},
-		readOnlyGitEnv(lookup(map[string]string{"GIT_CONFIG_COUNT": "many"})),
-		"a broken count gets no new entry")
+	assert.Equal(t, "0", os.Getenv("GIT_OPTIONAL_LOCKS"))
+	assert.Equal(t, "1", os.Getenv("GIT_CONFIG_COUNT"))
+	assert.Equal(t, "diff.autoRefreshIndex", os.Getenv("GIT_CONFIG_KEY_0"))
+	assert.Equal(t, "false", os.Getenv("GIT_CONFIG_VALUE_0"))
 }
 
 // TestTUIReadOnlyGitKeepsTheGitIndex proves finding 26: with the console

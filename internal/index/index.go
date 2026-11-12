@@ -1190,10 +1190,15 @@ func sameSpelling(recorded, root string) bool {
 // status line never changes either). Two equal fingerprints mean the
 // index is current. "" when git is unavailable — there is no cheap
 // fingerprint without it.
+//
+// Each git call runs with history.ReadOnlyGitEnviron. Without it, git
+// status and git diff rewrite .git/index after a touch, and a concurrent
+// git command of the user can then fail on .git/index.lock.
 func WorkspaceState(root string) string {
 	gitOut := func(args ...string) ([]byte, bool) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
+		cmd.Env = history.ReadOnlyGitEnviron()
 
 		out, err := cmd.Output()
 

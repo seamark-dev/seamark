@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/scaffold"
 	"github.com/seamark-dev/seamark/internal/tui"
 	"github.com/seamark-dev/seamark/internal/tui/services"
@@ -141,58 +141,13 @@ func terminalStream(s any) bool {
 	return ok && term.IsTerminal(f.Fd())
 }
 
-// gitConfigKey is the git setting that stops `git diff` from refreshing
-// the stat cache in .git/index. GIT_OPTIONAL_LOCKS does not stop that
-// refresh, because git diff writes the index without the optional-lock
-// check.
-const gitConfigKey = "diff.autoRefreshIndex"
-
-// readOnlyGitEnv returns the environment changes that keep git from
-// rewriting .git/index while the console inspects the workspace.
-//
-// The index freshness check runs `git status` and `git diff HEAD` on
-// open, on each refresh, and after each mutation. Both commands refresh
-// the stat cache of .git/index and take .git/index.lock. docs/tui.md
-// says that opening and refreshing the console never write. Also, the
-// lock can make a concurrent git command of the user fail.
-// GIT_OPTIONAL_LOCKS=0 stops the write of `git status`. The
-// diff.autoRefreshIndex=false setting stops the write of `git diff`.
-// Neither setting changes the command output, so the freshness
-// fingerprint stays the same. Both affect only the optional stat-cache
-// write, so the git commands of an index build work as before.
-//
-// The setting goes in through GIT_CONFIG_COUNT, the git mechanism for
-// configuration from the environment. The helper appends to entries that
-// already exist. It adds nothing when the count is not a number, because
-// git then refuses every command and a new entry cannot help.
-func readOnlyGitEnv(lookup func(string) (string, bool)) [][2]string {
-	env := [][2]string{{"GIT_OPTIONAL_LOCKS", "0"}}
-
-	n := 0
-
-	if v, ok := lookup("GIT_CONFIG_COUNT"); ok && v != "" {
-		parsed, err := strconv.Atoi(v)
-		if err != nil || parsed < 0 {
-			return env
-		}
-
-		n = parsed
-	}
-
-	i := strconv.Itoa(n)
-
-	return append(env,
-		[2]string{"GIT_CONFIG_KEY_" + i, gitConfigKey},
-		[2]string{"GIT_CONFIG_VALUE_" + i, "false"},
-		[2]string{"GIT_CONFIG_COUNT", strconv.Itoa(n + 1)})
-}
-
-// useReadOnlyGit sets readOnlyGitEnv for this process. The console runs
-// git through child processes, and they inherit the environment. The
-// change lasts only for this process, so the user's shell keeps its
-// settings.
+// useReadOnlyGit sets history.ReadOnlyGitEnv for this process. The
+// console runs git through child processes, and they inherit the
+// environment. docs/tui.md says that opening and refreshing the console
+// never write. The change lasts only for this process, so the user's
+// shell keeps its settings.
 func useReadOnlyGit() error {
-	for _, kv := range readOnlyGitEnv(os.LookupEnv) {
+	for _, kv := range history.ReadOnlyGitEnv(os.LookupEnv) {
 		if err := os.Setenv(kv[0], kv[1]); err != nil {
 			return fmt.Errorf("set %s: %w", kv[0], err)
 		}

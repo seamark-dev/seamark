@@ -2524,3 +2524,166 @@ func TestIndexSeesSecondEditUnderExternalDiff(t *testing.T) {
 	assert.Equal(t, "Epsilon", mustFind(t, st, "Epsilon").Name)
 	assert.NoFileExists(t, marker, "no external program runs")
 }
+
+// gitIndexState is what a write to .git/index changes: the file identity,
+// which a rename over the file replaces, the mtime, and the bytes.
+type gitIndexState struct {
+	info  os.FileInfo
+	bytes []byte
+}
+
+// readGitIndex reads the gitIndexState of the repository at root.
+func readGitIndex(t *testing.T, root string) gitIndexState {
+	t.Helper()
+
+	p := filepath.Join(root, ".git", "index")
+
+	info, err := os.Stat(p)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+
+	return gitIndexState{info: info, bytes: data}
+}
+
+// assertGitIndexKept fails when .git/index differs from before, or when
+// a git process left .git/index.lock behind.
+func assertGitIndexKept(t *testing.T, root string, before gitIndexState, msg string) {
+	t.Helper()
+
+	after := readGitIndex(t, root)
+
+	assert.True(t, os.SameFile(before.info, after.info), "%s: .git/index has a new inode", msg)
+	assert.Equal(t, before.info.ModTime(), after.info.ModTime(), "%s: .git/index has a new mtime", msg)
+	assert.Equal(t, before.bytes, after.bytes, "%s: .git/index has new bytes", msg)
+	assert.NoFileExists(t, filepath.Join(root, ".git", "index.lock"), msg)
+}
+
+// touchOlder gives the file at p an older mtime and keeps its content. A
+// time in the past differs from the stat cache in .git/index, so the
+// test needs no sleep to make git see a touch.
+func touchOlder(t *testing.T, p string, age time.Duration) {
+	t.Helper()
+
+	at := time.Now().Add(-age)
+	require.NoError(t, os.Chtimes(p, at, at))
+}
+
+// clearGitIndexEnv removes the inherited variables that already stop git
+// from writing .git/index, so a plain git command can show the write.
+// t.Setenv restores them after the test.
+func clearGitIndexEnv(t *testing.T) {
+	t.Helper()
+
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "GIT_OPTIONAL_LOCKS" || strings.HasPrefix(k, "GIT_CONFIG_") {
+			t.Setenv(k, "")
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+}
+
+// gitIndexRepo builds a committed repository with a real change in
+// main.go. A plain git status then settles the stat cache, so a later
+// write comes only from a new touch.
+func gitIndexRepo(t *testing.T) string {
+	t.Helper()
+
+	clearGitIndexEnv(t)
+
+	root := t.TempDir()
+	writeFixture(t, root)
+	configGit(t, root, "init", "-q", "-b", "main")
+	configGit(t, root, "add", "-A")
+	configGit(t, root, "commit", "-q", "-m", "initial")
+
+	main := filepath.Join(root, "main.go")
+	require.NoError(t, os.WriteFile(main, []byte("package main\n\nfunc main() {}\n"), 0o644))
+	touchOlder(t, main, 3*time.Hour)
+	configGit(t, root, "status", "--porcelain")
+
+	return root
+}
+
+func TestWorkspaceStateKeepsGitIndex(t *testing.T) {
+	// A touch changes no content. The freshness check must read the
+	// workspace without a rewrite of .git/index, because the rewrite takes
+	// .git/index.lock and a concurrent git command of the user then fails.
+	root := gitIndexRepo(t)
+	touched := filepath.Join(root, "internal", "util", "util.go")
+
+	fingerprint := WorkspaceState(root)
+	require.NotEmpty(t, fingerprint)
+
+	touchOlder(t, touched, 2*time.Hour)
+
+	before := readGitIndex(t, root)
+
+	assert.Equal(t, fingerprint, WorkspaceState(root), "a touch changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root), "a second call changes the fingerprint")
+	assertGitIndexKept(t, root, before, "WorkspaceState")
+
+	// A plain git status refreshes the stat cache. The fingerprint stays,
+	// because only the output of git goes into it.
+	configGit(t, root, "status", "--porcelain")
+	assert.Equal(t, fingerprint, WorkspaceState(root), "a refreshed stat cache changes the fingerprint")
+
+	// Controls: each plain command writes the index after a new touch, so
+	// the fixture can show the write that WorkspaceState avoids.
+	touchOlder(t, touched, 4*time.Hour)
+
+	before = readGitIndex(t, root)
+
+	configGit(t, root, "status", "--porcelain")
+	require.NotEqual(t, before.bytes, readGitIndex(t, root).bytes, "a plain git status must write the index")
+
+	touchOlder(t, touched, 5*time.Hour)
+
+	before = readGitIndex(t, root)
+
+	t.Setenv("GIT_OPTIONAL_LOCKS", "0")
+	configGit(t, root, "status", "--porcelain")
+	assertGitIndexKept(t, root, before, "git status with GIT_OPTIONAL_LOCKS=0")
+	configGit(t, root, "diff", "HEAD")
+	require.NotEqual(t, before.bytes, readGitIndex(t, root).bytes,
+		"git diff HEAD must write the index although GIT_OPTIONAL_LOCKS=0")
+}
+
+func TestIndexRunKeepsGitIndex(t *testing.T) {
+	// index.Run reaches WorkspaceState on its fast path and on a build.
+	// Neither path may rewrite .git/index after a touch.
+	t.Run("fast path", func(t *testing.T) {
+		root := gitIndexRepo(t)
+
+		first, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		require.False(t, first.Skipped)
+
+		touchOlder(t, filepath.Join(root, "internal", "util", "util.go"), 2*time.Hour)
+
+		before := readGitIndex(t, root)
+
+		second, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		assert.True(t, second.Skipped, "a touch must keep the fast path")
+		assertGitIndexKept(t, root, before, "the fast path")
+	})
+
+	t.Run("build", func(t *testing.T) {
+		root := gitIndexRepo(t)
+
+		touchOlder(t, filepath.Join(root, "internal", "util", "util.go"), 2*time.Hour)
+
+		before := readGitIndex(t, root)
+
+		sum, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		assert.False(t, sum.Skipped)
+		assertGitIndexKept(t, root, before, "the build")
+	})
+}

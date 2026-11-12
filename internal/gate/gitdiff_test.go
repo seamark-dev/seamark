@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -212,4 +213,65 @@ func TestGitDiffHeadIgnoresRenameConfig(t *testing.T) {
 			assert.Equal(t, want, got)
 		})
 	}
+}
+
+// clearGitIndexEnv removes the inherited variables that already stop git
+// from writing .git/index, so a plain git command can show the write.
+// t.Setenv restores them after the test.
+func clearGitIndexEnv(t *testing.T) {
+	t.Helper()
+
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "GIT_OPTIONAL_LOCKS" || strings.HasPrefix(k, "GIT_CONFIG_") {
+			t.Setenv(k, "")
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+}
+
+func TestGitDiffHeadKeepsGitIndex(t *testing.T) {
+	// A touch changes no content. The check fallback must read the diff
+	// without a rewrite of .git/index, because the rewrite takes
+	// .git/index.lock and a concurrent git command of the user then fails.
+	clearGitIndexEnv(t)
+
+	root := gitDiffRepo(t)
+	other := filepath.Join(root, "sub", "g.txt")
+	gitIndex := filepath.Join(root, ".git", "index")
+
+	require.NoError(t, os.WriteFile(other, []byte("g\n"), 0o644))
+	runGit(t, root, "add", "sub/g.txt")
+	runGit(t, root, "commit", "-q", "-m", "add g")
+	runGit(t, root, "status", "--porcelain")
+
+	at := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(other, at, at))
+
+	beforeInfo, err := os.Stat(gitIndex)
+	require.NoError(t, err)
+
+	beforeBytes, err := os.ReadFile(gitIndex)
+	require.NoError(t, err)
+
+	got, err := GitDiffHead(root)
+	require.NoError(t, err)
+
+	afterInfo, err := os.Stat(gitIndex)
+	require.NoError(t, err)
+
+	afterBytes, err := os.ReadFile(gitIndex)
+	require.NoError(t, err)
+
+	assert.True(t, os.SameFile(beforeInfo, afterInfo), ".git/index has a new inode")
+	assert.Equal(t, beforeInfo.ModTime(), afterInfo.ModTime(), ".git/index has a new mtime")
+	assert.Equal(t, beforeBytes, afterBytes, ".git/index has new bytes")
+
+	// The plain command gives the same text, and it writes the index, so
+	// the fixture can show the write that GitDiffHead avoids.
+	assert.Equal(t, runGit(t, root, "diff", "HEAD"), got)
+
+	plainBytes, err := os.ReadFile(gitIndex)
+	require.NoError(t, err)
+	assert.NotEqual(t, beforeBytes, plainBytes, "a plain git diff HEAD must write the index")
 }
