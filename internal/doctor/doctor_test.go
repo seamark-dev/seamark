@@ -17,6 +17,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -287,6 +288,16 @@ func TestRunNamesAnUnreadableCodexConfigInTheHookFix(t *testing.T) {
 			"fix .codex/config.toml, then re-run `seamark init --client codex`",
 			true,
 		},
+		// The rewrite route starts with the restore route of the missing
+		// hook. One setup run does both, so the fix gives that step once.
+		"missing binary and missing hook": {
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"Bash","hooks":[{"type":"command","command":"` + absent + ` gate --hook --client codex"}]}]}}`,
+			"fix .codex/config.toml, then re-run `seamark init --client codex`, " +
+				"which rewrites the hook command to the running seamark binary; " +
+				"then open the project in Codex and review the hooks with /hooks, because the new command changes the trust hash",
+			true,
+		},
 	}
 
 	for name, tc := range cases {
@@ -321,9 +332,7 @@ func TestRunNamesTheMatcherOfAHookThatNeverFires(t *testing.T) {
 		},
 		"codex gate": {
 			".codex/hooks.json",
-			`{"hooks":{"PreToolUse":[` +
-				`{"matcher":"ash","hooks":[{"type":"command","command":"/bin/seamark gate --hook --client codex"}]},` +
-				`{"matcher":"apply_patch","hooks":[{"type":"command","command":"/bin/seamark lessons --hook --client codex"}]}]}}`,
+			codexIdleGate,
 			`set the matcher of that hook to "Bash" in .codex/hooks.json`,
 		},
 		"claude gate and lessons": {
@@ -331,9 +340,18 @@ func TestRunNamesTheMatcherOfAHookThatNeverFires(t *testing.T) {
 			`{"hooks":{"PreToolUse":[` +
 				`{"matcher":"Shell","hooks":[{"type":"command","command":"/bin/seamark gate --hook"}]},` +
 				`{"matcher":"Read","hooks":[{"type":"command","command":"/bin/seamark lessons --hook"}]}]}}`,
-			// Doctor prints the first action of a client, and the lessons
-			// hook comes first. The line warns, so no "run init" line prints.
-			`set the matcher of that hook to "Edit|Write|MultiEdit" in .claude/settings.json`,
+			// Doctor prints the action of each hook, in the order of the
+			// detail: the gate hook first, then the lessons hook.
+			`set the matcher of that hook to "Bash" in .claude/settings.json; ` +
+				`set the matcher of that hook to "Edit|Write|MultiEdit" in .claude/settings.json`,
+		},
+		"claude gate without lessons": {
+			".claude/settings.json",
+			`{"hooks":{"PreToolUse":[` +
+				`{"matcher":"Shell","hooks":[{"type":"command","command":"/bin/seamark gate --hook"}]}]}}`,
+			// Setup keeps the matcher, so the fix names both steps in one run.
+			`set the matcher of that hook to "Bash" in .claude/settings.json; ` +
+				"run `seamark init --client claude` to install the missing hook",
 		},
 	}
 
@@ -348,8 +366,199 @@ func TestRunNamesTheMatcherOfAHookThatNeverFires(t *testing.T) {
 
 			assert.Equal(t, StateWarn, hooks.State)
 			assert.Contains(t, hooks.Detail, "never runs from "+tc.rel+": its matcher")
-			assert.Contains(t, hooks.Fix, tc.want)
-			assert.NotContains(t, hooks.Fix, "seamark init")
+			assert.Equal(t, tc.want, hooks.Fix)
+		})
+	}
+}
+
+func TestJoinActions(t *testing.T) {
+	cases := map[string]struct {
+		actions []string
+		want    string
+	}{
+		"repeat and empty":   {[]string{"a", "", "a"}, "a"},
+		"contained action":   {[]string{"b", "x; then b"}, "x; then b"},
+		"only empty actions": {[]string{"", ""}, ""},
+		"two actions":        {[]string{"a", "b"}, "a; b"},
+		"no actions":         {nil, ""},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, joinActions(tc.actions))
+		})
+	}
+}
+
+// Shapes in which one doctor line has more than one action. Doctor and
+// status must give the same actions for them.
+const (
+	codexIdleGate = `{"hooks":{"PreToolUse":[` +
+		`{"matcher":"ash","hooks":[{"type":"command","command":"/bin/seamark gate --hook --client codex"}]},` +
+		`{"matcher":"apply_patch","hooks":[{"type":"command","command":"/bin/seamark lessons --hook --client codex"}]}]}}`
+	codexTwoGates = `{"hooks":{"PreToolUse":[` +
+		`{"matcher":"ash","hooks":[{"type":"command","command":"/bin/seamark gate --hook --client codex"}]},` +
+		`{"matcher":"Bash","hooks":[{"type":"command","command":"/bin/seamark gate --hook"}]},` +
+		`{"matcher":"apply_patch","hooks":[{"type":"command","command":"/bin/seamark lessons --hook --client codex"}]}]}}`
+	claudeTwoMatchers = `{"hooks":{"PreToolUse":[` +
+		`{"matcher":"Shell","hooks":[{"type":"command","command":"/bin/seamark gate --hook"}]},` +
+		`{"matcher":"Read","hooks":[{"type":"command","command":"/bin/seamark lessons --hook"}]}]}}`
+	claudeGateOnly = `{"hooks":{"PreToolUse":[` +
+		`{"matcher":"Shell","hooks":[{"type":"command","command":"/bin/seamark gate --hook"}]}]}}`
+)
+
+// writeFile returns a fixture writer that puts one document into the
+// workspace.
+func writeFile(rel, document string) func(root string) error {
+	return func(root string) error {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+
+		return os.WriteFile(path, []byte(document), 0o644)
+	}
+}
+
+// hooksOff returns the current fixture with disableAllHooks: true in the
+// shared Claude Code file. With brokenLocal, the personal file also
+// holds text that is not JSON.
+func hooksOff(brokenLocal bool) inspecttest.Fixture {
+	off := inspecttest.Named("current")
+	write := off.Write
+	off.Write = func(root string) error {
+		if err := write(root); err != nil {
+			return err
+		}
+
+		path := filepath.Join(root, approve.ClaudeSettings)
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		settings := map[string]any{}
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return err
+		}
+
+		settings["disableAllHooks"] = true
+
+		if data, err = json.Marshal(settings); err != nil {
+			return err
+		}
+
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			return err
+		}
+
+		if !brokenLocal {
+			return nil
+		}
+
+		return writeFile(".claude/settings.local.json", "{not json\n")(root)
+	}
+
+	return off
+}
+
+func TestRunGivesEveryActionOfAClientLine(t *testing.T) {
+	cases := map[string]struct {
+		write  func(root string) error
+		client string
+		want   string
+	}{
+		// The trust action is part of the second warning action, so it
+		// does not repeat.
+		"codex gate in two forms": {
+			writeFile(".codex/hooks.json", codexTwoGates), "codex",
+			"remove that handler from .codex/hooks.json; " +
+				"run `seamark init --client codex`, which replaces that handler with the managed gate hook; " +
+				"then open the project in Codex and review the hooks with /hooks",
+		},
+		// The matcher edit changes the trust hash, so the trust review
+		// comes after it.
+		"codex gate under a matcher that never fires": {
+			writeFile(".codex/hooks.json", codexIdleGate), "codex",
+			`set the matcher of that hook to "Bash" in .codex/hooks.json; ` +
+				"open the project in Codex and review the hooks with /hooks",
+		},
+		"claude gate and lessons matchers": {
+			writeFile(".claude/settings.json", claudeTwoMatchers), "claude",
+			`set the matcher of that hook to "Bash" in .claude/settings.json; ` +
+				`set the matcher of that hook to "Edit|Write|MultiEdit" in .claude/settings.json`,
+		},
+		"claude hooks off beside an unreadable personal file": {
+			hooksOff(true).Write, "claude",
+			"fix the file, then run the command again; " +
+				"remove disableAllHooks, or set it to false, to run the hooks",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			stubAgent(t)
+
+			root, dbPath := fixtureRoot(t)
+			require.NoError(t, tc.write(root))
+
+			client := byName(Run(root, dbPath, "test"))[tc.client]
+
+			assert.Equal(t, StateWarn, client.State)
+			assert.Equal(t, tc.want, client.Fix)
+		})
+	}
+}
+
+func TestRunGivesEveryActionThatStatusPrints(t *testing.T) {
+	// Status prints the action of each finding and each hook entry. The
+	// doctor fix of the same line must hold each of those actions.
+	type shape struct {
+		name  string
+		write func(root string) error
+	}
+
+	shapes := []shape{
+		{"codex gate in two forms", writeFile(".codex/hooks.json", codexTwoGates)},
+		{"codex gate under a matcher that never fires", writeFile(".codex/hooks.json", codexIdleGate)},
+		{"claude gate and lessons matchers", writeFile(".claude/settings.json", claudeTwoMatchers)},
+		{"claude gate without lessons", writeFile(".claude/settings.json", claudeGateOnly)},
+		{"claude hooks off beside an unreadable personal file", hooksOff(true).Write},
+	}
+
+	for _, f := range inspecttest.Fixtures() {
+		shapes = append(shapes, shape{"fixture " + f.Name, f.Write})
+	}
+
+	for _, sh := range shapes {
+		t.Run(sh.name, func(t *testing.T) {
+			stubAgent(t)
+
+			root, dbPath := fixtureRoot(t)
+			require.NoError(t, sh.write(root))
+
+			reg := inspecttest.Registry()
+			checks := byName(run(reg, root, dbPath, "test"))
+
+			for _, insp := range reg.Inspect(root) {
+				for _, finding := range insp.Findings {
+					if finding.Action == "" {
+						continue
+					}
+
+					assert.Contains(t, checks[insp.ClientID].Fix, render.Sanitize(oneLine(finding.Action)), insp.ClientID)
+				}
+
+				for _, capability := range []integration.Capability{integration.CapabilityCommands, integration.CapabilityEdits} {
+					entry, _ := insp.Entry(capability)
+					if entry.Action == "" || (entry.State != integration.StatePartial && entry.State != integration.StateUnreadable) {
+						continue
+					}
+
+					assert.Contains(t, checks["hooks"].Fix, render.Sanitize(oneLine(entry.Action)), insp.ClientID)
+				}
+			}
 		})
 	}
 }
@@ -447,6 +656,19 @@ func TestPrintAndJSON(t *testing.T) {
 	var back Report
 	require.NoError(t, json.Unmarshal(data, &back))
 	assert.Equal(t, r, &back, "the report must survive the JSON round trip")
+}
+
+func TestPrintKeepsAJoinedFixOnOneLine(t *testing.T) {
+	// The steps of a joined fix run in the printed order, so Print keeps
+	// them on one arrow line, the same as the JSON field.
+	r := &Report{}
+	r.add("codex", StateWarn, "two warnings", joinActions([]string{"remove that handler", "then review the hooks"}))
+
+	var b bytes.Buffer
+	Print(&b, r)
+
+	assert.Equal(t, 1, strings.Count(b.String(), "→"), b.String())
+	assert.Contains(t, b.String(), "→ remove that handler; then review the hooks\n")
 }
 
 // installSkills writes the shipped skills into one client directory of
@@ -787,37 +1009,7 @@ func TestRunNamesTheCodexLimitationsOnItsOwnLine(t *testing.T) {
 
 func TestRunWarnsWhenClaudeHooksAreTurnedOff(t *testing.T) {
 	_, want := runFixture(t, inspecttest.Named("current"))
-
-	// The current fixture with disableAllHooks: true in the shared file.
-	off := inspecttest.Named("current")
-	write := off.Write
-	off.Write = func(root string) error {
-		if err := write(root); err != nil {
-			return err
-		}
-
-		path := filepath.Join(root, approve.ClaudeSettings)
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-
-		settings := map[string]any{}
-		if err := json.Unmarshal(data, &settings); err != nil {
-			return err
-		}
-
-		settings["disableAllHooks"] = true
-
-		if data, err = json.Marshal(settings); err != nil {
-			return err
-		}
-
-		return os.WriteFile(path, data, 0o644)
-	}
-
-	_, checks := runFixture(t, off)
+	_, checks := runFixture(t, hooksOff(false))
 
 	// The installed hooks never run: the client line warns, and the hooks
 	// line stays as it is.

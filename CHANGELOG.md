@@ -326,6 +326,10 @@ model-boundary delivery.
   lists every lesson that applies. It kept at most 8 and dropped the
   rest without a count, while change_set, check, `lessons --prepare` and
   the edit hooks name it as the command that shows what they leave out.
+- **Every doctor action.** Doctor now prints every corrective action of
+  a client line and of the hooks line, as status does, not only the
+  first. The JSON `fix` field stays one string, with the actions joined
+  by `; `.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
