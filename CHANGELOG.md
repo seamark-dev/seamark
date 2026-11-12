@@ -231,6 +231,12 @@ model-boundary delivery.
   MCP `diff` argument. Any other `git diff HEAD` failure shows git's
   first stderr line. With a terminal or `/dev/null` on stdin, `check`
   refuses before the index refresh and creates no `.seamark` folder.
+- **The gate and a bad workspace or policy file.** `gate` with a `-C`
+  that names no directory, or with a `.seamark/policy.yaml` that cannot
+  be read, no longer allows under the default policy. Under `--enforce`
+  it blocks with exit 2, also in hook mode, and it creates no directory
+  and writes no audit entry. `doctor` fails the policy line and `status`
+  reports the policy as broken.
 - **MCP server after an upgrade.** A running MCP server keeps the
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the

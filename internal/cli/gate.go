@@ -55,16 +55,22 @@ is a Codex Bash event.`,
 			// broken policy is itself a bypass. Before the policy loads only
 			// the explicit flag enforces; gate.Decide applies the policy's
 			// own mode after.
-			root, err := index.ResolveRoot(opts.workspace)
+			//
+			// Resolve refuses a -C that names no directory. Without the
+			// check, the gate reads no policy there, allows under the
+			// default, and its audit creates the mistyped directory.
+			ws, err := workspace.Resolve(opts.workspace, "")
+
+			if hookMode {
+				return runGateHook(cmd, gateHookRun{root: ws.Root, rootErr: err,
+					clientID: hookClient, enforce: enforce, asJSON: asJSON})
+			}
+
 			if err != nil {
 				return gate.FailClosed(err, enforce)
 			}
 
-			if hookMode {
-				return runGateHook(cmd, root, hookClient, enforce, asJSON)
-			}
-
-			decision, err := gate.Decide(gate.CommandRequest{Root: root, Command: commandLine, Enforce: enforce}, auditWarning(cmd))
+			decision, err := gate.Decide(gate.CommandRequest{Root: ws.Root, Command: commandLine, Enforce: enforce}, auditWarning(cmd))
 			if err != nil {
 				return err
 			}
@@ -95,8 +101,10 @@ is a Codex Bash event.`,
 // client's own form. A failure that gate.Decide blocks is translated
 // the same way; any other failure is a plain error, and the command
 // proceeds.
-func runGateHook(cmd *cobra.Command, root, clientID string, enforce, asJSON bool) error {
-	client, err := gateHookClient(clientID)
+func runGateHook(cmd *cobra.Command, run gateHookRun) error {
+	enforce, asJSON := run.enforce, run.asJSON
+
+	client, err := gateHookClient(run.clientID)
 	if err != nil {
 		return gate.FailClosed(err, enforce)
 	}
@@ -108,6 +116,15 @@ func runGateHook(cmd *cobra.Command, root, clientID string, enforce, asJSON bool
 
 		return hookReply(cmd, client.Commands.EncodeFailure(err))
 	}
+
+	// A workspace that names no directory is a failure before the policy
+	// loads. It takes the client's failure reply, as a bad payload does,
+	// so each client reads the block in its own form.
+	if run.rootErr != nil {
+		return fail(run.rootErr)
+	}
+
+	root := run.root
 
 	payload, err := integration.ReadHookPayload(cmd.InOrStdin())
 	if err != nil {
@@ -141,6 +158,17 @@ func runGateHook(cmd *cobra.Command, root, clientID string, enforce, asJSON bool
 	}
 
 	return hookReply(cmd, reply)
+}
+
+// gateHookRun holds the inputs of one gate hook run. rootErr is the
+// workspace resolve error. The hook reports it only after the client
+// lookup, because the failure reply needs the client.
+type gateHookRun struct {
+	root     string
+	rootErr  error
+	clientID string
+	enforce  bool
+	asJSON   bool
 }
 
 // gateHookClient returns the client whose native events a gate hook

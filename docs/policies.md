@@ -62,8 +62,9 @@ an existing enforcing policy remains in force. Use
 AI coding agent. This bakes
 `--enforce` into the hook: deny/require_approval verdicts exit 2 and
 block, and the gate **fails closed** on its own failures — a malformed
-payload, a broken policy file, or an internal error exits 2 and blocks
-the command instead of silently allowing it. This needs a gate process
+payload, a broken policy file, a policy file that cannot be read, a `-C`
+that names no directory, or an internal error exits 2 and blocks the
+command instead of silently allowing it. This needs a gate process
 that starts and returns. The client stops a gate hook that runs past its
 timeout (setup writes 15 seconds), and it cannot start a seamark binary
 that was moved or deleted. Then the gate returns no exit status 2 and
