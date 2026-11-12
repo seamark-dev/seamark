@@ -841,6 +841,12 @@ func LedgerForRegion(st *store.Store, region string) ([]model.Lesson, error) {
 	return scoped, nil
 }
 
+// reviewMiningCondition names what `seamark index --reviews` needs to add review lessons.
+// Review mining reads pull requests through gh from a github.com origin.
+// Without them, the run mines only fix findings, and this ledger does not list fix findings.
+// Both empty-ledger lines use this one text, so their conditions cannot differ.
+const reviewMiningCondition = "(needs gh authenticated and a github.com remote)"
+
 // PrintLessonLedger lists every mined lesson in scope ("" = repo-wide) —
 // the raw material for tuning .seamark/lessons.yaml. Below-threshold
 // one-offs are shown too (they are exactly what a reader might want to
@@ -850,14 +856,13 @@ func LedgerForRegion(st *store.Store, region string) ([]model.Lesson, error) {
 func PrintLessonLedger(w io.Writer, lessons []model.Lesson, cfg *reviews.Config, scope string) {
 	if len(lessons) == 0 {
 		if scope != "" {
-			fmt.Fprintf(w, "no review lessons under %s — widen the region, or run `seamark index --reviews`\n",
-				render.Sanitize(scope))
+			fmt.Fprintf(w, "no review lessons under %s — widen the region, or run `seamark index --reviews` %s\n",
+				render.Sanitize(scope), reviewMiningCondition)
 
 			return
 		}
 
-		fmt.Fprintln(w, "no review lessons yet — run `seamark index --reviews` "+
-			"(needs gh authenticated and a github.com remote)")
+		fmt.Fprintln(w, "no review lessons yet — run `seamark index --reviews` "+reviewMiningCondition)
 
 		return
 	}

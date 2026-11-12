@@ -2131,3 +2131,26 @@ func TestWhyNamesMissingCallers(t *testing.T) {
 		assert.NotContains(t, out, "gets no edge")
 	})
 }
+
+// TestLessonLedgerEmptyLinesNameTheGitHubCondition pins both empty-ledger
+// lines. Without gh and a github.com origin, `seamark index --reviews` adds
+// no review lessons, so the scoped line must name that condition too.
+func TestLessonLedgerEmptyLinesNameTheGitHubCondition(t *testing.T) {
+	cfg := reviews.DefaultConfig()
+
+	var b strings.Builder
+	PrintLessonLedger(&b, nil, cfg, "api")
+	assert.Equal(t, "no review lessons under api — widen the region, or run `seamark index --reviews` "+
+		"(needs gh authenticated and a github.com remote)\n", b.String())
+
+	b.Reset()
+	PrintLessonLedger(&b, nil, cfg, "")
+	assert.Equal(t, "no review lessons yet — run `seamark index --reviews` "+
+		"(needs gh authenticated and a github.com remote)\n", b.String(),
+		"the repository-wide line keeps its text")
+
+	b.Reset()
+	PrintLessonLedger(&b, nil, cfg, "a\x1b[2Jb")
+	assert.NotContains(t, b.String(), "\x1b", "the scope is sanitized before it reaches the terminal")
+	assert.Contains(t, b.String(), "(needs gh authenticated and a github.com remote)")
+}

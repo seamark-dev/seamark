@@ -1032,6 +1032,12 @@ func TestLessonsList(t *testing.T) {
 	assert.Contains(t, out, "E702", "lessons inside the region stay")
 	assert.NotContains(t, out, "RUF001", "lessons outside the region are filtered")
 	assert.Contains(t, out, "1 total")
+
+	// An empty region offers review mining with the condition it needs.
+	out, err = run(t, "-C", root, "lessons", "--region", "nowhere")
+	require.NoError(t, err)
+	assert.Contains(t, out, "no review lessons under nowhere — widen the region, or run "+
+		"`seamark index --reviews` (needs gh authenticated and a github.com remote)")
 }
 
 func TestLessonsDistillDryRun(t *testing.T) {

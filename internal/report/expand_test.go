@@ -30,6 +30,8 @@ func TestExpandLessonsRef(t *testing.T) {
 	b.Reset()
 	require.NoError(t, Expand(&b, st, root, "lessons:elsewhere"))
 	assert.Contains(t, b.String(), "no review lessons under elsewhere")
+	assert.Contains(t, b.String(), "(needs gh authenticated and a github.com remote)",
+		"the offered route names when it can add review lessons")
 }
 
 func TestExpandLessonsCapped(t *testing.T) {
