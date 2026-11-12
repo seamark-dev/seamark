@@ -21,10 +21,10 @@ type ChangeSetOptions struct {
 }
 
 // ChangeSet reports what a planned edit to the given files drags along:
-// the files history says change together with them, the externally
-// visible symbols whose callers will feel the edit, and the effect tags
-// the change can ultimately reach. This is the pre-edit question — "what
-// am I about to forget?" — answered from evidence, not vibes.
+// the files history says change together with them, the symbols that
+// other non-test files call, with the count of those callers, and the
+// effect tags the change can ultimately reach. This is the pre-edit
+// question — "what am I about to forget?" — answered from evidence.
 //
 // ChangeSet records the printed lessons with the legacy writer. No
 // production caller uses it since MCP change_set moved to
@@ -185,7 +185,10 @@ func ChangeSetNames(st *store.Store, root string, files []string) (names, uninde
 }
 
 // exposureLines prints who depends on the file's symbols and what the
-// file can reach — the structural half of the blast radius.
+// file can reach — the structural half of the blast radius. The caller
+// line counts only callers in other non-test files. An edit inside the
+// file reaches its own callers too. Test callers bury the production
+// callers, and the why caller list folds them for the same reason.
 func exposureLines(w io.Writer, st *store.Store, file string) error {
 	syms, err := st.SymbolsInFile(file)
 	if err != nil {
@@ -200,11 +203,6 @@ func exposureLines(w io.Writer, st *store.Store, file string) error {
 		fmt.Fprintf(w, "  defines                %d symbols\n", len(syms))
 	}
 
-	callerCounts, err := st.CallerCounts(file)
-	if err != nil {
-		return err
-	}
-
 	type exposed struct {
 		fqn string
 		n   int
@@ -214,7 +212,12 @@ func exposureLines(w io.Writer, st *store.Store, file string) error {
 	tagSet := map[string]bool{}
 
 	for i := range syms {
-		if n := callerCounts[syms[i].ID]; n > 0 {
+		n, err := outsideCallers(st, syms[i].ID, file)
+		if err != nil {
+			return err
+		}
+
+		if n > 0 {
 			ranked = append(ranked, exposed{syms[i].FQN, n})
 		}
 
@@ -260,4 +263,24 @@ func exposureLines(w io.Writer, st *store.Store, file string) error {
 	}
 
 	return nil
+}
+
+// outsideCallers counts the CALLS callers of the symbol id that are in
+// another file and are not test code. exposureLines says why. The LSP
+// code lens keeps the full count of store.CallerCounts.
+func outsideCallers(st *store.Store, id int64, file string) (int, error) {
+	callers, err := st.Callers(id)
+	if err != nil {
+		return 0, err
+	}
+
+	n := 0
+
+	for _, c := range callers {
+		if c.File != "" && c.File != file && !model.IsTestPath(c.File) {
+			n++
+		}
+	}
+
+	return n, nil
 }

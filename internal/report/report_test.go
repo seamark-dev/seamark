@@ -1636,6 +1636,139 @@ func TestChangeSetRejectsAnEmptyPathBeforeItWrites(t *testing.T) {
 	assert.Contains(t, b.String(), "scripts/task.py\n")
 }
 
+// TestChangeSetCountsOnlyCallersInOtherNonTestFiles proves the rule of
+// the "called from outside" line. A caller counts only when its file is
+// not empty, is not the file itself, and is not test code.
+func TestChangeSetCountsOnlyCallersInOtherNonTestFiles(t *testing.T) {
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	// Each caller is its own symbol, because the edge key holds the
+	// caller. So every edge adds one caller.
+	type call struct{ caller, callerFile, callee string }
+
+	defined := map[string]string{
+		"store.Save": "store/store.go", "store.Snapshot.Err": "store/store.go",
+		"store.roundCents": "store/store.go", "store.Tx.Commit": "store/store.go",
+		"only.Run": "only/only.go", "only.helper": "only/only.go",
+		"rank.A": "rank/rank.go", "rank.B": "rank/rank.go", "rank.C": "rank/rank.go",
+		"rank.D": "rank/rank.go", "rank.E": "rank/rank.go",
+		"pair.Save": "pair/pair.go",
+	}
+
+	calls := []call{
+		{"api.Handle", "api/handler.go", "store.Save"},
+		{"store.Tx.Commit", "store/store.go", "store.Save"},
+		{"store.TestSave", "store/store_test.go", "store.Save"},
+		{"e2e.Flow", "tests/e2e/flow.go", "store.Save"},
+		{"store", "", "store.Save"},
+		{"store.TestSave", "store/store_test.go", "store.Snapshot.Err"},
+		{"store.Tx.Commit", "store/store.go", "store.roundCents"},
+		{"only.helper", "only/only.go", "only.Run"},
+		{"only.TestRun", "only/only_test.go", "only.Run"},
+		{"api.Handle", "api/handler.go", "pair.Save"},
+		{"api.List", "api/handler.go", "pair.Save"},
+	}
+
+	// Outside callers 5, 4, 2, 2 and 1. Counted test callers would put E
+	// first and D before C.
+	outside := map[string]int{"rank.A": 5, "rank.B": 4, "rank.C": 2, "rank.D": 2, "rank.E": 1}
+	tests := map[string]int{"rank.D": 1, "rank.E": 10}
+
+	for callee, n := range outside {
+		for i := range n {
+			name := fmt.Sprintf("use.%s%d", callee, i)
+			calls = append(calls, call{name, "use/" + name + ".go", callee})
+		}
+	}
+
+	for callee, n := range tests {
+		for i := range n {
+			name := fmt.Sprintf("use.Test%s%d", callee, i)
+			calls = append(calls, call{name, "use/" + name + "_test.go", callee})
+		}
+	}
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		ids := map[string]int64{}
+
+		insert := func(fqn, file string) error {
+			if _, ok := ids[fqn]; ok {
+				return nil
+			}
+
+			kind := model.KindFunction
+			if file == "" {
+				kind = model.KindPackage
+			}
+
+			sym := model.Symbol{FQN: fqn, Name: fqn, Kind: kind, File: file, Span: model.Span{StartLine: 1, EndLine: 2}}
+			if err := tx.InsertSymbol(&sym); err != nil {
+				return err
+			}
+
+			ids[fqn] = sym.ID
+
+			return nil
+		}
+
+		for fqn, file := range defined {
+			if err := insert(fqn, file); err != nil {
+				return err
+			}
+		}
+
+		for _, c := range calls {
+			if err := insert(c.caller, c.callerFile); err != nil {
+				return err
+			}
+
+			edge := model.Edge{Src: ids[c.caller], Dst: ids[c.callee], Kind: model.EdgeCalls, Origin: "resolved"}
+			if err := tx.InsertEdge(edge); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	changeSet := func(file string) string {
+		var b strings.Builder
+		require.NoError(t, ChangeSet(&b, st, root, []string{file}))
+
+		return b.String()
+	}
+
+	t.Run("same-file, test and package callers do not count", func(t *testing.T) {
+		out := changeSet("store/store.go")
+		assert.Contains(t, out, "\n  called from outside    store.Save (1)\n")
+		assert.NotContains(t, out, "Snapshot.Err")
+		assert.NotContains(t, out, "roundCents")
+	})
+
+	t.Run("no outside caller gives no line", func(t *testing.T) {
+		out := changeSet("only/only.go")
+		assert.Contains(t, out, "  defines                2 symbols\n")
+		assert.NotContains(t, out, "called from outside")
+	})
+
+	t.Run("rank and cut use the outside count", func(t *testing.T) {
+		out := changeSet("rank/rank.go")
+		assert.Contains(t, out,
+			"\n  called from outside    rank.A (5) · rank.B (4) · rank.C (2) · rank.D (2)\n")
+	})
+
+	// n counts callers, not caller files. A file with two callers can feel
+	// the edit in two places.
+	t.Run("two callers in one file count as two", func(t *testing.T) {
+		out := changeSet("pair/pair.go")
+		assert.Contains(t, out, "\n  called from outside    pair.Save (2)\n")
+	})
+}
+
 // TestReminderTextIsStable freezes the single-file reminder byte for
 // byte. The shared delivery service renders the same block for a
 // single-path event; equality against this text is its parity check.

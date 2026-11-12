@@ -307,6 +307,10 @@ model-boundary delivery.
   package nodes and every pin, while the preparation part rejected it.
   An entry of `./` now reads as `.` in `change_set` and `why`, and no
   longer lists every pin.
+- **change_set callers.** The `called from outside` line of
+  `change_set` now counts only callers in other files that are not test
+  code. It counted every caller, also callers in the same file and in
+  tests. The LSP code lens still counts every caller.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
