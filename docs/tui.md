@@ -391,8 +391,9 @@ unavailable; it never shows zero lessons instead.
 **Stats** shows the lessons by source, the proposals by state, the top
 regions, and the records delivered per day (`f` changes the period), with
 the most surfaced lessons, the totals by surface (hook, `change_set`,
-`check`) and by client, suppressed repeats, and eligible lessons never
-delivered. Delivered means emitted through a recorded surface, not read or
+`check`, and `prepare` or `explore` once they have records) and by
+client, suppressed repeats, and eligible lessons never delivered.
+Delivered means emitted through a recorded surface, not read or
 followed. When mined lessons are below the threshold or muted, a line
 counts them, and `o` opens Settings › Lesson mutes. Plain route:
 `seamark lessons --stats`, from the same reader.

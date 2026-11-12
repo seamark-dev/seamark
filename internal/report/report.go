@@ -692,6 +692,13 @@ func writeLessonLines(w io.Writer, lessons []model.Lesson) {
 	}
 }
 
+// FiringSurfaces names every surface that writes a record to the firing
+// log. The empty state of lessons --stats and both empty states of the
+// Stats view print it. They share one phrase, so the CLI and the console
+// cannot name different surfaces.
+const FiringSurfaces = "the edit hook before an edit, the exploration hook after a Claude Code file read, " +
+	"seamark lessons --prepare, the MCP change_set tool, and check from the CLI or MCP"
+
 // PrintFiringSummary renders the firing log of all surfaces: how often a
 // surface returned or injected each lesson, and which lessons would surface
 // but never have. A firing does not show that an agent read the lesson.
@@ -706,8 +713,13 @@ func PrintFiringSummary(w io.Writer, s reviews.Summary) {
 			return
 		}
 
-		fmt.Fprintln(w, "no lesson firings recorded yet — the edit hook logs each time it "+
-			"reminds an agent (wire it with `seamark init`)")
+		// The empty state names every surface, because each one writes a
+		// firing. The last line offers plain init, because that step wires
+		// the edit hook in any repository.
+		fmt.Fprintln(w, "no lesson firings recorded yet — seamark records a firing when one of these "+
+			"surfaces returns or injects lessons:")
+		fmt.Fprintln(w, "  "+FiringSurfaces)
+		fmt.Fprintln(w, "wire the edit hook with `seamark init`")
 
 		return
 	}

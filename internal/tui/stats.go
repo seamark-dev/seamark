@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/seamark-dev/seamark/internal/lessonstats"
+	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
@@ -411,7 +412,8 @@ func (s *statsView) deliveryLines(v lessonstats.Snapshot, w int) []string {
 
 // logStateLines explains a log without counts: an unreadable log, no
 // log, or a log without records. Each state has its own text, because
-// they mean different things.
+// they mean different things. Both empty states name every surface from
+// report.FiringSurfaces, the list that lessons --stats also prints.
 func (s *statsView) logStateLines(v lessonstats.Snapshot, w int) []string {
 	t := s.st.theme
 
@@ -429,14 +431,14 @@ func (s *statsView) logStateLines(v lessonstats.Snapshot, w int) []string {
 		next = "Check access to the file, then press r to refresh."
 	case !v.LogExists:
 		tone, title = ui.ToneNeutral, "No recorded delivery yet"
-		body = "Seamark records a delivery when an agent hook injects a lesson before an edit, and when the " +
-			"MCP change_set or check tools surface lessons. The delivery log does not exist yet. " +
+		body = "Seamark records a delivery when one of these surfaces returns or injects lessons: " +
+			report.FiringSurfaces + ". The delivery log does not exist yet. " +
 			"Viewing lessons here never records a delivery."
 		next = "Set up hooks or MCP under Integrations (press 2). After an agent edits files, press r to refresh."
 	default:
 		tone, title = ui.ToneNeutral, "The log exists but holds no records"
-		body = "The delivery log has no readable record yet. Agent hooks and the MCP change_set and check " +
-			"tools add a record when they deliver lessons. Viewing lessons here never records a delivery."
+		body = "The delivery log has no readable record yet. These surfaces add a record when they return " +
+			"or inject lessons: " + report.FiringSurfaces + ". Viewing lessons here never records a delivery."
 		next = "After an agent edits files, press r to refresh."
 	}
 
