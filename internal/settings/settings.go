@@ -753,7 +753,7 @@ func (r reading) fields(presets []string) []FieldState {
 			r.argvState(&st)
 		case DistillWrite:
 			st.Default = textOff
-			st.Notes = []string{"Also governs seamark lessons --apply, --prune, and --retarget."}
+			st.Notes = []string{"Also governs " + PinWriteCommands + "."}
 
 			if st.Err = r.distillErr; st.Err == nil {
 				st.Effective = onOff(r.distill.Distill.Write)

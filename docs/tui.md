@@ -261,8 +261,8 @@ Attention words follow the relationship, the most urgent first: `blocked`,
   the regions that change or the note that leaves, WILL and WON'T lines,
   the file diff, and the ledger change. `y` shows only when every pin is ready and
   `distill.write` is on; `o` opens Settings › Pin writing when it is off.
-  The gate covers apply, retarget, prune, and new pins, pin edits, and
-  pin removals in Lessons › Pins.
+  The gate covers apply, retarget, prune, and new pins, pin edits, check
+  definitions, and pin removals in Lessons › Pins.
 - `y` plans again from the current files, rows, gate, and evidence, and
   any difference writes nothing. The commit replaces the pin file
   atomically, then updates the ledger. The two writes are not one
@@ -513,8 +513,10 @@ when each takes effect.
   default, which removes the key; the mute list has no reset. `x`
   discards the draft of the group under the cursor.
 - Pin writing (`distill.write`) governs apply, retarget, prune, and new
-  pins, pin edits, and pin removals in Lessons › Pins. A save of a lesson
-  setting writes no pin, so the gate does not govern it.
+  pins, pin edits, check definitions, and pin removals in Lessons › Pins.
+  It also governs `seamark lessons --apply`, `--prune`, `--retarget`, and
+  `--set-mode`. A save of a lesson setting writes no pin, so the gate does
+  not govern it.
 - A number field of lesson delivery takes the default or a whole number
   above 0. `enter` refuses a number out of range and keeps the typed
   text, so you can fix it. The field refuses an eleventh digit as you

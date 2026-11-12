@@ -132,7 +132,8 @@ func TestPinsDetailOfALinkedPinShowsItsReadings(t *testing.T) {
 		"Nothing changes before you confirm with y.",
 		"No retarget: its regions are already current.",
 		"No trigger extraction: its trigger paths are already stored.",
-		"distill.write is on",
+		// The gate line names the whole scope that distill.write gates.
+		"distill.write is on: a confirmed preview writes .seamark/lessons.yaml (" + pinWriteScope + ").",
 	} {
 		assert.Contains(t, text, want)
 	}
