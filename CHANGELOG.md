@@ -237,6 +237,12 @@ model-boundary delivery.
   it blocks with exit 2, also in hook mode, and it creates no directory
   and writes no audit entry. `doctor` fails the policy line and `status`
   reports the policy as broken.
+- **`check` and `index` with a `-C` that is no directory.** A `-C` that
+  names a file or a missing path now gets `workspace <path>: not a
+  directory` or `no such file or directory`, as `gate` prints it, and
+  nothing is written. `check` and `index` no longer call such a path a
+  database whose recorded root cannot be read. A `--db` below a file
+  again fails on the directory of the database.
 - **MCP server after an upgrade.** A running MCP server keeps the
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the

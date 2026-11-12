@@ -33,7 +33,9 @@ func Gather(root, db string) State {
 	info, err := os.Stat(db)
 
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		// A path below a regular file holds no database, as statRoot
+		// reads it. The build then fails on its directory in its own words.
 		s.File = FileAbsent
 
 		return s

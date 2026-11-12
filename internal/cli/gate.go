@@ -252,9 +252,10 @@ executable lesson checks, as "seamark lessons --verify" does, whatever
 diff the policy read. A lesson violation exits 2, as a policy block does.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Locate does not test the directory. For a missing -C, the
-			// index walk below names the missing path.
-			ws, err := workspace.Locate(opts.workspace, opts.dbPath)
+			// Resolve refuses a -C that names no directory before any read
+			// or write. The index refresh would otherwise name a file or a
+			// missing path in the words of its own walk or root check.
+			ws, err := workspace.Resolve(opts.workspace, opts.dbPath)
 			if err != nil {
 				return err
 			}
@@ -275,11 +276,10 @@ diff the policy read. A lesson violation exits 2, as a policy block does.`,
 			// A terminal or /dev/null on stdin sends no diff, so check reads
 			// git diff HEAD. It reads it before the index refresh, as MCP
 			// does, so a folder outside git or before the first commit gets
-			// no .seamark folder. A missing directory goes on to the index
-			// walk, which names the missing path.
+			// no .seamark folder.
 			var diffText, policyInput string
 
-			if stdinIsDevice(cmd.InOrStdin()) && isDir(root) {
+			if stdinIsDevice(cmd.InOrStdin()) {
 				if diffText, err = checkGitDiffHead(root); err != nil {
 					return err
 				}
@@ -449,13 +449,6 @@ func stdinIsDevice(stdin io.Reader) bool {
 	f, ok := stdin.(*os.File)
 
 	return ok && isTerminal(f)
-}
-
-// isDir reports an existing directory at p.
-func isDir(p string) bool {
-	info, err := os.Stat(p)
-
-	return err == nil && info.IsDir()
 }
 
 // readStdinDiff reads stdin to EOF when its first byte arrives within

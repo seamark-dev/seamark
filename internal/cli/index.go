@@ -9,6 +9,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // indexProgress adapts index.Run's phase events to the live terminal
@@ -69,6 +70,13 @@ workspace replaces such a root by itself. Run the command in that repository,
 or add --move-root to move the recorded root to this workspace.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Resolve refuses a -C that names no directory, in the words
+			// that check and gate use. index.Run keeps its own inputs,
+			// because the MCP, LSP and console builds call it too.
+			if _, err := workspace.Resolve(opts.workspace, opts.dbPath); err != nil {
+				return err
+			}
+
 			logf := func(format string, a ...any) {
 				fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
 			}

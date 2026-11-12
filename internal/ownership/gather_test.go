@@ -130,6 +130,14 @@ func TestGather(t *testing.T) {
 		{"no file", func(t *testing.T) (string, string) {
 			return plainDir(t), filepath.Join(plainDir(t), "new.db")
 		}, Facts{File: FileAbsent}, Decision{BuildAllowed, WriteNoIndex, RouteIndexHere}},
+		{"a path below a regular file", func(t *testing.T) (string, string) {
+			file := emptyFile(t, filepath.Join(plainDir(t), "main.go"))
+
+			return plainDir(t), filepath.Join(file, "x.db")
+		}, Facts{File: FileAbsent}, Decision{BuildAllowed, WriteNoIndex, RouteIndexHere}},
+		{"a path below a directory that a stat cannot reach", func(t *testing.T) (string, string) {
+			return plainDir(t), filepath.Join(hiddenRoot(t), "x.db")
+		}, Facts{Root: RootUnreadable}, Decision{BuildRefused, WriteRefused, RouteFixFile}},
 		{"an empty file", func(t *testing.T) (string, string) {
 			return plainDir(t), emptyFile(t, filepath.Join(plainDir(t), "empty.db"))
 		}, Facts{File: FileAbsent}, Decision{BuildAllowed, WriteNoIndex, RouteIndexHere}},

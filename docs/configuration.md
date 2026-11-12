@@ -71,7 +71,9 @@ bounds the git window (default 5000) and `--max-files-per-commit`
 excludes bulk refactors from co-change (default 30). Every command
 takes `-C <dir>` to name the workspace and `--db <path>` to override
 the index location; `status`, `doctor`, `gate`, and `check` speak
-`--json` for machines.
+`--json` for machines. `gate`, `check`, and `index` refuse a `-C` that
+names no directory with `workspace <path>: not a directory` or `no such
+file or directory`, and the gate blocks it under `--enforce`.
 
 `seamark index` refuses a `--db` that records another repository, also
 with `--force`, because that repository would lose its pins and

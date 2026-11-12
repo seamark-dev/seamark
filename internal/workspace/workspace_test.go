@@ -15,6 +15,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
@@ -188,7 +189,7 @@ func TestResolveRejectsMissingPath(t *testing.T) {
 	require.Error(t, err)
 
 	assert.ErrorIs(t, err, os.ErrNotExist)
-	assert.Contains(t, err.Error(), missing)
+	assert.EqualError(t, err, "workspace "+missing+": no such file or directory")
 	assert.NotErrorIs(t, err, ErrNotDirectory)
 }
 
@@ -200,7 +201,37 @@ func TestResolveRejectsRegularFile(t *testing.T) {
 	require.Error(t, err)
 
 	assert.ErrorIs(t, err, ErrNotDirectory)
-	assert.Contains(t, err.Error(), file)
+	assert.EqualError(t, err, "workspace "+file+": not a directory")
+}
+
+// TestResolveSanitizesThePathInItsError covers each cause that names the
+// path. A control byte in -C must not reach a terminal raw. The plain
+// gate, check, index and the console print the error as Resolve returns it.
+func TestResolveSanitizesThePathInItsError(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, path string)
+		want  error
+		cause string
+	}{
+		{"a regular file", func(t *testing.T, path string) {
+			require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
+		}, ErrNotDirectory, "not a directory"},
+		{"a missing path", func(*testing.T, string) {}, os.ErrNotExist, "no such file or directory"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "a"+string(rune(0x1b))+"[2Jb")
+			tc.setup(t, path)
+
+			_, err := Resolve(path, "")
+			require.ErrorIs(t, err, tc.want)
+
+			assert.NotContains(t, err.Error(), "\x1b")
+			assert.EqualError(t, err, "workspace "+render.Sanitize(path)+": "+tc.cause)
+		})
+	}
 }
 
 func TestLocateMatchesResolveForADirectory(t *testing.T) {
