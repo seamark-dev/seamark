@@ -244,6 +244,21 @@ diff the policy read. A lesson violation exits 2, as a policy block does.`,
 				}
 			}
 
+			// A terminal or /dev/null on stdin sends no diff, so check reads
+			// git diff HEAD. It reads it before the index refresh, as MCP
+			// does, so a folder outside git or before the first commit gets
+			// no .seamark folder. A missing directory goes on to the index
+			// walk, which names the missing path.
+			var diffText, policyInput string
+
+			if stdinIsDevice(cmd.InOrStdin()) && isDir(root) {
+				if diffText, err = checkGitDiffHead(root); err != nil {
+					return err
+				}
+
+				policyInput = report.PolicyInputGitDiffHead
+			}
+
 			// A stale index makes blast-radius answers WRONG (line spans
 			// drift); check repairs freshness instead of warning about it.
 			// Run's internal fast path makes this free when nothing changed.
@@ -278,10 +293,12 @@ diff the policy read. A lesson violation exits 2, as a policy block does.`,
 				policy.Mode = "enforce"
 			}
 
-			diffText, policyInput, err := readDiff(cmd.InOrStdin(), cmd.ErrOrStderr(), root, stdinIdleWait,
-				policy.Mode == "enforce")
-			if err != nil {
-				return err
+			if policyInput == "" {
+				diffText, policyInput, err = readDiff(cmd.InOrStdin(), cmd.ErrOrStderr(), root, stdinIdleWait,
+					policy.Mode == "enforce")
+				if err != nil {
+					return err
+				}
 			}
 
 			source := gate.SourceGitDiffHead
@@ -359,7 +376,7 @@ const stdinIdleWait = time.Second
 // allow what its own diff blocks. This follows the gate rule that a
 // failure under enforcement must not fail open.
 func readDiff(stdin io.Reader, stderr io.Writer, root string, wait time.Duration, enforced bool) (diff, input string, err error) {
-	if f, ok := stdin.(*os.File); !ok || !isTerminal(f) {
+	if !stdinIsDevice(stdin) {
 		data, idle, err := readStdinDiff(stdin, wait)
 		if err != nil {
 			return "", "", err
@@ -378,12 +395,39 @@ func readDiff(stdin io.Reader, stderr io.Writer, root string, wait time.Duration
 		}
 	}
 
-	out, err := gate.GitDiffHead(root)
+	out, err := checkGitDiffHead(root)
 	if err != nil {
-		return "", "", fmt.Errorf("git diff: %w", err)
+		return "", "", err
 	}
 
 	return out, report.PolicyInputGitDiffHead, nil
+}
+
+// checkGitDiffHead runs gate.GitDiffHead and adds the CLI route to its
+// reason. The route needs no git, so it can run when git diff HEAD fails.
+func checkGitDiffHead(root string) (string, error) {
+	out, err := gate.GitDiffHead(root)
+	if err != nil {
+		return "", fmt.Errorf("%w; %s", err, gate.DiffRouteCLI)
+	}
+
+	return out, nil
+}
+
+// stdinIsDevice reports a stdin that is a character device, such as a
+// terminal or /dev/null. check does not read such a stdin, because a
+// terminal sends no diff and would wait for a key.
+func stdinIsDevice(stdin io.Reader) bool {
+	f, ok := stdin.(*os.File)
+
+	return ok && isTerminal(f)
+}
+
+// isDir reports an existing directory at p.
+func isDir(p string) bool {
+	info, err := os.Stat(p)
+
+	return err == nil && info.IsDir()
 }
 
 // readStdinDiff reads stdin to EOF when its first byte arrives within

@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/history"
 )
 
 // runGit runs git in dir with a fixed identity and returns its stdout.
@@ -274,4 +276,170 @@ func TestGitDiffHeadKeepsGitIndex(t *testing.T) {
 	plainBytes, err := os.ReadFile(gitIndex)
 	require.NoError(t, err)
 	assert.NotEqual(t, beforeBytes, plainBytes, "a plain git diff HEAD must write the index")
+}
+
+// diffShim puts a git first on PATH that fails each diff call with exit 3
+// and the given stderr, and passes every other call to the real git.
+func diffShim(t *testing.T, stderr string) {
+	t.Helper()
+
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do\n" +
+		"  if [ \"$a\" = diff ]; then printf '" + stderr + "' >&2; exit 3; fi\n" +
+		"done\n" +
+		"exec " + strconv.Quote(realGit) + " \"$@\"\n"
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestGitDiffHeadFailureReasons(t *testing.T) {
+	// A failed git diff HEAD must say why in one safe line. The two common
+	// causes get a fixed reason, because git's text names --no-index or a
+	// raw revision error that a check caller cannot act on.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	t.Run("outside git", func(t *testing.T) {
+		parent := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", parent)
+
+		dir := filepath.Join(parent, "plain")
+		require.NoError(t, os.Mkdir(dir, 0o755))
+
+		_, err := GitDiffHead(dir)
+		require.Error(t, err)
+		assert.Equal(t, "no diff given, and "+dir+" is not inside a git work tree, so git diff HEAD cannot run", err.Error())
+	})
+
+	t.Run("no commit", func(t *testing.T) {
+		root := t.TempDir()
+		runGit(t, root, "init", "-q", "-b", "main")
+
+		_, err := GitDiffHead(root)
+		require.Error(t, err)
+		assert.Equal(t, "no diff given, and the repository at "+root+
+			" has no commit yet, so git diff HEAD has nothing to compare", err.Error())
+	})
+
+	t.Run("other failure keeps the first stderr line, sanitized", func(t *testing.T) {
+		root := gitDiffRepo(t)
+		diffShim(t, `\n\033[31mfatal: boom\033[0m\nsecond line\n`)
+
+		_, err := GitDiffHead(root)
+		require.Error(t, err)
+		assert.Equal(t, "no diff given, and git diff HEAD failed (exit status 3): [31mfatal: boom[0m", err.Error())
+		assert.NotContains(t, err.Error(), "\x1b")
+		assert.NotContains(t, err.Error(), "second line")
+	})
+
+	t.Run("a long stderr line is cut", func(t *testing.T) {
+		root := gitDiffRepo(t)
+		diffShim(t, "fatal: "+strings.Repeat("x", 300)+`\n`)
+
+		_, err := GitDiffHead(root)
+		require.Error(t, err)
+
+		prefix := "no diff given, and git diff HEAD failed (exit status 3): "
+		assert.Equal(t, prefix+"fatal: "+strings.Repeat("x", maxGitReasonBytes-len("fatal: ")), err.Error())
+	})
+
+	t.Run("other failure without stderr", func(t *testing.T) {
+		root := gitDiffRepo(t)
+		diffShim(t, "")
+
+		_, err := GitDiffHead(root)
+		require.Error(t, err)
+		assert.Equal(t, "no diff given, and git diff HEAD failed (exit status 3)", err.Error())
+	})
+
+	t.Run("git does not start", func(t *testing.T) {
+		root := gitDiffRepo(t)
+		t.Setenv("PATH", t.TempDir())
+
+		_, err := GitDiffHead(root)
+		require.Error(t, err)
+		assert.True(t, strings.HasPrefix(err.Error(), "no diff given, and git diff HEAD did not run: "), err.Error())
+	})
+
+	// A folder name can hold an escape sequence and a line break. A reason
+	// shows such a name in its clean form on one line, because a terminal
+	// can act on the control bytes.
+	const rawName, cleanName = "\x1b[31mred\nline", "[31mred line"
+
+	t.Run("the root is sanitized", func(t *testing.T) {
+		parent := t.TempDir()
+		t.Setenv("GIT_CEILING_DIRECTORIES", parent)
+
+		plain := filepath.Join(parent, "plain"+rawName)
+		require.NoError(t, os.Mkdir(plain, 0o755))
+
+		_, err := GitDiffHead(plain)
+		require.Error(t, err)
+		assert.Equal(t, "no diff given, and "+filepath.Join(parent, "plain"+cleanName)+
+			" is not inside a git work tree, so git diff HEAD cannot run", err.Error())
+
+		unborn := filepath.Join(parent, "unborn"+rawName)
+		require.NoError(t, os.Mkdir(unborn, 0o755))
+		runGit(t, unborn, "init", "-q", "-b", "main")
+
+		_, err = GitDiffHead(unborn)
+		require.Error(t, err)
+		assert.Equal(t, "no diff given, and the repository at "+filepath.Join(parent, "unborn"+cleanName)+
+			" has no commit yet, so git diff HEAD has nothing to compare", err.Error())
+	})
+
+	t.Run("git does not start in a missing root", func(t *testing.T) {
+		// An MCP server keeps its root after a user removes the folder. The
+		// start error of Go then names the root, so the reason must show
+		// the clean form of that name too.
+		parent := t.TempDir()
+		gone := filepath.Join(parent, "gone"+rawName)
+
+		_, err := GitDiffHead(gone)
+		require.Error(t, err)
+		assert.Equal(t, "no diff given, and git diff HEAD did not run: chdir "+
+			filepath.Join(parent, "gone"+cleanName)+": no such file or directory", err.Error())
+	})
+}
+
+// gitCallLog puts a git first on PATH that writes the arguments of each
+// call as one line to a log file and then runs the real git. It returns
+// the path of the log file.
+func gitCallLog(t *testing.T) string {
+	t.Helper()
+
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + strconv.Quote(calls) + "\n" +
+		"exec " + strconv.Quote(realGit) + " \"$@\"\n"
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	return calls
+}
+
+func TestGitDiffHeadRunsOneGitProcess(t *testing.T) {
+	// The probes for a failure reason run only after git diff HEAD fails.
+	// A successful read starts one git process, so the reason costs a
+	// check nothing on the success path.
+	root := gitDiffRepo(t)
+	calls := gitCallLog(t)
+
+	got, err := GitDiffHead(root)
+	require.NoError(t, err)
+	require.Contains(t, got, "diff --git a/sub/f.txt b/sub/f.txt\n")
+
+	logged, err := os.ReadFile(calls)
+	require.NoError(t, err)
+	assert.Equal(t, strings.Join(history.ParsedGitArgs("diff", "HEAD"), " ")+"\n", string(logged))
 }

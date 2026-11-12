@@ -224,6 +224,13 @@ model-boundary delivery.
   `diff.autoRefreshIndex=false`, as the console already did. After a
   `touch`, seamark leaves `.git/index` as it was, so a concurrent `git
   add` no longer fails on `.git/index.lock`.
+- **`check` without a diff outside git.** In a folder outside a git work
+  tree, or in a repository with no commit, `check` and MCP `check` no
+  longer stop at `exit status 129` or `128`. They say which of the two
+  applies and name a route that runs: pipe a diff on stdin, or pass the
+  MCP `diff` argument. Any other `git diff HEAD` failure shows git's
+  first stderr line. With a terminal or `/dev/null` on stdin, `check`
+  refuses before the index refresh and creates no `.seamark` folder.
 - **MCP server after an upgrade.** A running MCP server keeps the
   binary it started with. When the seamark binary at its launch path
   changes or goes away, each tool reply opens with a note to restart the

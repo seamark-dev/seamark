@@ -137,6 +137,13 @@ submodule form, and git's default rename detection (renames, not
 copies). A git setting such as `color.ui=always`, `diff.external`, or
 `diff.renames` therefore cannot change the diff that `check` reads.
 
+Outside a git work tree, or before the first commit, `git diff HEAD`
+cannot run, so `check` needs a diff on stdin (MCP `check`: the `diff`
+argument). Without one, `check` says which of the two applies, names
+that route, and exits 1. With a terminal or `/dev/null` on stdin, it
+says so before the index refresh, so the refusal writes no `.seamark`
+folder.
+
 A diff with no changed file never reads as a clean allow. Empty output
 of `git diff HEAD` allows with the note `no changed files in git diff
 HEAD; untracked files are not part of it`, in every mode, because a

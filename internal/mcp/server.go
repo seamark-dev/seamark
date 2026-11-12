@@ -566,7 +566,7 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 		if p.Diff == "" {
 			out, err := gate.GitDiffHead(s.root)
 			if err != nil {
-				return toolOutput{}, fmt.Errorf("no diff given and `git diff HEAD` failed: %w", err)
+				return toolOutput{}, fmt.Errorf("%w; %s", err, gate.DiffRouteMCP)
 			}
 
 			p.Diff = out
