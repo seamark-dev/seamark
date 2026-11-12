@@ -783,7 +783,9 @@ func executionFindingsIn(findings *[]Finding, document map[string]any, rules hoo
 // with its own mode. A definition that only can run the gate, or that
 // runs only for the calls that a filter matches, is uncertain.
 func sourceGateHook(s hookSource) GateHook {
-	return GateHook{Path: s.path, Mode: s.mode, Uncertain: uncertainSource(s), Background: s.background != ""}
+	return GateHook{
+		Path: s.path, Mode: s.mode, Uncertain: uncertainSource(s), Background: s.background != "", Filtered: s.filter != "",
+	}
 }
 
 // managedGateHook lists the managed gate hook of a plan in the mode that
@@ -807,6 +809,10 @@ func managedGateHook(path, mode string, sources []hookSource) GateHook {
 	}
 
 	hook.Uncertain = len(managed) > 0 && !slices.ContainsFunc(managed, certainSource)
+
+	// An owned command is otherwise certain, so a filter on every managed
+	// entry is the only cause of the uncertainty.
+	hook.Filtered = len(managed) > 0 && !slices.ContainsFunc(managed, func(s hookSource) bool { return s.filter == "" })
 
 	return hook
 }
@@ -916,6 +922,18 @@ func hookMode(sources []hookSource, keep func(hookSource) bool) string {
 	return mode
 }
 
+// The routes for a definition that may run a seamark hook, where setup
+// cannot tell whether it does. Doctor and the init gate line print the
+// same words, so the reader gets one route for one definition.
+const (
+	// UncertainHookRoute fits a definition that wraps the hook or hands
+	// it to another program.
+	UncertainHookRoute = "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell"
+	// FilteredHookRoute fits a definition with a Claude Code if field,
+	// which runs the hook only for the calls that the field matches.
+	FilteredHookRoute = "remove the `if` field from that definition, or remove the definition, so setup can tell"
+)
+
 // certainSource keeps the sources that certainly run the hook for each
 // call of their tools. An if filter makes the coverage uncertain,
 // because Claude Code runs the hook only for the calls that match.
@@ -992,11 +1010,11 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource
 	case first >= 0:
 		entry.State = StatePartial
 		entry.Detail = fmt.Sprintf("%s may run from %s: %#q", name, sources[first].path, describeCommand(sources[first].command))
-		entry.Action = "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell"
+		entry.Action = UncertainHookRoute
 
 		// A filter is a field of the definition, so the action names it.
 		if sources[first].filter != "" {
-			entry.Action = "remove the `if` field from that definition, or remove the definition, so setup can tell"
+			entry.Action = FilteredHookRoute
 		}
 	case never >= 0:
 		entry.State = StatePartial

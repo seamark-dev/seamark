@@ -242,7 +242,7 @@ func TestClaudeFilteredGateIsUncertain(t *testing.T) {
 
 		assert.Equal(t, []GateHook{
 			{Path: approve.ClaudeSettings, Mode: hooks.ModeWarn, Managed: true},
-			{Path: claudeLocalSettings, Mode: hooks.ModeEnforce, Uncertain: true},
+			{Path: claudeLocalSettings, Mode: hooks.ModeEnforce, Uncertain: true, Filtered: true},
 		}, plan.GateHooks)
 
 		filter := findingsWith(plan.Findings, "with the if filter `Bash(rm *)`")
@@ -258,7 +258,7 @@ func TestClaudeFilteredGateIsUncertain(t *testing.T) {
 
 		plan := planClaude(t, root, ClientSetup{Hooks: true})
 
-		assert.Equal(t, []GateHook{{Path: approve.ClaudeSettings, Mode: hooks.ModeWarn, Managed: true, Uncertain: true}},
+		assert.Equal(t, []GateHook{{Path: approve.ClaudeSettings, Mode: hooks.ModeWarn, Managed: true, Uncertain: true, Filtered: true}},
 			plan.GateHooks)
 		assert.Equal(t, "Bash(git *)", handlerOf(t, plan, approve.ClaudeSettings, "PreToolUse")["if"], "setup keeps the field")
 

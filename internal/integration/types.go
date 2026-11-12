@@ -1030,6 +1030,10 @@ type GateHook struct {
 	// the client runs it in the background, not because it discards its
 	// exit status. The gate line names that cause.
 	Background bool
+	// Filtered is true when an uncertain hook has a Claude Code if field.
+	// The gate line then names the field as the thing to remove, as
+	// doctor does for the same definition.
+	Filtered bool
 }
 
 // ClientPlan is one client's read guards, composed writes, kept

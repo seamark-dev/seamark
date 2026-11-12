@@ -32,6 +32,12 @@ type GateSummary struct {
 	// reader cannot tell whether they do. What they do is unknown, not
 	// nothing.
 	Possible []string
+	// FilteredPossible and UnfilteredPossible count the possible hooks of
+	// a setup run with and without a Claude Code if field. One document
+	// can hold both kinds, so the counts are per hook. The init gate line
+	// picks its route from them. Status leaves them at zero.
+	FilteredPossible   int
+	UnfilteredPossible int
 	// Unreadable lists the hook documents that cannot be read. What
 	// their hooks do is unknown, not nothing.
 	Unreadable []string
@@ -110,7 +116,13 @@ func SummarizeGateHooks(gateHooks []GateHook) GateSummary {
 	var g GateSummary
 
 	for _, hook := range gateHooks {
-		g.addHook(hook.Path, hook.Mode, hook.Uncertain)
+		switch {
+		case !g.addHook(hook.Path, hook.Mode, hook.Uncertain):
+		case hook.Filtered:
+			g.FilteredPossible++
+		default:
+			g.UnfilteredPossible++
+		}
 
 		if hook.Mode == GateModeReportOnly && hook.Background {
 			g.Background = appendOnce(g.Background, hook.Path)
@@ -149,15 +161,18 @@ func (g GateSummary) ReportOnlyCause(labels []string) string {
 // report-only hook is report-only, not possible. The shell discards its
 // exit status, or the client does not wait for it, so the reader knows
 // that it never blocks.
-// "Unknown" would say less than is known.
-func (g *GateSummary) addHook(label, mode string, uncertain bool) {
+// "Unknown" would say less than is known. The result is true when the
+// hook is possible.
+func (g *GateSummary) addHook(label, mode string, uncertain bool) bool {
 	if uncertain && mode != GateModeReportOnly {
 		g.AddPossible(label)
 
-		return
+		return true
 	}
 
 	g.Add(label, mode)
+
+	return false
 }
 
 // SummarizeInspections groups the gate hooks of every client that has a

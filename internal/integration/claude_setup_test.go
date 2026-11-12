@@ -860,7 +860,7 @@ func TestClaudeGateThatMayRunIsPossibleNotInstalled(t *testing.T) {
 		{Path: ".claude/settings.json", Mode: "warn", Managed: true},
 		{Path: ".claude/settings.json", Mode: "enforce", Uncertain: true},
 	}, plan.GateHooks)
-	assert.Equal(t, GateSummary{Warn: []string{".claude/settings.json"}, Possible: []string{".claude/settings.json"}},
+	assert.Equal(t, GateSummary{Warn: []string{".claude/settings.json"}, Possible: []string{".claude/settings.json"}, UnfilteredPossible: 1},
 		SummarizeGateHooks(plan.GateHooks))
 
 	warnings := findingReasons(plan, FindingWarning)
@@ -871,6 +871,11 @@ func TestClaudeGateThatMayRunIsPossibleNotInstalled(t *testing.T) {
 	commands, _ := insp.Entry(CapabilityCommands)
 	assert.Equal(t, StatePartial, commands.State)
 	assert.Equal(t, "gate hook (enforce) may run from .claude/settings.json: `"+printed+"`", commands.Detail)
+
+	// The definition has no if field, so the route asks for a direct run.
+	// The init gate line prints the same words, so the test pins them here.
+	assert.Equal(t, "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell",
+		commands.Action)
 	assert.Empty(t, insp.GateMode, "no definition certainly runs the gate")
 	assert.Equal(t, "enforce", insp.PossibleGateMode)
 	assert.Equal(t, GateSummary{Possible: []string{ClaudeID}}, SummarizeInspections([]Inspection{insp}))

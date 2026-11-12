@@ -744,6 +744,56 @@ func TestInitNamesWhatAFailedWriteLeftUndone(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(root, ".claude", "settings.json"))
 }
 
+func TestInitNamesTheFilterRouteForAFilteredManagedGate(t *testing.T) {
+	// A filter on the managed gate makes the gate line unknown. The
+	// handler already runs the gate directly, so the route removes the
+	// filter, in the words that doctor prints.
+	root := t.TempDir()
+	initClients(t, root, false, false, false, gateModeEnforce, "claude")
+
+	path := filepath.Join(root, ".claude", "settings.json")
+	data := mustRead(t, root, ".claude/settings.json")
+	command := `"command": "/bin/seamark gate --enforce --hook"`
+	require.Contains(t, string(data), command)
+	require.NoError(t, os.WriteFile(path, []byte(strings.Replace(string(data), command, command+`, "if": "Bash(git push*)"`, 1)), 0o644))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", "", false, "", false))
+
+	// The run has no --client, so the note on the unchecked personal file
+	// follows the route.
+	assert.Contains(t, b.String(), "  gate    unknown — .claude/settings.json holds a definition that may run a gate hook, and setup cannot tell what\n"+
+		"          it does; "+integration.FilteredHookRoute+"\n"+uncheckedLocalNote)
+	assert.NotContains(t, b.String(), "run the seamark gate directly")
+}
+
+func TestPrintGateLinePicksTheRouteOfEachPossibleDefinition(t *testing.T) {
+	// One document can hold a filtered and an unfiltered definition, so
+	// the route follows the hooks, not the documents.
+	const unknown = "  gate    unknown — .claude/settings.json holds a definition that may run a gate hook, and setup cannot tell what\n"
+
+	filtered := integration.GateHook{Path: ".claude/settings.json", Mode: gateModeEnforce, Managed: true, Uncertain: true, Filtered: true}
+	wrapped := integration.GateHook{Path: ".claude/settings.json", Mode: gateModeEnforce, Uncertain: true}
+
+	for name, tc := range map[string]struct {
+		hooks []integration.GateHook
+		want  string
+	}{
+		"filtered":   {[]integration.GateHook{filtered}, "          it does; " + integration.FilteredHookRoute + "\n"},
+		"unfiltered": {[]integration.GateHook{wrapped}, "          it does; " + integration.UncertainHookRoute + "\n"},
+		"both kinds": {[]integration.GateHook{filtered, wrapped}, "          it does; for a definition with an `if` field, " +
+			integration.FilteredHookRoute + ";\n          for another, " + integration.UncertainHookRoute + "\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var b testWriter
+			printGateLine(&b, t.TempDir(), gateModeWarn, tc.hooks, nil)
+
+			assert.Contains(t, b.String(), unknown+tc.want)
+			assert.NotContains(t, b.String(), "run the seamark gate directly")
+		})
+	}
+}
+
 // writeLocalGate puts an enforcing seamark gate hook into the user's
 // personal Claude Code settings.
 func writeLocalGate(t *testing.T, root string) string {

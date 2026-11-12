@@ -585,8 +585,7 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		// The plan never holds an unreadable document, so the possible
 		// definitions are the whole reason.
 		fmt.Fprintf(w, "  gate    unknown — %s holds a definition that may run a gate hook, and setup cannot tell what\n"+
-			"          it does; run the seamark gate directly in that definition, or remove it and re-run\n",
-			strings.Join(summary.Possible, ", "))
+			"          it does; %s\n", strings.Join(summary.Possible, ", "), possibleRoute(summary))
 
 		if policyErr != nil {
 			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)
@@ -669,6 +668,22 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 	}
 
 	printGateModeNotes(w, gateMode, gateHooks)
+}
+
+// possibleRoute names the route for the definitions that may run a gate
+// hook, in the words that doctor prints for each one. A filtered handler
+// already runs the gate directly, so it gets the route that removes the
+// filter. A run with both kinds names both routes.
+func possibleRoute(summary integration.GateSummary) string {
+	switch {
+	case summary.FilteredPossible == 0:
+		return integration.UncertainHookRoute
+	case summary.UnfilteredPossible == 0:
+		return integration.FilteredHookRoute
+	default:
+		return "for a definition with an `if` field, " + integration.FilteredHookRoute + ";\n" +
+			"          for another, " + integration.UncertainHookRoute
+	}
 }
 
 // printGateModeNotes names each gate hook that runs without --enforce
