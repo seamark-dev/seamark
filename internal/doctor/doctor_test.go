@@ -682,13 +682,64 @@ func installSkills(t *testing.T, root, mode string) {
 }
 
 func TestRunReportsSkillsNotInstalled(t *testing.T) {
+	const route = "run `seamark init --skills` to add the seamark agent skills"
+
+	// A bare --skills writes .agents/skills only when .agents/ exists, so
+	// the route names Codex only then. The install must then give each
+	// named client its current skills.
+	cases := map[string]struct {
+		agentsDir bool
+		readers   []string
+	}{
+		"without .agents": {false, []string{"Claude Code"}},
+		"with .agents":    {true, []string{"Claude Code", "Codex"}},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			root, dbPath := fixtureRoot(t)
+
+			if tc.agentsDir {
+				require.NoError(t, os.Mkdir(filepath.Join(root, ".agents"), 0o755))
+			}
+
+			skillsLine := byName(Run(root, dbPath, "test"))["skills"]
+
+			assert.Equal(t, StateInfo, skillsLine.State, "opt-in skills are a fact, not a fault")
+			assert.Contains(t, skillsLine.Detail, "not installed")
+			assert.Equal(t, route+" for "+strings.Join(tc.readers, " and "), skillsLine.Fix)
+
+			installSkills(t, root, skills.ModeAuto)
+
+			skillsLine = byName(Run(root, dbPath, "test"))["skills"]
+			assert.Equal(t, StateOK, skillsLine.State, skillsLine.Detail)
+
+			ids := map[string]string{"Claude Code": "claude", "Codex": "codex"}
+			for _, reader := range tc.readers {
+				assert.Contains(t, skillsLine.Detail, ids[reader]+" 3/3 current")
+			}
+		})
+	}
+}
+
+func TestRunNamesTheSkillReadersOfTheRoute(t *testing.T) {
+	const route = "run `seamark init --skills` to add the seamark agent skills"
+
+	// A test client that reads .agents/skills is a reader too.
 	root, dbPath := fixtureRoot(t)
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".agents"), 0o755))
 
-	checks := byName(Run(root, dbPath, "test"))
+	checks := byName(run(inspecttest.Registry(), root, dbPath, "test"))
+	assert.Equal(t, route+" for Claude Code and Codex and Shared Agent", checks["skills"].Fix)
 
-	assert.Equal(t, StateInfo, checks["skills"].State, "opt-in skills are a fact, not a fault")
-	assert.Contains(t, checks["skills"].Detail, "not installed")
-	assert.Contains(t, checks["skills"].Fix, "seamark init --skills")
+	// Without .agents/, the install writes no directory that the test
+	// client reads, so the route names no client.
+	reg, err := integration.NewRegistry(inspecttest.SharedClient())
+	require.NoError(t, err)
+
+	root, dbPath = fixtureRoot(t)
+	checks = byName(run(reg, root, dbPath, "test"))
+	assert.Equal(t, route, checks["skills"].Fix)
 }
 
 func TestRunReportsSkillsInstalled(t *testing.T) {
@@ -724,6 +775,11 @@ func TestRunDetectsStaleSkills(t *testing.T) {
 }
 
 func TestRunIgnoresForeignSkillDir(t *testing.T) {
+	// The conflict route is about a foreign directory, not about the
+	// install. So it keeps the adapter text and names no client.
+	const route = "a directory under a seamark skill name is not seamark's; rename or remove it, " +
+		"then run `seamark init --skills` to install the shipped skill"
+
 	stubAgent(t)
 
 	root, dbPath := fixtureRoot(t)
@@ -740,9 +796,8 @@ func TestRunIgnoresForeignSkillDir(t *testing.T) {
 
 	assert.Equal(t, StateInfo, checks["skills"].State)
 	assert.Contains(t, checks["skills"].Detail, "1 not managed")
-	assert.Contains(t, checks["skills"].Fix, "rename or remove",
+	assert.Equal(t, route, checks["skills"].Fix,
 		"init --skills alone cannot replace the directory, so the fix must say so first")
-	assert.Contains(t, checks["skills"].Fix, "seamark init --skills")
 	assert.Zero(t, r.Warns, "%+v", r.Checks)
 
 	// Beside a complete managed install, the foreign directory is still
@@ -752,7 +807,7 @@ func TestRunIgnoresForeignSkillDir(t *testing.T) {
 	checks = byName(Run(root, dbPath, "test"))
 	assert.Equal(t, StateInfo, checks["skills"].State)
 	assert.Contains(t, checks["skills"].Detail, "codex 3/3 current")
-	assert.Contains(t, checks["skills"].Fix, "not seamark's")
+	assert.Equal(t, route, checks["skills"].Fix)
 }
 
 func TestRunWarnsOnUnreadableSkillDir(t *testing.T) {

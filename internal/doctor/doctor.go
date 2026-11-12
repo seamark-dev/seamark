@@ -99,7 +99,7 @@ func run(reg *integration.Registry, root, dbPath, version string) *Report {
 	checkAgent(r, reg, root)
 	checkGH(r)
 	checkMCP(r, inspections)
-	checkSkills(r, reg.InspectSkills(root), inspections)
+	checkSkills(r, reg.InspectSkills(root), inspections, autoSkillReaders(reg.Clients(), root))
 	checkApprovals(r, inspections)
 	checkClients(r, inspections)
 	checkGitignore(r, root)
@@ -395,8 +395,10 @@ func checkMCP(r *Report, inspections []integration.Inspection) {
 // load text that no longer matches this binary's tool surface. A
 // directory under a seamark skill name that seamark does not own is
 // named and never touched. The verdict comes from the per-client
-// entries of the inspection, the action from the same entries.
-func checkSkills(r *Report, states []skills.ClientState, inspections []integration.Inspection) {
+// entries of the inspection, the action from the same entries. The
+// install route names readers: the clients that a bare `seamark init
+// --skills` installs for.
+func checkSkills(r *Report, states []skills.ClientState, inspections []integration.Inspection, readers []string) {
 	detail := skills.Details(states)
 	worst := integration.StateAbsent
 	action := ""
@@ -429,20 +431,35 @@ func checkSkills(r *Report, states []skills.ClientState, inspections []integrati
 		// --skills` never replaces it, so the fix must say what to do first.
 		r.add("skills", StateInfo, detail, action)
 	case integration.StateAbsent:
-		r.add("skills", StateInfo, "agent skills not installed ("+detail+")",
-			action+" for "+strings.Join(clientNames(inspections), " and "))
+		// The route names no client when no client reads a directory
+		// that the install writes.
+		if action != "" && len(readers) > 0 {
+			action += " for " + strings.Join(readers, " and ")
+		}
+
+		r.add("skills", StateInfo, "agent skills not installed ("+detail+")", action)
 	default:
 		r.add("skills", StateOK, detail, "")
 	}
 }
 
-// clientNames lists the display names of the clients that read skills.
-func clientNames(inspections []integration.Inspection) []string {
+// autoSkillReaders lists, in registry order, the display names of the
+// clients that read a directory of skills.AutoTargets. A bare `seamark
+// init --skills` writes only those directories, so the route names only
+// those clients. The rule stays in skills.AutoTargets, which also feeds
+// the install and the init hint.
+func autoSkillReaders(clients []integration.Client, root string) []string {
+	targets := skills.AutoTargets(root)
+
 	var names []string
 
-	for _, insp := range inspections {
-		if entry, ok := insp.Entry(integration.CapabilitySkills); ok && entry.Supported {
-			names = append(names, insp.Name)
+	for _, c := range clients {
+		reads := slices.ContainsFunc(targets, func(t skills.Target) bool {
+			return slices.Contains(c.SkillDirs, t.Dir)
+		})
+
+		if reads {
+			names = append(names, c.Name)
 		}
 	}
 

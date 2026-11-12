@@ -330,6 +330,10 @@ model-boundary delivery.
   a client line and of the hooks line, as status does, not only the
   first. The JSON `fix` field stays one string, with the actions joined
   by `; `.
+- **Doctor skills route.** The route to install the agent skills names
+  only the clients that a bare `seamark init --skills` installs for:
+  Claude Code, and Codex only when the repository has an `.agents/`
+  directory.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
