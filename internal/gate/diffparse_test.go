@@ -408,6 +408,97 @@ func TestEvalDiffAttributesAPythonTailBelowABlankLine(t *testing.T) {
 	}
 }
 
+// runnerFile is tools/runner.py of TestEvalDiffCommentEditsNextToAFunction.
+// clean and purge reach fs:write through shutil.rmtree.
+//
+//	 1 import shutil
+//	 2
+//	 3
+//	 4 class Runner:
+//	 5     def clean(self, p):
+//	 6         shutil.rmtree(p)
+//	 7
+//	 8     # name returns the runner name.
+//	 9     def name(self):
+//	10         return "runner"
+//	11
+//	12
+//	13 def purge(p):
+//	14     shutil.rmtree(p)
+//	15 # helper is a plain function.
+//	16 def helper():
+//	17     return 1
+//	18
+//	19
+//	20 # tidy is a plain function.
+//	21 def tidy():
+//	22     return 2
+const runnerFile = "import shutil\n\n\nclass Runner:\n    def clean(self, p):\n        shutil.rmtree(p)\n\n" +
+	"    # name returns the runner name.\n    def name(self):\n        return \"runner\"\n\n\n" +
+	"def purge(p):\n    shutil.rmtree(p)\n# helper is a plain function.\ndef helper():\n    return 1\n\n\n" +
+	"# tidy is a plain function.\ndef tidy():\n    return 2\n"
+
+func TestEvalDiffCommentEditsNextToAFunction(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{"tools/runner.py": runnerFile})
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	const header = "diff --git a/tools/runner.py b/tools/runner.py\n--- a/tools/runner.py\n+++ b/tools/runner.py\n"
+
+	note := "1 of 1 changed files have changes outside any indexed symbol (tools/runner.py) — " +
+		"their effect reach is unknown, not clean"
+
+	// Git writes these hunks for three comment edits. Only a column-0
+	// comment after a blank line counts for no symbol. The other two
+	// count for the function above them, which reaches fs:write.
+	cases := []struct {
+		name    string
+		diff    string
+		effects []string
+		notes   []string
+	}{
+		{
+			name: "an indented comment below a blank line",
+			diff: header + "@@ -5,7 +5,7 @@\n" +
+				"     def clean(self, p):\n         shutil.rmtree(p)\n \n" +
+				"-    # name returns a name.\n+    # name returns the runner name.\n" +
+				"     def name(self):\n         return \"runner\"\n \n",
+			effects: []string{"fs:write"},
+		},
+		{
+			name: "a column-0 comment directly under a function",
+			diff: header + "@@ -12,7 +12,7 @@\n" +
+				" \n def purge(p):\n     shutil.rmtree(p)\n" +
+				"-# helper is a function.\n+# helper is a plain function.\n" +
+				" def helper():\n     return 1\n \n",
+			effects: []string{"fs:write"},
+		},
+		{
+			name: "a column-0 comment after a blank line",
+			diff: header + "@@ -17,6 +17,6 @@\n" +
+				"     return 1\n \n \n" +
+				"-# tidy is a function.\n+# tidy is a plain function.\n" +
+				" def tidy():\n     return 2\n",
+			effects: []string{},
+			notes:   []string{note},
+		},
+	}
+
+	for _, c := range cases {
+		d, err := EvalDiff(p, st, c.diff, SourceStdin)
+		require.NoError(t, err, c.name)
+
+		effects := d.Effects
+		if effects == nil {
+			effects = []string{}
+		}
+
+		assert.Equal(t, c.effects, effects, c.name)
+		assert.Equal(t, c.notes, d.Notes, c.name)
+	}
+}
+
 func TestEvalDiffDeletionOfAFileStillInTheTree(t *testing.T) {
 	eval := pyFixture(t)
 

@@ -202,10 +202,17 @@ model-boundary delivery.
   untracked files are not part of it. Input that names no changed file
   gets a note in warn mode and blocks with exit 2 under enforcement.
 - **Only changed lines count in `check`.** The context lines of a hunk
-  no longer touch the symbols around an edit, so verdicts can change: a
-  comment edit next to an effectful function no longer reaches its
-  effects. An added or removed line whose text starts with `++ ` or
-  `-- ` no longer reads as a file header.
+  no longer touch the symbols around an edit, so verdicts can change. An
+  added line counts only for the symbol that holds it. Removed lines,
+  also replaced ones, count as the line directly above them, and a pure
+  deletion also as the line below. When the first removed line with text
+  is indented, the nearest line with text above counts too, as at the end
+  of a Python function. So a replaced column-0 comment after a blank
+  line, such as a Go doc comment, no longer reaches the function above
+  it. An indented comment, or a comment directly under a function, still
+  reaches that function. A change that counts for no symbol gets the
+  unknown-reach note. An added or removed line whose text starts with
+  `++ ` or `-- ` no longer reads as a file header.
 - **The unknown-reach note for each change.** `check` and MCP `check`
   decide the note per change group: the added and removed lines of a
   hunk with no context line between them. A file gets the note, and
