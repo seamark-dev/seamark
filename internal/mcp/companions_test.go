@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +15,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/report"
 )
 
-func TestToolsNameNoGonePartner(t *testing.T) {
+func TestToolsKeepLivePartnersOfGoneFiles(t *testing.T) {
 	// The server runs git itself, so the user's git configuration must
 	// not change the diff that check reads.
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
@@ -63,35 +64,110 @@ func TestToolsNameNoGonePartner(t *testing.T) {
 	}
 
 	// One partner is deleted and one renamed, neither committed. The
-	// edit of pkg/a.go puts it in the diff, so check has an anchor.
+	// edit of pkg/a.go puts it in the workspace diff too.
 	require.NoError(t, os.Remove(filepath.Join(root, "pkg", "gone.go")))
 	git("mv", "pkg/moved.go", "pkg/renamed.go")
 	write("pkg/a.go", "package pkg\n\nfunc a4() {}\n")
 
+	// A diff that deletes only pkg/gone.go, as an agent sends it.
+	cmd := exec.Command("git", "diff", "HEAD", "--", "pkg/gone.go")
+	cmd.Dir = root
+	deletion, err := cmd.Output()
+	require.NoError(t, err)
+	require.Contains(t, string(deletion), "deleted file mode")
+
+	checkArgs, err := json.Marshal(map[string]string{"diff": string(deletion)})
+	require.NoError(t, err)
+
+	call := func(id int, name, args string) string {
+		return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, id, name, args)
+	}
+
 	resps := serve(t, root,
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test"}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"why","arguments":{"query":"pkg/a.go"}}}`,
-		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"change_set","arguments":{"files":["pkg/a.go"]}}}`,
-		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"check","arguments":{}}}`,
+		call(2, "why", `{"query":"pkg/gone.go"}`),
+		call(3, "change_set", `{"files":["pkg/gone.go"]}`),
+		call(4, "check", string(checkArgs)),
+		call(5, "why", `{"query":"pkg/a.go"}`),
+		call(6, "change_set", `{"files":["pkg/a.go"]}`),
+		call(7, "check", `{}`),
 	)
 
 	// Each tool call refreshes the index first, so every reply already
-	// reads the pairs of the current workspace.
-	for _, id := range []string{"2", "3", "4"} {
+	// reads the gone list of the current workspace. The deleted file
+	// keeps its live partners, and no reply names a gone partner.
+	for id, want := range map[string][]string{
+		"2": {"pkg/a.go", "pkg/live.go"},
+		"3": {"pkg/a.go", "pkg/live.go"},
+		"4": {"pkg/a.go", "pkg/live.go"},
+		"5": {"pkg/live.go"},
+		"6": {"pkg/live.go"},
+		"7": {"pkg/live.go"},
+	} {
 		text, isErr := toolText(t, resps[id])
 		require.False(t, isErr, text)
 
-		// The check verdict names the deleted file as a changed file,
-		// which is true, so only its companion list is read.
-		if id == "4" {
-			start := strings.Index(text, report.CompanionsTitle)
-			require.NotEqual(t, -1, start, text)
-			text = text[start:]
+		names := partnerNames(text)
+
+		for _, f := range want {
+			assert.Contains(t, names, f, "reply %s names the live partner %s\n%s", id, f, text)
 		}
 
-		assert.Contains(t, text, "pkg/live.go", "reply %s still names the live partner", id)
-		assert.NotContains(t, text, "pkg/gone.go", "reply %s names no deleted partner", id)
-		assert.NotContains(t, text, "pkg/moved.go", "reply %s names no renamed-away partner", id)
+		assert.NotContains(t, names, "pkg/gone.go", "reply %s names no deleted partner", id)
+		assert.NotContains(t, names, "pkg/moved.go", "reply %s names no renamed-away partner", id)
+		assert.NotContains(t, text, "pkg/moved.go", "reply %s never names the renamed-away file", id)
 	}
+
+	// The deleted file has live partners, so check lists them and prints
+	// no status line in place of the list.
+	for _, id := range []string{"4", "7"} {
+		text, _ := toolText(t, resps[id])
+
+		for _, line := range strings.Split(text, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				assert.NotEqual(t, "companions", fields[0], "reply %s: %s", id, line)
+			}
+		}
+	}
+}
+
+// partnerNames returns the partner paths of a tool reply. It reads the
+// "usually changed with" section of why, where the path is the fifth
+// field, and the closing companion list of change_set and check, where
+// the path is the first field. Reason lines are indented further, so
+// they are skipped.
+func partnerNames(text string) []string {
+	var names []string
+
+	section := ""
+
+	for _, line := range strings.Split(text, "\n") {
+		switch {
+		case strings.HasPrefix(line, "usually changed with"):
+			section = "why"
+
+			continue
+		case strings.HasPrefix(line, report.CompanionsTitle):
+			section = "companions"
+
+			continue
+		case !strings.HasPrefix(line, "  "):
+			section = ""
+
+			continue
+		}
+
+		fields := strings.Fields(line)
+
+		switch {
+		case section == "why" && len(fields) >= 5:
+			names = append(names, fields[4])
+		case section == "companions" && !strings.HasPrefix(line, "    ") && len(fields) > 0:
+			names = append(names, fields[0])
+		}
+	}
+
+	return names
 }

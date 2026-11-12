@@ -112,9 +112,10 @@ model-boundary delivery.
 - **Multi-line pin notes.** A line break inside a pin note reads as a
   space on one-line surfaces, for example the edit hook and
   `lessons --prepare`, so two lines no longer run together.
-- **Gone co-change partners.** Partner lists, the orient hubs, and the
-  pair count leave out deleted and renamed-away files from the next
-  index run. `seamark index --force` applies this at once to an older
+- **Gone co-change partners.** Partner lists and the orient hubs leave
+  out deleted and renamed-away files from the next index run. A deleted
+  file keeps its live partners, so `check` lists them for a diff that
+  deletes it. `seamark index --force` applies this at once to an older
   index.
 - **Check says why no companion is listed.** `seamark check`, `check
   --lessons`, and the MCP `check` tool print one `companions` line when

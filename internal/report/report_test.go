@@ -962,20 +962,39 @@ func TestCheckCompanionsListsOnlyFilesAbsentFromTheDiff(t *testing.T) {
 func TestCheckCompanionsSaysWhyNoneIsListed(t *testing.T) {
 	st, root := seedCompanions(t)
 
-	// scripts/task.py has a symbol but no co-change pair. pkg/gone.go is
-	// a deleted file: its commits stay, but the index stores no pair for
-	// a file that the workspace no longer has.
+	// scripts/task.py has a symbol but no co-change pair. pkg/gone.go and
+	// pkg/old.go are gone from the workspace: their pairs stay stored, and
+	// the gone list keeps them out of every partner list.
 	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
-		sym := model.Symbol{FQN: "scripts/task.run", Name: "run", Kind: model.KindFunction,
-			File: "scripts/task.py", Span: model.Span{StartLine: 1, EndLine: 3}}
-		if err := tx.InsertSymbol(&sym); err != nil {
-			return err
+		for _, sym := range []model.Symbol{
+			{FQN: "scripts/task.run", Name: "run", Kind: model.KindFunction,
+				File: "scripts/task.py", Span: model.Span{StartLine: 1, EndLine: 3}},
+			{FQN: "pkg.Live", Name: "Live", Kind: model.KindFunction,
+				File: "pkg/live.go", Span: model.Span{StartLine: 1, EndLine: 3}},
+		} {
+			if err := tx.InsertSymbol(&sym); err != nil {
+				return err
+			}
 		}
 
-		d := model.Decision{Kind: model.DecisionCommit, Ref: strings.Repeat("d", 40), TS: 100,
-			Title: "Add the gone helper", Files: []string{"pkg/gone.go"}}
+		for i, f := range []string{"pkg/gone.go", "pkg/old.go"} {
+			d := model.Decision{Kind: model.DecisionCommit, Ref: strings.Repeat(fmt.Sprint(i), 40), TS: 100,
+				Title: "Add the gone helper", Files: []string{f}}
+			if err := tx.InsertDecision(&d); err != nil {
+				return err
+			}
+		}
 
-		return tx.InsertDecision(&d)
+		for _, p := range []model.CoChange{
+			{FileA: "pkg/gone.go", FileB: "pkg/live.go", Together: 3, Total: 4, Lift: 2},
+			{FileA: "pkg/gone.go", FileB: "pkg/old.go", Together: 3, Total: 4, Lift: 2},
+		} {
+			if err := tx.InsertCoChange(p); err != nil {
+				return err
+			}
+		}
+
+		return tx.SetGoneFiles([]string{"pkg/gone.go", "pkg/old.go"})
 	}))
 
 	none := "\ncompanions  none (the index holds no co-change partner for the diff's files)\n"
@@ -985,10 +1004,24 @@ func TestCheckCompanionsSaysWhyNoneIsListed(t *testing.T) {
 	assert.Equal(t, none, b.String())
 	assert.NotContains(t, b.String(), CompanionsTitle)
 
-	// History can show partners of the deleted file, but the index keeps
-	// none of them. The line must not claim that history shows none.
+	// A deleted diff file is an anchor with its live partners, and a gone
+	// partner stays out.
 	b.Reset()
 	CheckCompanions(&b, st, root, []string{"pkg/gone.go"})
+	assert.Contains(t, b.String(), CompanionsTitle)
+	assert.Contains(t, b.String(), "pkg/live.go")
+	assert.NotContains(t, b.String(), "pkg/old.go")
+
+	// A gone file never counts as a partner in the diff.
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"pkg/gone.go", "pkg/live.go"})
+	assert.Equal(t, "\ncompanions  none outside this diff (co-change partners in the diff: 1)\n", b.String())
+
+	// History can show partners of a gone file whose partners are all
+	// gone, but no live partner exists. The line must not claim that
+	// history shows none.
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"pkg/old.go"})
 	assert.Equal(t, none, b.String())
 	assert.NotContains(t, b.String(), "history")
 

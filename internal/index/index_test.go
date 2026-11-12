@@ -3,11 +3,14 @@ package index
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2161,6 +2164,35 @@ func partnerFiles(t *testing.T, dbPath, file string) map[string]store.CoChangePa
 	return byFile
 }
 
+// goneList returns the paths of the stored gone list of the database at
+// dbPath. The list holds a hex key for each path, so the helper decodes
+// the keys.
+func goneList(t *testing.T, dbPath string) []string {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	stored, err := st.GetMeta(store.MetaGoneFiles)
+	require.NoError(t, err)
+
+	var keys []string
+	require.NoError(t, json.Unmarshal([]byte(stored), &keys))
+
+	paths := make([]string, 0, len(keys))
+
+	for _, k := range keys {
+		b, err := hex.DecodeString(k)
+		require.NoError(t, err)
+
+		paths = append(paths, string(b))
+	}
+
+	return paths
+}
+
 // hotFileNames lists the files that the orient hubs read from the
 // database at dbPath.
 func hotFileNames(t *testing.T, dbPath string) []string {
@@ -2182,7 +2214,7 @@ func hotFileNames(t *testing.T, dbPath string) []string {
 	return names
 }
 
-func TestIndexDropsCoChangePairsOfGoneFiles(t *testing.T) {
+func TestIndexKeepsLivePartnersOfGoneFiles(t *testing.T) {
 	root := t.TempDir()
 
 	// Every partner changes with pkg/a.go in three commits. Each later
@@ -2199,6 +2231,7 @@ func TestIndexDropsCoChangePairsOfGoneFiles(t *testing.T) {
 		"pkg/gen.go",               // generated, so not parsed
 		"README.md",                // no parser
 		"pkg/sparse.go",            // skip-worktree, missing from disk
+		"AUTHORS.old",              // deleted in a commit, sorts before every partner
 	}
 
 	body := func(file string, v int) string {
@@ -2234,7 +2267,7 @@ func TestIndexDropsCoChangePairsOfGoneFiles(t *testing.T) {
 		gitIn(t, root, "commit", "-q", "-m", fmt.Sprintf("notes %d", v))
 	}
 
-	gitIn(t, root, "rm", "-q", "pkg/committed.go")
+	gitIn(t, root, "rm", "-q", "pkg/committed.go", "AUTHORS.old")
 	gitIn(t, root, "mv", "pkg/cmoved.go", "pkg/crenamed.go")
 	gitIn(t, root, "commit", "-q", "-m", "remove and rename")
 
@@ -2246,6 +2279,20 @@ func TestIndexDropsCoChangePairsOfGoneFiles(t *testing.T) {
 	require.Contains(t, before, "pkg/live.go")
 	assert.NotContains(t, before, "pkg/committed.go", "a file deleted in a commit is no partner")
 	assert.NotContains(t, before, "pkg/cmoved.go", "the old path of a committed rename is no partner")
+
+	// Mining sorts the files of a commit, so a path that sorts first is
+	// only ever the first file of its pairs.
+	assert.NotContains(t, before, "AUTHORS.old", "a gone file that sorts first is no partner")
+	assert.Equal(t, []string{"AUTHORS.old", "pkg/cmoved.go", "pkg/committed.go"}, goneList(t, first.DBPath))
+
+	// The partners that stay in the workspace through every step, with
+	// their run-1 numbers as seen from each other file.
+	live := []string{"pkg/a.go", "pkg/live.go", "pkg/testdata/a.golden", "pkg/gen.go", "README.md", "pkg/sparse.go"}
+	firstPartners := map[string]map[string]store.CoChangePartner{}
+
+	for _, f := range append(slices.Clone(live), partners...) {
+		firstPartners[f] = partnerFiles(t, first.DBPath, f)
+	}
 
 	// Now the working tree removes files in every uncommitted way.
 	require.NoError(t, os.Remove(filepath.Join(root, "pkg", "unstaged.go")))
@@ -2259,24 +2306,35 @@ func TestIndexDropsCoChangePairsOfGoneFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	// The refresh that tools run mines history again and reuses the parse
-	// cache, so no --force is needed for the pairs to change.
+	// cache, so no --force is needed for the gone list to change.
 	assert.False(t, second.Skipped)
 	assert.True(t, second.HistoryMined)
 	assert.Less(t, second.FilesReparsed, second.FilesParsed)
 
-	after := partnerFiles(t, second.DBPath, "pkg/a.go")
-
 	// The deletion rule ignores skipped directories, so a deleted golden
-	// file leaves too, although the index never parses it.
+	// file is gone too, although the index never parses it.
 	goneFiles := []string{
-		"pkg/unstaged.go", "pkg/staged.go", "pkg/moved.go", "pkg/committed.go", "pkg/cmoved.go",
-		"pkg/testdata/gone.golden",
+		"AUTHORS.old", "pkg/cmoved.go", "pkg/committed.go", "pkg/moved.go", "pkg/staged.go",
+		"pkg/testdata/gone.golden", "pkg/unstaged.go",
 	}
+
+	assert.Equal(t, goneFiles, goneList(t, second.DBPath))
+
+	after := partnerFiles(t, second.DBPath, "pkg/a.go")
+	hubs := hotFileNames(t, second.DBPath)
 
 	for _, gone := range goneFiles {
 		assert.NotContains(t, after, gone, "%s is gone from the workspace", gone)
-		assert.NotContains(t, hotFileNames(t, second.DBPath), gone, "the orient hubs leave out %s", gone)
-		assert.Empty(t, partnerFiles(t, second.DBPath, gone), "%s keeps no pair of its own", gone)
+		assert.NotContains(t, hubs, gone, "the orient hubs leave out %s", gone)
+
+		// A gone file keeps exactly its live partners, with the numbers
+		// of run 1, because an agent that deletes it still needs them.
+		want := map[string]store.CoChangePartner{}
+		for _, f := range live {
+			want[f] = firstPartners[gone][f]
+		}
+
+		assert.Equal(t, want, partnerFiles(t, second.DBPath, gone), "%s keeps its live partners", gone)
 	}
 
 	// Presence is a git question, not a parse question.
@@ -2284,7 +2342,30 @@ func TestIndexDropsCoChangePairsOfGoneFiles(t *testing.T) {
 		assert.Contains(t, after, kept, "%s is still in the workspace", kept)
 	}
 
-	// The filter runs after mining, so the gone files still count in the
-	// numbers of a surviving pair.
+	// The filter runs at read time, so the gone files still count in the
+	// numbers of a surviving pair, and the pair count stays the same.
 	assert.Equal(t, before["pkg/live.go"], after["pkg/live.go"])
+	assert.Equal(t, first.Stats.CoChanges, second.Stats.CoChanges)
+
+	// A full refresh gives the same result as the incremental one.
+	third, err := Run(Options{Root: root, Force: true, Logf: t.Logf})
+	require.NoError(t, err)
+	assert.Equal(t, goneList(t, second.DBPath), goneList(t, third.DBPath))
+	assert.Equal(t, second.Stats.CoChanges, third.Stats.CoChanges)
+
+	for _, f := range append(slices.Clone(live), goneFiles...) {
+		assert.Equal(t, partnerFiles(t, second.DBPath, f), partnerFiles(t, third.DBPath, f), "partners of %s", f)
+	}
+
+	assert.Equal(t, hubs, hotFileNames(t, third.DBPath))
+
+	// A file that comes back stops being gone.
+	gitIn(t, root, "checkout", "--", "pkg/unstaged.go")
+
+	fourth, err := Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+	assert.False(t, fourth.Skipped)
+	assert.NotContains(t, goneList(t, fourth.DBPath), "pkg/unstaged.go")
+	assert.Equal(t, before["pkg/unstaged.go"], partnerFiles(t, fourth.DBPath, "pkg/a.go")["pkg/unstaged.go"])
+	assert.Equal(t, first.Stats.CoChanges, fourth.Stats.CoChanges)
 }

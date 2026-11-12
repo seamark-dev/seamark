@@ -360,18 +360,18 @@ func Run(opts Options) (*Summary, error) {
 			}
 		}
 
-		// History names files that the workspace no longer has. A
-		// partner that cannot be opened misleads the agent, so a pair is
-		// stored only when both files are present. The pairs come from
-		// mining, so lift still counts the commits of the gone files.
+		// Every mined pair is stored, also a pair with a gone side. An
+		// agent that deletes a file still needs its live partners.
 		for _, p := range pairs {
-			if !present[p.FileA] || !present[p.FileB] {
-				continue
-			}
-
 			if err := tx.InsertCoChange(p); err != nil {
 				return err
 			}
+		}
+
+		// The gone list is written in the same transaction as the pairs,
+		// so the reads that leave out gone partners always match them.
+		if err := tx.SetGoneFiles(goneFiles(pairs, present)); err != nil {
+			return err
 		}
 
 		// Persist the parse cache in the same transaction as the graph, so
@@ -1305,7 +1305,7 @@ var skipDirs = map[string]bool{
 // path.
 //
 // present holds every path that git lists and does not show as deleted,
-// parsed or not. The co-change pairs are kept to these paths. A walk
+// parsed or not. A pair path outside this set is a gone path. A walk
 // returns no present set, because a workspace without git has no pairs.
 func listFiles(root string) (files, deleted []string, present map[string]bool, err error) {
 	if history.IsRepo(root) {
@@ -1341,6 +1341,24 @@ func listFiles(root string) (files, deleted []string, present map[string]bool, e
 	}
 
 	return files, nil, nil, nil
+}
+
+// goneFiles returns the paths that a mined pair names and present does
+// not hold. History still names deleted and renamed-away files, and an
+// agent cannot open them, so the co-change reads leave them out as
+// partners and hubs. A walk has no pairs, so it gives no gone path.
+func goneFiles(pairs []model.CoChange, present map[string]bool) []string {
+	var gone []string
+
+	for _, p := range pairs {
+		for _, f := range []string{p.FileA, p.FileB} {
+			if !present[f] {
+				gone = append(gone, f)
+			}
+		}
+	}
+
+	return gone
 }
 
 // gitFiles lists the workspace through git. The cached list keeps a

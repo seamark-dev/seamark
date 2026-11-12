@@ -182,11 +182,12 @@ table in [Data flow](data-flow.md).
   tags conservatively as `db:write`.
 - Co-change needs history: on a young repo the empirical layer is thin
   until commits accumulate.
-- A deleted or renamed-away file leaves the partner lists at the next
-  index run, and its commits still count in lift. It also loses its own
-  partners, so `why`, `change_set`, and `check` suggest no partner for
-  it. A renamed file starts new history at its new path, so it has no
-  partners until commits accumulate there.
+- From the next index run, a deleted or renamed-away file is never
+  named as a partner or a hub, and its commits still count in lift. It
+  keeps its live partners, so `why`, `change_set`, and `check` suggest
+  them for a change that deletes it. A file that comes back is a partner
+  again at the next index run. A renamed file starts new history at its
+  new path, so it has no partners until commits accumulate there.
 - Seamark is a navigator, not an oracle. It tells you where to look and
   what usually travels together; "usually changes with" is empirical
   evidence, never a guarantee that _your_ edit is safe or complete. For

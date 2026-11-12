@@ -2,6 +2,8 @@ package store
 
 import (
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -120,6 +122,159 @@ func TestCoChangePartnersEitherOrientation(t *testing.T) {
 	partners, err := s.CoChangePartners("pkg/a/a.go", 4.0, 10)
 	require.NoError(t, err)
 	assert.Empty(t, partners, "minLift must filter chance-level pairs")
+}
+
+// partnerNames lists the partners of file at lift 1 or more, at most
+// limit of them, in read order.
+func partnerNames(t *testing.T, s *Store, file string, limit int) []string {
+	t.Helper()
+
+	partners, err := s.CoChangePartners(file, 1.0, limit)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(partners))
+	for _, p := range partners {
+		names = append(names, p.File)
+	}
+
+	return names
+}
+
+// storedGoneFiles returns the paths of the stored gone list of s. The
+// list holds a hex key for each path, so the helper decodes the keys.
+func storedGoneFiles(t *testing.T, s *Store) []string {
+	t.Helper()
+
+	stored, err := s.GetMeta(MetaGoneFiles)
+	require.NoError(t, err)
+
+	var keys []string
+	require.NoError(t, json.Unmarshal([]byte(stored), &keys))
+
+	paths := make([]string, 0, len(keys))
+
+	for _, k := range keys {
+		b, err := hex.DecodeString(k)
+		require.NoError(t, err)
+
+		paths = append(paths, string(b))
+	}
+
+	return paths
+}
+
+func TestCoChangeReadsLeaveOutGoneFiles(t *testing.T) {
+	s := openTestStore(t)
+
+	// The pair a-gone is the strongest, so a limit of one shows whether
+	// the filter runs before LIMIT. The pair a-c is below chance level,
+	// so it counts in no hub.
+	pairs := []model.CoChange{
+		{FileA: "a", FileB: "b", Together: 2, Total: 4, Lift: 1.5},
+		{FileA: "a", FileB: "c", Together: 1, Total: 6, Lift: 0.5},
+		{FileA: "a", FileB: "gone", Together: 5, Total: 6, Lift: 3.0},
+		{FileA: "b", FileB: "gone", Together: 3, Total: 5, Lift: 2.0},
+		{FileA: "gone", FileB: "old", Together: 4, Total: 5, Lift: 2.5},
+	}
+
+	seedPairs := func(gone []string) {
+		t.Helper()
+
+		require.NoError(t, s.Rebuild(func(tx *Tx) error {
+			for _, p := range pairs {
+				if err := tx.InsertCoChange(p); err != nil {
+					return err
+				}
+			}
+
+			if gone == nil {
+				return nil
+			}
+
+			return tx.SetGoneFiles(gone)
+		}))
+	}
+
+	seedPairs([]string{"old", "gone", "", "gone"})
+
+	assert.Equal(t, []string{"gone", "old"}, storedGoneFiles(t, s), "the list is sorted, distinct, and has no empty path")
+
+	assert.Equal(t, []string{"b"}, partnerNames(t, s, "a", 1), "limit counts live partners only")
+	assert.Equal(t, []string{"a", "b"}, partnerNames(t, s, "gone", 10), "a gone file keeps its live partners")
+	assert.Empty(t, partnerNames(t, s, "old", 10), "a gone file is never a partner")
+
+	hot, err := s.HotFiles(10)
+	require.NoError(t, err)
+	assert.Equal(t, []HotFile{
+		{File: "a", Partners: 1, MaxLift: 1.5},
+		{File: "b", Partners: 1, MaxLift: 1.5},
+	}, hot, "a hub counts live pairs only, and a gone file is no hub")
+
+	stats, err := s.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, len(pairs), stats.CoChanges, "the pair count says what the index stores")
+
+	// A Rebuild that writes pairs and no list leaves no list from the
+	// earlier run, so nothing is filtered.
+	seedPairs(nil)
+
+	stored, err := s.GetMeta(MetaGoneFiles)
+	require.NoError(t, err)
+	assert.Empty(t, stored)
+	assert.Equal(t, []string{"gone", "b"}, partnerNames(t, s, "a", 10), "no list reads as an empty list")
+
+	seedPairs([]string{})
+
+	stored, err = s.GetMeta(MetaGoneFiles)
+	require.NoError(t, err)
+	assert.Equal(t, "[]", stored)
+
+	// A damaged list fails both reads, so it never reads as "nothing is
+	// gone".
+	require.NoError(t, s.SetMeta(MetaGoneFiles, "not json"))
+
+	_, err = s.CoChangePartners("a", 1.0, 10)
+	require.Error(t, err)
+
+	_, err = s.HotFiles(10)
+	require.Error(t, err)
+}
+
+func TestGoneListKeepsThePathBytes(t *testing.T) {
+	s := openTestStore(t)
+
+	// History keeps the raw bytes of a path, and a name from an old Linux
+	// repository can hold bytes that are not valid UTF-8. JSON text
+	// replaces such bytes, so both paths would read as one wrong name.
+	e9, ff := "pkg/caf\xe9.go", "pkg/caf\xff.go"
+
+	require.NoError(t, s.Rebuild(func(tx *Tx) error {
+		for _, p := range []model.CoChange{
+			{FileA: "pkg/a.go", FileB: e9, Together: 3, Total: 7, Lift: 1.8},
+			{FileA: "pkg/a.go", FileB: ff, Together: 3, Total: 7, Lift: 1.8},
+			{FileA: "pkg/a.go", FileB: "pkg/live.go", Together: 3, Total: 7, Lift: 2.3},
+			{FileA: e9, FileB: "pkg/live.go", Together: 2, Total: 7, Lift: 1.6},
+			{FileA: ff, FileB: "pkg/live.go", Together: 2, Total: 7, Lift: 1.6},
+		} {
+			if err := tx.InsertCoChange(p); err != nil {
+				return err
+			}
+		}
+
+		return tx.SetGoneFiles([]string{ff, e9})
+	}))
+
+	assert.Equal(t, []string{"pkg/live.go"}, partnerNames(t, s, "pkg/a.go", 10), "a gone path is never a partner")
+	assert.Equal(t, []string{"pkg/a.go", "pkg/live.go"}, partnerNames(t, s, e9, 10), "a gone path keeps its live partners")
+
+	hot, err := s.HotFiles(10)
+	require.NoError(t, err)
+	assert.Equal(t, []HotFile{
+		{File: "pkg/a.go", Partners: 1, MaxLift: 2.3},
+		{File: "pkg/live.go", Partners: 1, MaxLift: 2.3},
+	}, hot, "a gone path is no hub")
+
+	assert.Equal(t, []string{e9, ff}, storedGoneFiles(t, s), "each stored path keeps its own bytes")
 }
 
 func TestDecisionsForFile(t *testing.T) {
