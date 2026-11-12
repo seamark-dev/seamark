@@ -195,7 +195,9 @@ model-boundary delivery.
   then a `+N more` line. `--json` and `structuredContent` still list every
   omission.
 - **Unreadable hook documents.** Status and the console read
-  `unreadable`, as doctor does, not `off`.
+  `unreadable`, as doctor does, not `off`. Doctor, status, and the
+  console print the word once: `hooks unreadable (<reason>)`, not
+  `hooks unreadable (unreadable (<reason>))`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`
   works; otherwise Pins gives the reason and a next action.
 - **`change_set` keeps its report in every client.** A client that shows

@@ -1384,9 +1384,11 @@ func (i Inspection) DescribeHooks() string {
 		return "no hook support"
 	}
 
+	// The detail of an unreadable entry already starts with the word
+	// "unreadable", so the line adds only "hooks".
 	for _, entry := range []CapabilityInspection{edits, commands} {
 		if entry.State == StateUnreadable {
-			return "hooks unreadable (" + entry.Detail + ")"
+			return "hooks " + entry.Detail
 		}
 	}
 

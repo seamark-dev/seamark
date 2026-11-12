@@ -329,6 +329,11 @@ func TestGatherReportsUnreadableHookConfig(t *testing.T) {
 	Print(&b, s)
 	assert.Contains(t, b.String(), "UNREADABLE",
 		"an unreadable hook config is not the same finding as no hook")
+
+	// The gate line names the reason once, as the legacy path does.
+	assert.Contains(t, b.String(), "gate           policy mode warn; hook configuration UNREADABLE (claude: .claude/settings.json: invalid character")
+	assert.NotContains(t, b.String(), "UNREADABLE (claude: unreadable")
+	assert.NotContains(t, b.String(), "unreadable (unreadable")
 }
 
 func TestStatusJSONRoundTrips(t *testing.T) {

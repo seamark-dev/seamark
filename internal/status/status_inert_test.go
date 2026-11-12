@@ -60,7 +60,7 @@ func TestPrintGateNamesAGateHookThatNeverRuns(t *testing.T) {
 			name:   "inert beside the unreadable and possible lines",
 			status: Status{GatePolicyMode: "warn", Clients: []integration.Inspection{idle, enforcingMaybe, unreadable}},
 			want: "gate           enforce (codex hook carries --enforce; blocking verdicts exit 2)\n" +
-				"               hook configuration UNREADABLE for shared: unreadable (.shared/hooks.json: boom)\n" +
+				"               hook configuration UNREADABLE for shared: .shared/hooks.json: boom\n" +
 				"               a definition of codex may also run a gate hook; seamark cannot tell what it does\n",
 		},
 	}

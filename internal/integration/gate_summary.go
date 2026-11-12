@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"cmp"
 	"slices"
 
 	"github.com/seamark-dev/seamark/internal/hooks"
@@ -183,7 +184,10 @@ func (g *GateSummary) addHook(label, mode string, uncertain bool) bool {
 
 // SummarizeInspections groups the gate hooks of every client that has a
 // command gate by its client ID. A client whose hook document cannot be
-// read is unreadable, with the detail of its commands entry. A client
+// read is unreadable, with the reason of that document. The reason has
+// no "unreadable" word, because the gate line prints that word itself.
+// A client without a recorded reason keeps the detail of its commands
+// entry. A client
 // with a definition that may run a gate is possible, beside the mode of
 // the definitions that certainly run one. A client whose gate entry is
 // inert is listed as inert.
@@ -197,7 +201,7 @@ func SummarizeInspections(inspections []Inspection) GateSummary {
 		}
 
 		if commands.State == StateUnreadable {
-			g.AddUnreadable(insp.ClientID + ": " + commands.Detail)
+			g.AddUnreadable(insp.ClientID + ": " + cmp.Or(insp.HookDocumentError, commands.Detail))
 
 			continue
 		}
