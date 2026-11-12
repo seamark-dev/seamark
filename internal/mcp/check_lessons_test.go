@@ -141,11 +141,10 @@ func checkLegacyFixture(t *testing.T) string {
 }
 
 // TestCheckMCPGitDiffHeadIgnoresDiffConfig covers the git diff HEAD
-// fallback of the MCP check tool. A repository config that changes the
-// diff text must not change the decision. Without the fix, color.ui=always
-// gave allow for a change that needs approval. The test compares the
-// decision block alone, because the companion hint reads git log and is
-// not part of this fallback.
+// fallback of the MCP check tool and the companion hint, which reads git
+// log. A repository config that changes the git text must not change the
+// decision or the text. Without the fix, color.ui=always gave allow for a
+// change that needs approval, and it dropped the "mostly Load" line.
 func TestCheckMCPGitDiffHeadIgnoresDiffConfig(t *testing.T) {
 	const decision = "verdict  require_approval (mode: warn)\n" +
 		"effects  [fs:write]\n" +
@@ -153,15 +152,16 @@ func TestCheckMCPGitDiffHeadIgnoresDiffConfig(t *testing.T) {
 
 	root := checkLegacyFixture(t)
 
-	text, isErr := callCheck(t, root, "{}")
+	want, isErr := callCheck(t, root, "{}")
 	require.False(t, isErr)
-	require.Equal(t, decision, strings.SplitN(text, "\n\n", 2)[0])
+	require.Equal(t, decision, strings.SplitN(want, "\n\n", 2)[0])
+	require.Contains(t, want, "    mostly Load\n")
 
 	fixtureGit(t, root, "config", "color.ui", "always")
 
-	text, isErr = callCheck(t, root, "{}")
+	got, isErr := callCheck(t, root, "{}")
 	assert.False(t, isErr)
-	assert.Equal(t, decision, strings.SplitN(text, "\n\n", 2)[0])
+	assert.Equal(t, want, got)
 }
 
 // TestCheckLessonsMCPOptionAbsentKeepsText freezes the text of the MCP

@@ -131,8 +131,9 @@ slow diff to a file first
 `seamark check </dev/null` to check `git diff HEAD` on purpose.
 
 The fallback runs `git diff HEAD` with fixed options: no color, no
-external diff, no textconv, the `a/` and `b/` path prefixes, paths from
-the top of the work tree, and the short submodule form. A git setting
+external diff, no textconv, the `a/` and `b/` path prefixes, raw
+non-ASCII paths, paths from the top of the work tree, and the short
+submodule form. A git setting
 such as `color.ui=always` or `diff.external` therefore cannot change the
 diff that `check` reads.
 

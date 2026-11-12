@@ -1210,12 +1210,17 @@ func WorkspaceState(root string) string {
 	// just stored and every workspace would look permanently stale.
 	const exclSeamark = ":(exclude).seamark"
 
-	status, ok := gitOut("status", "--porcelain", "-z", "--", ".", exclSeamark)
+	// --untracked-files=normal is the git default. It keeps
+	// status.showUntrackedFiles=no from hiding a new file, so a new file
+	// still changes the fingerprint.
+	status, ok := gitOut("status", "--porcelain", "-z", "--untracked-files=normal", "--", ".", exclSeamark)
 	if !ok {
 		return ""
 	}
 
-	diff, ok := gitOut("diff", "HEAD", "--", ".", exclSeamark)
+	// ParsedGitArgs keeps an external diff or a textconv driver from
+	// writing a constant text, which leaves a second edit unseen.
+	diff, ok := gitOut(history.ParsedGitArgs("diff", "HEAD", "--", ".", exclSeamark)...)
 	if !ok {
 		return ""
 	}

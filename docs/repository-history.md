@@ -71,6 +71,16 @@ surprises live.
 The history layer (co-change, decisions) is language-agnostic — it works
 on every file git tracks.
 
+History mining, the `mostly` names, fix mining, and the index freshness
+check run git with fixed options: no color, no external diff, no
+textconv, no signature lines, no rename following, the `a/` and `b/`
+path prefixes, raw non-ASCII paths, paths from the top of the work tree,
+the short submodule form, the listing of untracked files, and basic
+regular expressions for the revert search. A setting such as
+`color.ui=always`, `diff.external`, `log.showSignature`,
+`grep.patternType`, or `status.showUntrackedFiles=no` therefore cannot
+change what seamark reads.
+
 ## How much can the answers be trusted?
 
 ```bash

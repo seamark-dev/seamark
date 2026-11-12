@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/redact"
 )
@@ -231,8 +232,8 @@ func Mine(root string, opts Options) (Result, error) {
 // it goes. NUL field / RS record separators survive any message text.
 // mined is false when git itself has nothing to say (no repository).
 func listCommits(root, since string) (commits []commit, mined bool) {
-	out, err := gitOut(root, "log", since, "--no-merges",
-		"--format=%H%x00%an%x00%at%x00%s%x00%b%x1e")
+	out, err := gitOut(root, history.ParsedGitArgs("log", since, "--no-merges",
+		"--format=%H%x00%an%x00%at%x00%s%x00%b%x1e")...)
 	if err != nil {
 		return nil, false // not a git repo (or no commits): nothing to mine
 	}
@@ -288,7 +289,7 @@ type mergeCommit struct {
 // (past the cap commits stays nil — the merge is an integration event,
 // not a reviewable change).
 func listMerges(root, since string) []mergeCommit {
-	out, err := gitOut(root, "log", "--merges", since, "--format=%H%x00%at%x00%s%x00%b%x1e")
+	out, err := gitOut(root, history.ParsedGitArgs("log", "--merges", since, "--format=%H%x00%at%x00%s%x00%b%x1e")...)
 	if err != nil {
 		return nil
 	}
@@ -362,8 +363,8 @@ func resolveMembers(root string, merges []mergeCommit, bySha map[string]commit) 
 		return
 	}
 
-	out, err := gitOut(root, append([]string{"show", "-s", "--format=%H%x00%s%x00%b%x1e"},
-		missing...)...)
+	out, err := gitOut(root, history.ParsedGitArgs("show", append([]string{"-s", "--format=%H%x00%s%x00%b%x1e"},
+		missing...)...)...)
 	if err != nil {
 		return
 	}
@@ -412,7 +413,7 @@ func prMapOf(merges []mergeCommit) map[string]int {
 // recognized as one event. "" on any failure: dedup degrades to
 // per-merge findings rather than aborting the tier.
 func mergePatchID(root, sha string) string {
-	diffCmd := exec.Command("git", "diff", sha+"^1", sha)
+	diffCmd := exec.Command("git", history.ParsedGitArgs("diff", sha+"^1", sha)...)
 	diffCmd.Dir = root
 
 	idCmd := exec.Command("git", "patch-id", "--stable")
@@ -450,8 +451,10 @@ func mergePatchID(root, sha string) string {
 
 // revertedShas returns commits later undone, over the whole history: a
 // revert outside the window still invalidates a fix inside it.
+// --basic-regexp keeps the pattern a regular expression. Under
+// grep.patternType=fixed, git reads "^" as a literal and finds no revert.
 func revertedShas(root string) map[string]bool {
-	out, err := gitOut(root, "log", "--format=%b%x1e", "--grep", `^Revert "`)
+	out, err := gitOut(root, history.ParsedGitArgs("log", "--format=%b%x1e", "--basic-regexp", "--grep", `^Revert "`)...)
 	if err != nil {
 		return nil
 	}
@@ -475,7 +478,7 @@ func revertedShas(root string) map[string]bool {
 // surviving sha — and with it the sha-derived finding id, the group
 // signature, and the distillation bill for an unchanged fix.
 func duplicatePatchShas(root, since string) map[string]bool {
-	logCmd := exec.Command("git", "log", since, "--reverse", "--no-merges", "-p", "--format=commit %H")
+	logCmd := exec.Command("git", history.ParsedGitArgs("log", since, "--reverse", "--no-merges", "-p", "--format=commit %H")...)
 	logCmd.Dir = root
 
 	idCmd := exec.Command("git", "patch-id", "--stable")
@@ -532,7 +535,7 @@ func duplicatePatchShas(root, since string) map[string]bool {
 // prMap supplies the merge-topology PR fallback; an explicit reference
 // in the message always wins over inference.
 func buildFinding(root string, c commit, prMap map[string]int) (model.Finding, bool) {
-	stat, err := gitOut(root, "show", "--format=", "--numstat", c.sha)
+	stat, err := gitOut(root, history.ParsedGitArgs("show", "--format=", "--numstat", c.sha)...)
 	if err != nil {
 		return model.Finding{}, false
 	}
@@ -542,7 +545,7 @@ func buildFinding(root string, c commit, prMap map[string]int) (model.Finding, b
 		return model.Finding{}, false
 	}
 
-	patch, err := gitOut(root, "show", "--format=", "--unified=1", c.sha)
+	patch, err := gitOut(root, history.ParsedGitArgs("show", "--format=", "--unified=1", c.sha)...)
 	if err != nil {
 		return model.Finding{}, false
 	}
@@ -564,7 +567,7 @@ func buildFinding(root string, c commit, prMap map[string]int) (model.Finding, b
 // the merge's whole diff against its first parent — what the pull
 // request changed — under the same caps as a single commit's patch.
 func buildMergeFinding(root string, m mergeCommit) (model.Finding, bool) {
-	stat, err := gitOut(root, "diff", "--numstat", m.sha+"^1", m.sha)
+	stat, err := gitOut(root, history.ParsedGitArgs("diff", "--numstat", m.sha+"^1", m.sha)...)
 	if err != nil {
 		return model.Finding{}, false
 	}
@@ -574,7 +577,7 @@ func buildMergeFinding(root string, m mergeCommit) (model.Finding, bool) {
 		return model.Finding{}, false
 	}
 
-	patch, err := gitOut(root, "diff", "--unified=1", m.sha+"^1", m.sha)
+	patch, err := gitOut(root, history.ParsedGitArgs("diff", "--unified=1", m.sha+"^1", m.sha)...)
 	if err != nil {
 		return model.Finding{}, false
 	}
@@ -887,6 +890,9 @@ func shaID(sha string) int64 {
 	return int64(binary.BigEndian.Uint64(raw) &^ (1 << 63))
 }
 
+// gitOut runs git in root and returns its stdout. Each diff, log, and
+// show call passes its arguments through history.ParsedGitArgs, so git
+// config cannot change the text that the miner parses.
 func gitOut(root string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = root

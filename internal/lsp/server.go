@@ -599,9 +599,11 @@ func (s *Server) publishDiagnostics(uri string, diags []diagnostic) error {
 // modifiedFiles returns a predicate over repo-relative paths the working
 // tree has changed (staged, unstaged, or untracked). Untracked
 // directories appear in porcelain output as a single "dir/" entry, so
-// files under them match by prefix.
+// files under them match by prefix. --untracked-files=normal is the git
+// default. It keeps status.showUntrackedFiles=no from hiding a saved new
+// file, so that file still gets diagnostics.
 func (s *Server) modifiedFiles() (func(rel string) bool, error) {
-	cmd := exec.Command("git", "status", "--porcelain", "-z", "--no-renames")
+	cmd := exec.Command("git", "status", "--porcelain", "-z", "--no-renames", "--untracked-files=normal")
 	cmd.Dir = s.root
 
 	out, err := cmd.Output()

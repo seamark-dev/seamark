@@ -2369,3 +2369,158 @@ func TestIndexKeepsLivePartnersOfGoneFiles(t *testing.T) {
 	assert.Equal(t, before["pkg/unstaged.go"], partnerFiles(t, fourth.DBPath, "pkg/a.go")["pkg/unstaged.go"])
 	assert.Equal(t, first.Stats.CoChanges, fourth.Stats.CoChanges)
 }
+
+// configGit runs git in root with a fixed identity and no global or
+// system config.
+func configGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
+
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v\n%s", args, out)
+}
+
+// constantDiffScript writes an executable script that prints a constant
+// line and touches marker when it runs. It stands in for an external diff
+// program and a textconv driver.
+func constantDiffScript(t *testing.T) (script, marker string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	script = filepath.Join(dir, "const.sh")
+	marker = filepath.Join(dir, "ran")
+	body := "#!/bin/sh\ntouch '" + marker + "'\necho constant\n"
+
+	require.NoError(t, os.WriteFile(script, []byte(body), 0o755))
+
+	return script, marker
+}
+
+func TestWorkspaceStateIgnoresGitConfig(t *testing.T) {
+	// The fingerprint decides whether the index is current. A config that
+	// changes the diff or status text must not change it, or a second edit
+	// of a dirty file or a new file can read as no change.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	script, marker := constantDiffScript(t)
+
+	cases := []struct {
+		name   string
+		config [][2]string
+		attrs  string
+		env    [2]string
+	}{
+		{name: "diff.external", config: [][2]string{{"diff.external", script}}},
+		{name: "GIT_EXTERNAL_DIFF", env: [2]string{"GIT_EXTERNAL_DIFF", script}},
+		{
+			name:   "textconv",
+			config: [][2]string{{"diff.hide.textconv", script}},
+			attrs:  "*.go diff=hide\n",
+		},
+		{name: "color.ui always", config: [][2]string{{"color.ui", "always"}}},
+		{name: "status.showUntrackedFiles no", config: [][2]string{{"status.showUntrackedFiles", "no"}}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			tracked := filepath.Join(root, "main.go")
+			untracked := filepath.Join(root, "new.go")
+			stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+			require.NoError(t, os.WriteFile(tracked, []byte("package main\n"), 0o644))
+			configGit(t, root, "init", "-q", "-b", "main")
+			configGit(t, root, "add", "-A")
+			configGit(t, root, "commit", "-q", "-m", "initial")
+
+			// The three states: a dirty file, a second edit of it, and a
+			// new untracked file next to it.
+			states := []func(){
+				func() {
+					require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc one() {}\n"), 0o644))
+					_ = os.Remove(untracked)
+				},
+				func() {
+					require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc two() {}\n"), 0o644))
+					_ = os.Remove(untracked)
+				},
+				func() {
+					// The fingerprint holds the mtime of an untracked file, so
+					// each write sets the same mtime.
+					require.NoError(t, os.WriteFile(untracked, []byte("package main\n\nfunc three() {}\n"), 0o644))
+					require.NoError(t, os.Chtimes(untracked, stamp, stamp))
+				},
+			}
+
+			want := make([]string, len(states))
+
+			for i, set := range states {
+				set()
+
+				want[i] = WorkspaceState(root)
+				require.NotEmpty(t, want[i])
+			}
+
+			require.NotEqual(t, want[0], want[1], "a second edit changes the fingerprint")
+			require.NotEqual(t, want[1], want[2], "a new file changes the fingerprint")
+
+			for _, kv := range c.config {
+				configGit(t, root, "config", kv[0], kv[1])
+			}
+
+			if c.attrs != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "info", "attributes"), []byte(c.attrs), 0o644))
+			}
+
+			if c.env[0] != "" {
+				t.Setenv(c.env[0], c.env[1])
+			}
+
+			_ = os.Remove(marker)
+
+			for i, set := range states {
+				set()
+				assert.Equal(t, want[i], WorkspaceState(root), "state %d", i)
+			}
+
+			assert.NoFileExists(t, marker, "no external program runs")
+		})
+	}
+}
+
+func TestIndexSeesSecondEditUnderExternalDiff(t *testing.T) {
+	// An external diff prints the same text for every edit. The fast path
+	// must still see a second edit of a dirty file and index the new symbol.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	script, marker := constantDiffScript(t)
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	configGit(t, root, "init", "-q", "-b", "main")
+	configGit(t, root, "add", "-A")
+	configGit(t, root, "commit", "-q", "-m", "initial")
+	configGit(t, root, "config", "diff.external", script)
+
+	tracked := filepath.Join(root, "main.go")
+	require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc main() {}\n\nfunc Delta() {}\n"), 0o644))
+
+	first, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, first.Skipped)
+
+	require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc main() {}\n\nfunc Epsilon() {}\n"), 0o644))
+
+	second, st := runIndex(t, root)
+	assert.False(t, second.Skipped, "a second edit of a dirty file rebuilds")
+	assert.Equal(t, "Epsilon", mustFind(t, st, "Epsilon").Name)
+	assert.NoFileExists(t, marker, "no external program runs")
+}
