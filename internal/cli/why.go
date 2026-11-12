@@ -48,7 +48,7 @@ func newOrientCmd(opts *options) *cobra.Command {
 
 			staleNote(cmd.ErrOrStderr(), st, root)
 
-			return report.Orient(cmd.OutOrStdout(), st, root)
+			return report.OrientCLI(cmd.OutOrStdout(), st, root)
 		},
 	}
 }

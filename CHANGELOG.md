@@ -297,6 +297,10 @@ model-boundary delivery.
   A firing does not show that an agent read the pin. The `lessons --help`
   entry of `--stats` now says that it counts the lessons that every
   surface returned or injected, not only those of the edit hook.
+- **CLI orient footer.** `seamark orient` now ends with routes that run
+  in the CLI, `seamark why` and `seamark lessons --region`, and labels
+  `change_set` and `expand` as MCP tools. The MCP orient text does not
+  change.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

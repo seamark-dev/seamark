@@ -261,7 +261,15 @@ func TestResourcesAndPrompts(t *testing.T) {
 		`{"jsonrpc":"2.0","id":4,"method":"prompts/list"}`,
 		`{"jsonrpc":"2.0","id":5,"method":"prompts/get","params":{"name":"onboard"}}`,
 		`{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"seamark://status"}}`,
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"orient","arguments":{}}}`,
 	)
+
+	// The MCP orient text offers the MCP tools by name. The CLI orient
+	// footer differs, so this pins that the MCP text keeps its own. The
+	// suffix starts with the blank line before the footer, because the
+	// MCP text stays byte for byte the same.
+	const orientFooter = "\n\nnext: `why <symbol|file>` for any of the above; `change_set` before editing; " +
+		"`expand` for source; `expand lessons:<dir>` for an area's raw review findings\n"
 
 	// The exact list, in order: the `seamark mcp` help in cli/mcp.go names
 	// each resource, so a new one must reach that help too.
@@ -291,6 +299,11 @@ func TestResourcesAndPrompts(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resps["2"].Result, &read))
 	require.Len(t, read.Contents, 1)
 	assert.Contains(t, read.Contents[0].Text, "orientation")
+	assert.True(t, strings.HasSuffix(read.Contents[0].Text, orientFooter), "the orient resource keeps the MCP footer")
+
+	orient, isErr := toolText(t, resps["7"])
+	assert.False(t, isErr)
+	assert.True(t, strings.HasSuffix(orient, orientFooter), "the orient tool keeps the MCP footer")
 
 	require.NotNil(t, resps["3"].Error)
 	assert.Equal(t, codeResourceNotFound, resps["3"].Error.Code)

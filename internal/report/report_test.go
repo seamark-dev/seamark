@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -77,6 +78,88 @@ func TestOrientSurfacesTopLessons(t *testing.T) {
 	assert.Contains(t, out, "review lessons")          // the index summary line
 	assert.Contains(t, out, "reviewers keep flagging") // the ranked section
 	assert.Contains(t, out, "RUF001")
+}
+
+// The MCP orient text keeps its footer and the blank line before it byte
+// for byte. The CLI footer offers `seamark` commands and labels the MCP
+// tools, because the CLI has no change_set or expand command. The body
+// is the same on both.
+func TestOrientFooterPerSurface(t *testing.T) {
+	const mcpLine = "next: `why <symbol|file>` for any of the above; `change_set` before editing; " +
+		"`expand` for source; `expand lessons:<dir>` for an area's raw review findings"
+
+	const cliLine = "next: `seamark why <symbol|file>` for any of the above; `change_set` (MCP) before editing; " +
+		"`expand` (MCP) for source; `expand lessons:<dir>` (MCP) or `seamark lessons --region <dir>` " +
+		"for an area's raw review findings"
+
+	st, root := seedStore(t)
+
+	var mcpOut, cliOut strings.Builder
+	require.NoError(t, Orient(&mcpOut, st, root))
+	require.NoError(t, OrientCLI(&cliOut, st, root))
+
+	mcpLines := strings.Split(strings.TrimSuffix(mcpOut.String(), "\n"), "\n")
+	cliLines := strings.Split(strings.TrimSuffix(cliOut.String(), "\n"), "\n")
+
+	require.GreaterOrEqual(t, len(mcpLines), 3, "orient prints a body, a blank line, and the footer")
+	require.NotEmpty(t, cliLines)
+
+	assert.Equal(t, mcpLine, mcpLines[len(mcpLines)-1])
+	assert.Equal(t, cliLine, cliLines[len(cliLines)-1])
+
+	// Each body line has text, so exactly one blank line comes before the
+	// footer. The body comparison below extends this layout to the CLI.
+	assert.Empty(t, mcpLines[len(mcpLines)-2], "a blank line comes before the footer")
+	assert.NotEmpty(t, mcpLines[len(mcpLines)-3], "only one blank line comes before the footer")
+
+	assert.Equal(t, mcpLines[:len(mcpLines)-1], cliLines[:len(cliLines)-1], "both surfaces print the same body")
+}
+
+// footerSteps returns the step text of each part of an orient footer.
+// The parts are separated by "; ". Each part names one or more backticked
+// routes, each with an optional "(MCP)" label, and ends with the step
+// text. So the step text is the text after the last route and its label.
+func footerSteps(footer string) []string {
+	var steps []string
+
+	for _, part := range strings.Split(strings.TrimPrefix(footer, "next: "), "; ") {
+		step := strings.TrimSpace(part[strings.LastIndex(part, "`")+1:])
+		step = strings.TrimSpace(strings.TrimPrefix(step, "(MCP)"))
+
+		steps = append(steps, step)
+	}
+
+	return steps
+}
+
+// Both footers name the same steps in the same order, so a step added to
+// one footer fails here until the other has it. The test reads the steps
+// from the constants, because a fixed list cannot see a new step. Each
+// route in the CLI footer runs in the CLI or carries the MCP label.
+func TestOrientFootersNameTheSameSteps(t *testing.T) {
+	mcpSteps := footerSteps(orientFooterMCP)
+	cliSteps := footerSteps(orientFooterCLI)
+
+	// The fixed list proves that footerSteps reads the real step text. A
+	// parser that returns empty steps for both footers would otherwise
+	// make the comparison below pass with no content.
+	assert.Equal(t,
+		[]string{"for any of the above", "before editing", "for source", "for an area's raw review findings"},
+		mcpSteps, "footerSteps reads the four steps of the MCP footer")
+	assert.Equal(t, mcpSteps, cliSteps, "the CLI footer names the steps of the MCP footer in the same order")
+
+	spans := regexp.MustCompile("`([^`]+)`").FindAllStringSubmatchIndex(orientFooterCLI, -1)
+	require.NotEmpty(t, spans)
+
+	for _, s := range spans {
+		route := orientFooterCLI[s[2]:s[3]]
+		if strings.HasPrefix(route, "seamark ") {
+			continue
+		}
+
+		assert.True(t, strings.HasPrefix(orientFooterCLI[s[1]:], " (MCP)"),
+			"the CLI footer labels %q as an MCP route", route)
+	}
 }
 
 func TestFixDensityLine(t *testing.T) {

@@ -12,11 +12,38 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// Orient writes the repo overview an agent needs before its first edit:
+// The orient footer names the next steps. Two footers exist because the
+// CLI has no change_set or expand command, and a printed route must run
+// where it is printed. The CLI footer offers `seamark` commands and
+// labels each MCP tool with "(MCP)", as the why footer does. Both name
+// the same steps in the same order.
+const (
+	orientFooterMCP = "next: `why <symbol|file>` for any of the above; `change_set` before editing; " +
+		"`expand` for source; `expand lessons:<dir>` for an area's raw review findings"
+
+	orientFooterCLI = "next: `seamark why <symbol|file>` for any of the above; `change_set` (MCP) before editing; " +
+		"`expand` (MCP) for source; `expand lessons:<dir>` (MCP) or `seamark lessons --region <dir>` " +
+		"for an area's raw review findings"
+)
+
+// Orient writes the repo overview with the MCP footer, which names MCP
+// tools. The MCP orient tool and the seamark://orient resource call it.
+// The CLI calls OrientCLI instead.
+func Orient(w io.Writer, st *store.Store, root string) error {
+	return orient(w, st, root, orientFooterMCP)
+}
+
+// OrientCLI writes the same repo overview with the CLI footer, which
+// offers only routes that run in the CLI.
+func OrientCLI(w io.Writer, st *store.Store, root string) error {
+	return orient(w, st, root, orientFooterCLI)
+}
+
+// orient writes the repo overview an agent needs before its first edit:
 // scale, module layout, the load-bearing API, the files whose changes
 // travel in groups, and the recent decision trail. One screen, not a
 // tour — every extra line here is paid on every onboarding.
-func Orient(w io.Writer, st *store.Store, root string) error {
+func orient(w io.Writer, st *store.Store, root, footer string) error {
 	stats, err := st.Stats()
 	if err != nil {
 		return err
@@ -119,8 +146,7 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 		printLessons(w, lessons)
 	}
 
-	fmt.Fprintf(w, "\nnext: `why <symbol|file>` for any of the above; `change_set` before editing; "+
-		"`expand` for source; `expand lessons:<dir>` for an area's raw review findings\n")
+	fmt.Fprintf(w, "\n%s\n", footer)
 
 	return nil
 }
