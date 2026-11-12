@@ -717,8 +717,11 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 
 // ReplaceFixFindings atomically swaps the fix-derived findings — their
 // own lifecycle, independent of the review set — and stamps
-// MetaFixesMinedAt in the same transaction.
-func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
+// MetaFixesMinedAt in the same transaction. noReviewRepository tells
+// that origin names no GitHub repository at the mined root. The write
+// then sets MetaNoReviewRepositoryAt to the fixes stamp, and otherwise
+// deletes it.
+func (s *Store) ReplaceFixFindings(findings []model.Finding, noReviewRepository bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: begin fix findings: %w", err)
@@ -748,14 +751,34 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	// Stamp the mine time in the same transaction, as ReplaceLessons
 	// does. A crash between two writes would leave fresh rows with an old
 	// stamp, and the outcome loop trusts the stamp.
+	minedAt := fmt.Sprint(time.Now().Unix())
+
 	_, err = tx.Exec(
 		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		MetaFixesMinedAt,
-		fmt.Sprint(time.Now().Unix()),
+		minedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("store: stamp fix mine: %w", err)
+	}
+
+	// Each fix write decides the record again, in the same transaction.
+	// The record then always describes the root whose fix commits this
+	// write stored, and an origin that moved to GitHub clears it at once.
+	if noReviewRepository {
+		_, err = tx.Exec(
+			`INSERT INTO meta (key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			MetaNoReviewRepositoryAt,
+			minedAt,
+		)
+	} else {
+		_, err = tx.Exec(`DELETE FROM meta WHERE key = ?`, MetaNoReviewRepositoryAt)
+	}
+
+	if err != nil {
+		return fmt.Errorf("store: record the review repository state: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1860,6 +1883,13 @@ const (
 	MetaReviewsMinedAt = "reviews_mined_at"
 )
 
+// MetaNoReviewRepositoryAt records that origin names no GitHub
+// repository, so seamark can mine no review findings there. Its value
+// is the fixes stamp of the fix write that found this state. The fix
+// write sets it and deletes it in the same transaction as the fixes
+// stamp.
+const MetaNoReviewRepositoryAt = "no_review_repository_at"
+
 // MetaUnix reads a Unix-seconds meta value. It returns 0 when the value
 // is absent or malformed, or when the read fails. A stamp that cannot be
 // read then counts as "never mined".
@@ -1878,14 +1908,28 @@ func (s *Store) MetaUnix(key string) int64 {
 }
 
 // EvidenceHorizon returns the timestamp the finding corpus is known
-// current through: the older of the two mining stamps, because a
-// recurrence can arrive through either channel. Zero when either
-// stamp is missing — a store that cannot prove it looked cannot claim
-// nothing was found, so verdicts stay untested until
-// `seamark index --reviews` runs once.
+// current through. Usually it is the older of the two mining stamps,
+// because a recurrence can arrive through either channel. It is zero
+// when a needed stamp is missing. A store that cannot prove it looked
+// cannot claim that nothing was found.
+//
+// When origin names no GitHub repository, no review finding can
+// arrive. The horizon is then the fixes stamp alone, but only while
+// MetaNoReviewRepositoryAt equals it. A record with another value is
+// stale. A later fix write, for example by an older binary, left it
+// unchanged, so it proves nothing about the current origin.
 func (s *Store) EvidenceHorizon() int64 {
-	fixes, reviews := s.MetaUnix(MetaFixesMinedAt), s.MetaUnix(MetaReviewsMinedAt)
-	if fixes == 0 || reviews == 0 {
+	fixes := s.MetaUnix(MetaFixesMinedAt)
+	if fixes == 0 {
+		return 0
+	}
+
+	if s.MetaUnix(MetaNoReviewRepositoryAt) == fixes {
+		return fixes
+	}
+
+	reviews := s.MetaUnix(MetaReviewsMinedAt)
+	if reviews == 0 {
 		return 0
 	}
 

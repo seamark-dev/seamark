@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -485,6 +487,41 @@ func TestEvidenceHorizon(t *testing.T) {
 	assert.Zero(t, s.EvidenceHorizon())
 }
 
+func TestEvidenceHorizonWithoutAReviewRepository(t *testing.T) {
+	cases := []struct {
+		name    string
+		fixes   string
+		reviews string
+		record  string
+		want    int64
+	}{
+		{name: "record matches the fixes stamp", fixes: "2000", record: "2000", want: 2000},
+		{name: "an older reviews stamp does not count", fixes: "2000", reviews: "1500", record: "2000", want: 2000},
+		{name: "a newer reviews stamp does not count", fixes: "2000", reviews: "3000", record: "2000", want: 2000},
+		{name: "a stale record proves nothing", fixes: "2000", record: "1500", want: 0},
+		{name: "a record above the fixes stamp proves nothing", fixes: "2000", record: "2500", want: 0},
+		{name: "a record above the fixes stamp falls back to both stamps", fixes: "2000", reviews: "1500", record: "2500", want: 1500},
+		{name: "a record needs the fixes stamp", record: "2000", want: 0},
+		{name: "a malformed record falls back to both stamps", fixes: "2000", reviews: "1500", record: "x", want: 1500},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := openTestStore(t)
+
+			for key, value := range map[string]string{
+				MetaFixesMinedAt: c.fixes, MetaReviewsMinedAt: c.reviews, MetaNoReviewRepositoryAt: c.record,
+			} {
+				if value != "" {
+					require.NoError(t, s.SetMeta(key, value))
+				}
+			}
+
+			assert.Equal(t, c.want, s.EvidenceHorizon())
+		})
+	}
+}
+
 func TestMetaUnix(t *testing.T) {
 	s := openTestStore(t)
 
@@ -676,9 +713,11 @@ func TestMetaKeysKeepTheStoredNames(t *testing.T) {
 	assert.Equal(t, []string{
 		"schema_version", "indexed_at", "repo_root", "indexed_state", "history_mined",
 		"index_summary", "parse_cache_version", "fixes_mined_at", "reviews_mined_at",
+		"no_review_repository_at",
 	}, []string{
 		MetaSchemaVersion, MetaIndexedAt, MetaRepoRoot, MetaIndexedState, MetaHistoryMined,
 		MetaIndexSummary, MetaParseCacheVersion, MetaFixesMinedAt, MetaReviewsMinedAt,
+		MetaNoReviewRepositoryAt,
 	})
 }
 
@@ -850,7 +889,7 @@ func TestReplaceFixFindingsTouchesOnlyFixSources(t *testing.T) {
 
 	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
 		{ID: 9, Path: "new.go", Body: "fresh", Source: model.SourceFixConventional},
-	}))
+	}, false))
 
 	got, err := s.AllFindings()
 	require.NoError(t, err)
@@ -872,7 +911,7 @@ func TestReplaceFixFindingsStampsInTheSameTransaction(t *testing.T) {
 
 	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
 		{ID: 1, Path: "a.go", Body: "fix", Source: model.SourceFixConventional},
-	}))
+	}, false))
 
 	stamp, err := s.GetMeta(MetaFixesMinedAt)
 	require.NoError(t, err)
@@ -888,7 +927,7 @@ func TestReplaceFixFindingsStampsInTheSameTransaction(t *testing.T) {
 	err = s.ReplaceFixFindings([]model.Finding{
 		{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
 		{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
-	})
+	}, false)
 	require.Error(t, err)
 
 	stamp, err = s.GetMeta(MetaFixesMinedAt)
@@ -899,6 +938,97 @@ func TestReplaceFixFindingsStampsInTheSameTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, int64(1), got[0].ID, "a rolled-back swap keeps the old rows")
+
+	record, err := s.GetMeta(MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+	assert.Empty(t, record, "a write for a GitHub origin leaves no record")
+
+	// A write for an origin that names no GitHub repository sets the
+	// record to the fixes stamp, so the two values always match.
+	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+		{ID: 3, Path: "c.go", Body: "fix", Source: model.SourceFixConventional},
+	}, true))
+
+	stamp, err = s.GetMeta(MetaFixesMinedAt)
+	require.NoError(t, err)
+
+	record, err = s.GetMeta(MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+	assert.NotEqual(t, "1000", stamp)
+	assert.Equal(t, stamp, record, "the record holds the fixes stamp of its write")
+
+	// A failed swap keeps the old stamp and the old record together.
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "1000"))
+	require.NoError(t, s.SetMeta(MetaNoReviewRepositoryAt, "1000"))
+
+	for _, noReviewRepository := range []bool{false, true} {
+		err = s.ReplaceFixFindings([]model.Finding{
+			{ID: 4, Path: "d.go", Body: "fix", Source: model.SourceFixConventional},
+			{ID: 4, Path: "d.go", Body: "fix", Source: model.SourceFixConventional},
+		}, noReviewRepository)
+		require.Error(t, err)
+
+		stamp, err = s.GetMeta(MetaFixesMinedAt)
+		require.NoError(t, err)
+
+		record, err = s.GetMeta(MetaNoReviewRepositoryAt)
+		require.NoError(t, err)
+		assert.Equal(t, "1000", stamp, "noReviewRepository=%v", noReviewRepository)
+		assert.Equal(t, "1000", record, "noReviewRepository=%v", noReviewRepository)
+	}
+
+	// A later write for a GitHub origin deletes the record.
+	require.NoError(t, s.ReplaceFixFindings(nil, false))
+
+	record, err = s.GetMeta(MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+	assert.Empty(t, record, "a GitHub origin clears the record")
+}
+
+func TestReplaceFixFindingsReportsAFailedRecordWrite(t *testing.T) {
+	for _, noReviewRepository := range []bool{false, true} {
+		t.Run(fmt.Sprintf("noReviewRepository=%v", noReviewRepository), func(t *testing.T) {
+			s := openTestStore(t)
+
+			require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+				{ID: 1, Path: "a.go", Body: "fix", Source: model.SourceFixConventional},
+			}, true))
+			require.NoError(t, s.SetMeta(MetaFixesMinedAt, "1000"))
+			require.NoError(t, s.SetMeta(MetaNoReviewRepositoryAt, "1000"))
+
+			// Only the record statement fails, so the rows and the fixes
+			// stamp succeed before it. The test then shows that the write
+			// reports the error and rolls back the earlier statements.
+			for _, op := range []string{"INSERT", "UPDATE", "DELETE"} {
+				row := "NEW"
+				if op == "DELETE" {
+					row = "OLD"
+				}
+
+				execSQL(t, s, fmt.Sprintf(`CREATE TRIGGER fail_record_%s BEFORE %s ON meta
+					WHEN %s.key = '%s' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`,
+					strings.ToLower(op), op, row, MetaNoReviewRepositoryAt))
+			}
+
+			err := s.ReplaceFixFindings([]model.Finding{
+				{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
+			}, noReviewRepository)
+			require.ErrorContains(t, err, "injected failure")
+
+			stamp, err := s.GetMeta(MetaFixesMinedAt)
+			require.NoError(t, err)
+
+			record, err := s.GetMeta(MetaNoReviewRepositoryAt)
+			require.NoError(t, err)
+			assert.Equal(t, "1000", stamp, "a failed record write keeps the old stamp")
+			assert.Equal(t, "1000", record, "a failed record write keeps the old record")
+
+			got, err := s.AllFindings()
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, int64(1), got[0].ID, "a failed record write keeps the old rows")
+		})
+	}
 }
 
 func TestSaveDistilledGroupIsAtomic(t *testing.T) {
@@ -961,7 +1091,7 @@ func TestMigrationAddsFindingSource(t *testing.T) {
 	// And the upgraded table accepts the new lifecycle.
 	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
 		{ID: 99, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
-	}))
+	}, false))
 
 	got, err = s.AllFindings()
 	require.NoError(t, err)

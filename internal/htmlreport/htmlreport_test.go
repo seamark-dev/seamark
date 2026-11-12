@@ -97,7 +97,7 @@ func seed(t *testing.T) (st *store.Store, root string) {
 	require.NoError(t, st.ReplaceFixFindings([]model.Finding{
 		{ID: 21, Path: "api/live.py", Body: "fix: guard the empty case",
 			CreatedAt: 220, Source: model.SourceFixConventional},
-	}))
+	}, false))
 
 	pending := model.Proposal{Signature: "sig-a", Rule: "ascii-quotes", Region: "api",
 		Note: "Write quotes as ASCII in api/.", Members: []int64{11, 12},

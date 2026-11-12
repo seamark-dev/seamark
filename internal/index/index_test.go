@@ -1579,6 +1579,147 @@ func TestRefreshSourcesWithoutGitHubOrigin(t *testing.T) {
 	assertReviewsKept(t, readEvidenceState(t, dbPath))
 }
 
+// readReviewRecord returns the no-review-repository record, the fixes
+// stamp, and the evidence horizon of the database at dbPath.
+func readReviewRecord(t *testing.T, dbPath string) (record, fixesAt string, horizon int64) {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	record, err = st.GetMeta(store.MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+
+	fixesAt, err = st.GetMeta(store.MetaFixesMinedAt)
+	require.NoError(t, err)
+
+	return record, fixesAt, st.EvidenceHorizon()
+}
+
+// setOrigin replaces the origin remote of the repository at root.
+func setOrigin(t *testing.T, root, origin string) {
+	t.Helper()
+
+	for _, args := range [][]string{{"remote", "remove", "origin"}, {"remote", "add", "origin", origin}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		_ = cmd.Run() // remove fails when no origin exists yet, and that is the wanted state
+	}
+}
+
+func TestRefreshSourcesRecordsANoReviewRepository(t *testing.T) {
+	noFetch := func(t *testing.T) reviews.FetchFunc {
+		return func(context.Context, string, string, reviews.Options) ([]byte, error) {
+			t.Error("an origin that names no GitHub repository is never fetched")
+
+			return nil, errors.New("unexpected fetch")
+		}
+	}
+
+	for _, origin := range []string{"", "git@gitlab.com:o/r.git"} {
+		for _, mode := range []SourceMode{SourcesLocal, SourcesReviewsAndLocal} {
+			t.Run(fmt.Sprintf("origin %q mode %v", origin, mode), func(t *testing.T) {
+				root, dbPath := sourceFixture(t, origin)
+
+				res, err := RefreshSources(context.Background(), RefreshRequest{
+					Root: root, Mode: mode, Fetch: noFetch(t),
+				})
+				require.NoError(t, err)
+				require.Equal(t, SourceRefreshed, res.Fixes.State)
+
+				record, fixesAt, horizon := readReviewRecord(t, dbPath)
+				assert.NotEqual(t, "1000", fixesAt)
+				assert.Equal(t, fixesAt, record, "the record holds the fixes stamp of its write")
+				assert.Equal(t, res.Fixes.MinedAt, horizon, "fix findings alone set the horizon")
+			})
+		}
+	}
+
+	t.Run("github origin", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+		_, err := RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, horizon := readReviewRecord(t, dbPath)
+		assert.Empty(t, record)
+		assert.Equal(t, int64(1000), horizon, "the older reviews stamp still bounds the horizon")
+	})
+
+	// A fetch failure comes after origin resolves to GitHub, so it never
+	// counts as a repository without reviews.
+	missing := fmt.Errorf("gh api: %w", &exec.Error{Name: "gh", Err: exec.ErrNotFound})
+	failures := map[string]error{
+		"gh missing": missing,
+		"auth":       fmt.Errorf("gh api: To get started with GitHub CLI: %w", ghExitError(t, 4)),
+	}
+
+	for name, fetchErr := range failures {
+		t.Run(name, func(t *testing.T) {
+			root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+			res, err := RefreshSources(context.Background(), RefreshRequest{
+				Root: root, Mode: SourcesReviewsAndLocal, Fetch: staticFetch("", fetchErr),
+			})
+			require.NoError(t, err)
+			require.NotEqual(t, SourceRefreshed, res.Reviews.State)
+
+			record, _, horizon := readReviewRecord(t, dbPath)
+			assert.Empty(t, record)
+			assert.Equal(t, "1000", readEvidenceState(t, dbPath).reviewsAt)
+			assert.Equal(t, int64(1000), horizon)
+		})
+	}
+
+	t.Run("a GitHub origin clears the record", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "")
+
+		_, err := RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, _ := readReviewRecord(t, dbPath)
+		require.NotEmpty(t, record)
+
+		setOrigin(t, root, "git@github.com:o/r.git")
+
+		_, err = RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, horizon := readReviewRecord(t, dbPath)
+		assert.Empty(t, record, "the next fix write decides again")
+		assert.Equal(t, int64(1000), horizon)
+	})
+
+	t.Run("a fix phase that writes nothing keeps the record", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "")
+
+		st, err := store.Open(dbPath)
+		require.NoError(t, err)
+		require.NoError(t, st.SetMeta(store.MetaNoReviewRepositoryAt, "1000"))
+		require.NoError(t, st.Close())
+
+		_, err = RefreshSources(context.Background(), RefreshRequest{
+			Root: root, Mode: SourcesLocal, BeforePersist: func(string) error { return errRefused },
+		})
+		require.ErrorIs(t, err, errRefused)
+
+		// A root without git history mines nothing into the same database.
+		res, err := RefreshSources(context.Background(), RefreshRequest{
+			Root: t.TempDir(), DBPath: dbPath, Mode: SourcesLocal,
+		})
+		require.NoError(t, err)
+		require.Equal(t, CauseNoHistory, res.Fixes.Cause)
+
+		record, fixesAt, horizon := readReviewRecord(t, dbPath)
+		assert.Equal(t, "1000", record)
+		assert.Equal(t, "1000", fixesAt)
+		assert.Equal(t, int64(1000), horizon)
+	})
+}
+
 func TestRefreshSourcesStopDuringFetchKeepsTheCorpus(t *testing.T) {
 	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
 

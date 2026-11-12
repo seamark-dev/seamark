@@ -264,7 +264,7 @@ func TestPrintSeparatesFixMiningFromReviews(t *testing.T) {
 	// say so instead of dressing fix findings up as review evidence.
 	require.NoError(t, st.ReplaceFixFindings([]model.Finding{
 		{ID: 1, Path: "a.go", Body: "fix: reset state", Source: "fix:subject"},
-	}))
+	}, false))
 
 	s, err := Gather(st, root)
 	require.NoError(t, err)

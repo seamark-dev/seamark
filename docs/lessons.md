@@ -1129,9 +1129,13 @@ Three verdicts, each a sentence you can check against your own repo:
   signal: the pin may be the reason the mistake stopped.
 - **`untested`** — no verdict yet, and the sentence says why: the pin
   never fired, too few commits touched its regions (fewer than 5),
-  the finding corpus was not re-mined after exposure (run `seamark
-  index --reviews` or `seamark index --fixes-only`), or every cited finding has aged out of the
-  mining window.
+  the finding corpus was not re-mined after exposure, or every cited
+  finding has aged out of the mining window. For stale evidence, a
+  `seamark index --reviews` run whose GitHub fetch succeeds ends the
+  state, because the older of the review and fix mine times bounds the
+  evidence. When origin names no GitHub repository, seamark mines no
+  review findings, so `seamark index --fixes-only` or `--reviews` ends
+  it, and the verdict rests on fix findings alone.
 
 The exposure clock starts at a pin's **first firing** on any surface,
 not its apply date: a pin that no surface ever returned cannot have

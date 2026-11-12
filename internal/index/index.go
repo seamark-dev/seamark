@@ -803,6 +803,15 @@ func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, 
 		logf("warn: fix mining failed: %v", mineErr)
 	}
 
+	// The fix write records whether origin names a GitHub repository.
+	// Both index modes run this phase, so both keep the record current.
+	// ResolveRepository runs local git only, so local mode stays offline.
+	noReviewRepository := false
+	if mineErr == nil && mined.Mined {
+		_, repoState := reviews.ResolveRepository(root)
+		noReviewRepository = repoState != reviews.RepositoryGitHub
+	}
+
 	// The hook runs before the open, because the open can create or
 	// migrate the database that the hook guards.
 	if err := runBeforePersist(req, SourceFixes); err != nil {
@@ -836,7 +845,7 @@ func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, 
 
 	progress(RefreshEvent{Phase: PhasePersist, Source: SourceFixes})
 
-	count, err := persistFixes(st, mined)
+	count, err := persistFixes(st, mined, noReviewRepository)
 	if err != nil {
 		done(failedSource(CauseStore, err))
 
@@ -1033,12 +1042,14 @@ func RefreshFixes(root, dbPath string, logf func(string, ...any)) (int, error) {
 // must not look like an authoritative empty history. The store stamps
 // the mine time in the same transaction, because the outcome loop only
 // trusts "no recurrence since exposure" if mining actually ran since.
-func persistFixes(st *store.Store, res fixes.Result) (int, error) {
+// noReviewRepository tells the store that origin names no GitHub
+// repository, so the outcome loop can rely on fix findings alone.
+func persistFixes(st *store.Store, res fixes.Result, noReviewRepository bool) (int, error) {
 	if !res.Mined {
 		return 0, nil
 	}
 
-	if err := st.ReplaceFixFindings(res.Findings); err != nil {
+	if err := st.ReplaceFixFindings(res.Findings, noReviewRepository); err != nil {
 		return 0, err
 	}
 

@@ -123,6 +123,11 @@ model-boundary delivery.
   --lessons`, and the MCP `check` tool print one `companions` line when
   they list no partner: every partner is in the diff, the index holds
   none, or the co-change read failed.
+- **Pin outcomes without GitHub reviews.** When origin names no GitHub
+  repository, `seamark index` records this with the fix findings, and
+  pin outcomes rest on fix findings alone. Such a pin no longer reads
+  `untested — evidence not mined since exposure` forever. The next
+  `seamark index --fixes-only` applies this to an existing index.
 - **Console builds.** The Overview build refuses a database that
   records another repository, at any schema, so it can no longer move
   that repository's recorded root.
