@@ -166,7 +166,12 @@ nearest line with text above them in the hunk counts too: a Python
 function ends at its last statement, so a blank line between it and the
 removed lines lies outside it. A cut before the first line, such as the
 deletion of a whole file, counts no line, so the reach of that file
-stays unknown. Policy
+stays unknown. A rename record puts its old path in `diff.files` with
+no changed line and counts it in `diff.unindexed_files`, so the reach
+of that path stays unknown too, as for a deleted file. A rule over `diff.files` can
+therefore match a rename away from a path, and a rule over
+`diff.unindexed_files` can match a rename that edits only symbols of
+the new path. Policy
 rules over `diff.effects` gate merges the same way `gate` gates commands, and
 `diff.unindexed_files` exposes coverage blind spots to your rules —
 changed files the index cannot attribute never silently read as safe.

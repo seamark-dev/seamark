@@ -525,3 +525,80 @@ func TestParseDiffEndsAHunkAtAFileHeader(t *testing.T) {
 		assert.Equal(t, c.lines, got.lines, c.name)
 	}
 }
+
+func TestParseDiffRegistersTheOldPathOfARename(t *testing.T) {
+	cases := []struct {
+		name  string
+		diff  string
+		paths []string
+		lines map[string][]uint32
+	}{
+		{
+			name:  "a rename with no hunk registers both paths",
+			diff:  "diff --git a/old.go b/new.go\nsimilarity index 100%\nrename from old.go\nrename to new.go\n",
+			paths: []string{"new.go", "old.go"},
+			lines: map[string][]uint32{"new.go": nil, "old.go": nil},
+		},
+		{
+			name: "the hunk lines of a rename stay on the new path",
+			diff: "diff --git a/old.go b/new.go\nsimilarity index 90%\nrename from old.go\nrename to new.go\n" +
+				"--- a/old.go\n+++ b/new.go\n@@ -1 +1 @@\n-x\n+y\n",
+			paths: []string{"new.go", "old.go"},
+			lines: map[string][]uint32{"new.go": {1}, "old.go": nil},
+		},
+		{
+			// The rename lines carry no a/ or b/ side prefix, so a top
+			// directory named a keeps its name.
+			name:  "an old path under a directory named a keeps that directory",
+			diff:  "diff --git a/a/x.go b/a/y.go\nsimilarity index 100%\nrename from a/x.go\nrename to a/y.go\n",
+			paths: []string{"a/y.go", "a/x.go"},
+			lines: map[string][]uint32{"a/y.go": nil, "a/x.go": nil},
+		},
+		{
+			// An agent can send a hand-made diff with no rename to line and
+			// no file headers. The hunk then belongs to the diff --git path.
+			name:  "a hunk after a lone rename from line stays on the new path",
+			diff:  "diff --git a/old.go b/new.go\nrename from old.go\n@@ -1 +1 @@\n-x\n+y\n",
+			paths: []string{"new.go", "old.go"},
+			lines: map[string][]uint32{"new.go": {1}, "old.go": nil},
+		},
+		{
+			name: "a C-quoted old path unwraps",
+			diff: "diff --git \"a/pkg/\\303\\251.go\" b/pkg/e.go\nsimilarity index 100%\n" +
+				"rename from \"pkg/\\303\\251.go\"\nrename to pkg/e.go\n",
+			paths: []string{"pkg/e.go", "pkg/é.go"},
+			lines: map[string][]uint32{"pkg/e.go": nil, "pkg/é.go": nil},
+		},
+		{
+			name:  "a rename from line with no value registers no path",
+			diff:  "diff --git a/old.go b/new.go\nrename from \nrename to new.go\n",
+			paths: []string{"new.go"},
+			lines: map[string][]uint32{"new.go": nil},
+		},
+		{
+			// A copy keeps its source file, so only the target changes.
+			name:  "a copy registers only its target",
+			diff:  "diff --git a/a.go b/b.go\nsimilarity index 100%\ncopy from a.go\ncopy to b.go\n",
+			paths: []string{"b.go"},
+			lines: map[string][]uint32{"b.go": nil},
+		},
+	}
+
+	for _, c := range cases {
+		got := parseDiff(c.diff)
+
+		assert.Equal(t, c.paths, got.paths, c.name)
+		assert.Equal(t, c.lines, got.lines, c.name)
+	}
+}
+
+func TestParseDiffRegistersTheRenameToPath(t *testing.T) {
+	// Git writes this record for git mv "dir b/x.go" "dir b/y.go". The
+	// diff --git line cannot show where a new path with " b/" starts.
+	// So only the rename lines give both full paths.
+	got := parseDiff("diff --git a/dir b/x.go b/dir b/y.go\nsimilarity index 100%\n" +
+		"rename from dir b/x.go\nrename to dir b/y.go\n")
+
+	assert.Contains(t, got.paths, "dir b/y.go", "the rename to line registers the new path")
+	assert.Contains(t, got.paths, "dir b/x.go", "the rename from line registers the old path")
+}

@@ -114,9 +114,11 @@ model-boundary delivery.
   `lessons --prepare`, so two lines no longer run together.
 - **Gone co-change partners.** Partner lists and the orient hubs leave
   out deleted and renamed-away files from the next index run. A deleted
-  file keeps its live partners, so `check` lists them for a diff that
-  deletes it. `seamark index --force` applies this at once to an older
-  index.
+  or renamed-away file keeps its live partners, so `check` lists them
+  for a diff that deletes it or renames it away, also in a directory
+  rename. The old path of a rename record is now in `diff.files` and
+  counts in `diff.unindexed_files`. `seamark index --force` applies
+  this at once to an older index.
 - **Check says why no companion is listed.** `seamark check`, `check
   --lessons`, and the MCP `check` tool print one `companions` line when
   they list no partner: every partner is in the diff, the index holds

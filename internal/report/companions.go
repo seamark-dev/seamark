@@ -396,10 +396,12 @@ func companionStatus(err error, inDiff int) string {
 	case inDiff > 0:
 		return fmt.Sprintf("companions  none outside this diff (co-change partners in the diff: %d)", inDiff)
 	default:
-		// A deleted diff file still gives its live partners. A deleted or
-		// renamed-away file is never a partner, so it never counts here.
-		// The line prints only when no diff file has a live partner, so
-		// it states what the index offers, not what history shows.
+		// Every diff file anchors its live partners. That includes a
+		// deleted path and the old path of a rename record, because the
+		// diff parser lists both. A deleted or renamed-away file is never
+		// a partner, so it never counts here. The line prints only when
+		// no diff file has a live partner, so it states what the index
+		// offers, not what history shows.
 		return "companions  none (the index holds no co-change partner for the diff's files)"
 	}
 }

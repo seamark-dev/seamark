@@ -86,6 +86,13 @@ func parseDiff(diffText string) parsedDiff {
 				file = p
 				register(p)
 			}
+		case strings.HasPrefix(line, "rename from "):
+			// A rename removes its old path, so the path enters the diff
+			// files like a whole-file deletion. Check then shows the
+			// partners and lessons of that path. The path gets no changed
+			// line, so its reach stays unknown. The line leaves file
+			// unchanged, because every hunk line belongs to the new path.
+			register(diffHeaderPath(strings.TrimPrefix(line, "rename from "), ""))
 		case strings.HasPrefix(line, "--- "):
 			gitRecord = gitRecord && gitHeader
 			gitHeader = false

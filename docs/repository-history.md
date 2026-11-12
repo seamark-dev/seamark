@@ -216,10 +216,18 @@ table in [Data flow](data-flow.md).
   until commits accumulate.
 - From the next index run, a deleted or renamed-away file is never
   named as a partner or a hub, and its commits still count in lift. It
-  keeps its live partners, so `why`, `change_set`, and `check` suggest
-  them for a change that deletes it. A file that comes back is a partner
-  again at the next index run. A renamed file starts new history at its
-  new path, so it has no partners until commits accumulate there.
+  keeps its live partners. `why` and `change_set` list them when you
+  ask for the old path. `check` and the MCP `check` tool list them for
+  a diff that deletes the file or renames it away, also as part of a
+  directory rename, in a piped diff and in the `git diff HEAD`
+  fallback, because check reads the old path of a rename record as a
+  changed file. A directory rename moves the partners inside that
+  directory too, so the old paths keep only the partners outside it,
+  and a live file whose partners all moved shows none. A file that
+  comes back is a partner again at the next index run. A renamed file
+  starts new history at its new path (see the rename detection of
+  history mining above), so it has no partners until commits
+  accumulate there.
 - Seamark is a navigator, not an oracle. It tells you where to look and
   what usually travels together; "usually changes with" is empirical
   evidence, never a guarantee that _your_ edit is safe or complete. For
