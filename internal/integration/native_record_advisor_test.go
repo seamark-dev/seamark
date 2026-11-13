@@ -352,8 +352,8 @@ func TestNativeRecordClaudeAdvisorState(t *testing.T) {
 
 // TestNativeRecordClaudeRunsGoThroughClaudePrint proves that the script
 // starts claude in print mode only inside claude_print, so no paid run
-// misses the advisor switch. Comments and echo lines only name the
-// command.
+// misses the advisor switch. Comments and print lines (echo, or
+// printf '%s\n') only name the command.
 func TestNativeRecordClaudeRunsGoThroughClaudePrint(t *testing.T) {
 	script := nativeRecordScript(t)
 	body := scriptFunction(t, script, "claude_print")
@@ -364,7 +364,8 @@ func TestNativeRecordClaudeRunsGoThroughClaudePrint(t *testing.T) {
 
 	for _, line := range strings.Split(strings.Replace(script, body, "", 1), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "echo ") {
+		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "echo ") ||
+			strings.HasPrefix(trimmed, `printf '%s\n' `) {
 			continue
 		}
 

@@ -28,6 +28,10 @@ const claudeLimitText = "You've hit your weekly limit · resets Oct 29 at 10am (
 // The client marks it as a transient error, not as a usage limit.
 const claudeTransientText = "API Error: Server is temporarily limiting requests (not your usage limit) · retry"
 
+// claudeBackslashText is an error text with backslash escapes and "\c".
+// The FAIL line prints it as given, because a Windows path can hold them.
+const claudeBackslashText = `API Error: path C:\new\table and \c end`
+
 // claudeServerText is a server error that is not a limit.
 const claudeServerText = "API Error: 500 Internal server error"
 
@@ -267,6 +271,20 @@ func TestNativeRecordClaudeRunnersStopAtLimit(t *testing.T) {
 				assert.Equal(t, runner.scenario == "guard", strings.Contains(got, "guard setup restored"), got)
 			})
 		}
+
+		t.Run(runner.name+" limit text with backslashes", func(t *testing.T) {
+			text := `You've hit your weekly limit · resets C:\new \c (UTC)`
+			got, code, _ := runClaudeRunner(t, runner, claudeResult(t, true, text), "", "1")
+
+			between := ""
+			if runner.scenario == "guard" {
+				between = "guard setup restored\n"
+			}
+
+			assert.Equal(t, 1, code, got)
+			assert.Contains(t, got, "  FAIL     run 1 stopped at a Claude Code usage or account limit: "+text+"\n"+
+				between+"  note     no later run starts;")
+		})
 	}
 }
 
@@ -307,6 +325,8 @@ func TestNativeRecordClaudeRunnersNameTheFailure(t *testing.T) {
 		{"last non-empty stderr line", "", "first\nError: not logged in\n\n", "1", "Error: not logged in"},
 		{"no message at all", "", "", "7", "claude exited with status 7 and printed no message"},
 		{"a stderr line with an escape and a tab", "", "Error:\x1b\tboom\n", "1", "Error: boom"},
+		{"result text with backslashes", claudeResult(t, true, claudeBackslashText), "", "1", claudeBackslashText},
+		{"a stderr line with backslashes", "", "first\nError: C:\\temp\\c\n", "1", `Error: C:\temp\c`},
 	}
 
 	for _, runner := range claudeRunners {
