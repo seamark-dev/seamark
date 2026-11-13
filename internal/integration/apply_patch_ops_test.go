@@ -86,20 +86,20 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 		})
 	}
 
-	t.Run("add content is the plus lines joined with a line feed", func(t *testing.T) {
+	t.Run("add content is the plus lines, each ended by a line feed", func(t *testing.T) {
 		for _, tc := range []struct {
 			patch   string
 			content []string // the content of each add section, in order
 		}{
 			// Oracle case 05: a header with leading spaces after an add ends the add.
-			{"*** Begin Patch\n*** Add File: n.txt\n+hi\n  *** Delete File: b.txt\n*** End Patch", []string{"hi"}},
+			{"*** Begin Patch\n*** Add File: n.txt\n+hi\n  *** Delete File: b.txt\n*** End Patch", []string{"hi\n"}},
 			// Oracle case 14: an add without lines has an empty, non-nil content.
 			{"*** Begin Patch\n*** Add File: n.txt\n*** Delete File: b.txt\n*** End Patch", []string{""}},
 			// Oracle case 19: header text after the "+" is content.
-			{"*** Begin Patch\n*** Add File: n.txt\n+*** Delete File: b.txt\n*** End Patch", []string{"*** Delete File: b.txt"}},
+			{"*** Begin Patch\n*** Add File: n.txt\n+*** Delete File: b.txt\n*** End Patch", []string{"*** Delete File: b.txt\n"}},
 			// One carriage return per line end goes, as in the Codex parser.
-			{"*** Begin Patch\r\n*** Add File: n.txt\r\n+a\r\n+\r\n+ b \r\n*** End Patch", []string{"a\n\n b "}},
-			{"*** Begin Patch\n*** Add File: x.txt\n+1\n*** Add File: y.txt\n+2\n+3\n*** End Patch", []string{"1", "2\n3"}},
+			{"*** Begin Patch\r\n*** Add File: n.txt\r\n+a\r\n+\r\n+ b \r\n*** End Patch", []string{"a\n\n b \n"}},
+			{"*** Begin Patch\n*** Add File: x.txt\n+1\n*** Add File: y.txt\n+2\n+3\n*** End Patch", []string{"1\n", "2\n3\n"}},
 		} {
 			ops, err := applyPatchOps(tc.patch)
 			require.NoError(t, err)
@@ -117,6 +117,44 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 		}
 	})
 
+	// A new recording that changes the add bytes must fail here, offline,
+	// and not only in the native check that needs an installed Codex.
+	t.Run("add content equals every recorded native add", func(t *testing.T) {
+		_, oracle := loadApplyPatchOracle(t)
+		require.NotNil(t, oracle.Content, "the oracle file holds a content part")
+
+		var seen []string
+
+		for _, tc := range oracle.Content.Cases {
+			if tc.ExitStatus != 0 {
+				continue
+			}
+
+			ops, err := applyPatchOps(tc.Patch)
+			require.NoError(t, err, tc.Name)
+
+			if !onlyAdds(ops) {
+				continue
+			}
+
+			for _, op := range ops {
+				require.NotNil(t, op.Content, tc.Name)
+
+				want, ok := tc.After[op.Path]
+				require.True(t, ok, "%s: Codex wrote no %s", tc.Name, op.Path)
+				assert.Equal(t, want, *op.Content, "%s: the projection of %s differs from the native bytes", tc.Name, op.Path)
+			}
+
+			seen = append(seen, tc.Name)
+		}
+
+		// An empty list would let the comparison pass with no evidence.
+		assert.Equal(t, []string{
+			"22_add_two_lines", "23_add_last_line_empty", "24_add_patch_final_newline",
+			"25_add_empty", "26_add_over_existing", "27_add_crlf_patch",
+		}, seen, "the recorded add cases")
+	})
+
 	t.Run("any line under an update header is a hunk", func(t *testing.T) {
 		for _, patch := range []string{
 			"*** Begin Patch\n*** Update File: a.txt\n@@\n-x\n+y\n*** End Patch",
@@ -131,4 +169,17 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 			assert.True(t, ops[0].Hunks, patch)
 		}
 	})
+}
+
+// onlyAdds reports whether ops holds at least one operation and only
+// add operations. The oracle comparison reads add bytes only, because
+// the other kinds have no projected content.
+func onlyAdds(ops []lessoncheck.FileOp) bool {
+	for _, op := range ops {
+		if op.Kind != lessoncheck.OpPatchAdd {
+			return false
+		}
+	}
+
+	return len(ops) > 0
 }

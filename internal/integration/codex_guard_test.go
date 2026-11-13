@@ -23,7 +23,7 @@ func TestCodexGuardDecodesApplyPatchOps(t *testing.T) {
 		ops      []lessoncheck.FileOp
 	}{
 		{"pre_tool_use_apply_patch_add.json", "call_synthetic_0001", receiverID("thr_synthetic_0001"), []lessoncheck.FileOp{
-			{Kind: lessoncheck.OpPatchAdd, Path: "docs/new-page.md", Content: strPtr("# New page\n\nBody.")},
+			{Kind: lessoncheck.OpPatchAdd, Path: "docs/new-page.md", Content: strPtr("# New page\n\nBody.\n")},
 		}},
 		{"pre_tool_use_apply_patch_update.json", "call_synthetic_0002", receiverID("thr_synthetic_0001"), []lessoncheck.FileOp{
 			{Kind: lessoncheck.OpPatchUpdate, Path: "internal/api/handler.go", Hunks: true},
@@ -37,7 +37,7 @@ func TestCodexGuardDecodesApplyPatchOps(t *testing.T) {
 			{Kind: lessoncheck.OpPatchUpdate, Path: "internal/api/old_name.go", MoveTo: "internal/api/new_name.go", Hunks: true},
 		}},
 		{"pre_tool_use_apply_patch_multi.json", "call_synthetic_0005", receiverID("thr_synthetic_0001"), []lessoncheck.FileOp{
-			{Kind: lessoncheck.OpPatchAdd, Path: "hello.txt", Content: strPtr("Hello world")},
+			{Kind: lessoncheck.OpPatchAdd, Path: "hello.txt", Content: strPtr("Hello world\n")},
 			{Kind: lessoncheck.OpPatchUpdate, Path: "src/app.py", MoveTo: "src/main.py", Hunks: true},
 			{Kind: lessoncheck.OpPatchDelete, Path: "obsolete.txt"},
 		}},

@@ -63,8 +63,8 @@ type FileOp struct {
 	Kind   OpKind
 	Path   string
 	MoveTo string // patch-move, and patch-update with a Move to line
-	// Content is the full content of a write, and the "+" lines of a
-	// patch-add joined with "\n". It is nil for every other kind.
+	// Content is the full content of a write, and for a patch-add the
+	// bytes that the applier writes. It is nil for every other kind.
 	Content *string
 	Edits   []TextEdit // edit (one), multi-edit (many, in order)
 	// Hunks is true for a patch-update that carries hunks. The content

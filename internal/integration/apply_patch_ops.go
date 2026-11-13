@@ -32,8 +32,9 @@ import (
 //
 // The operations:
 //   - An add section gives OpPatchAdd. Its content is the "+" lines
-//     without the "+", joined with "\n". A section without lines gives
-//     an empty content, not a nil one.
+//     without the "+", each ended by "\n". The Codex applier writes a
+//     final newline, and the projection must hold the bytes on disk. A
+//     section without lines gives an empty content, not a nil one.
 //   - A delete section gives OpPatchDelete.
 //   - An update section with a move and no other line gives
 //     OpPatchMove: the native tool moves the file and keeps its content.
@@ -57,9 +58,14 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 
 	// flush sets the content of the open section when it is an add
 	// section. The caller runs it before a new section and at the end.
+	// An empty section stays "", because Codex then writes an empty file.
 	flush := func() {
 		if n := len(ops); n > 0 && ops[n-1].Kind == lessoncheck.OpPatchAdd {
-			content := strings.Join(added, "\n")
+			content := ""
+			if len(added) > 0 {
+				content = strings.Join(added, "\n") + "\n"
+			}
+
 			ops[n-1].Content = &content
 		}
 
