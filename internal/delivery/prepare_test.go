@@ -1279,6 +1279,71 @@ func jsonString(t *testing.T, s string) string {
 	return string(encoded)
 }
 
+// TestClientBadgeTextsAgree proves that every surface prints one client
+// badge text. In the report, one client has a verified limit and the
+// other has reasons. The impact line part of each client equals its
+// result line text before the stage, and its part of the preparation
+// line.
+func TestClientBadgeTextsAgree(t *testing.T) {
+	const limit = "the client lets the write run after its 10 s hook timeout"
+
+	cfg, errs, err := lessoncheck.Parse([]byte("lesson_checks_version: 1\nchecks:\n  frozen:\n    kind: forbid-path-change/1\n" +
+		"pin:\n  - rule: frozen-assets\n    region: generated/\n    mode: enforce\n    check: frozen\n"))
+	require.NoError(t, err)
+	require.Empty(t, errs)
+
+	var paths []lessoncheck.InstalledPath
+
+	// Claude Code gets verified evidence with a limit. Codex gets
+	// unverified evidence and an unknown trust, so its badge has reasons.
+	for _, client := range []string{"claude", "codex"} {
+		for _, stage := range []lessoncheck.HookStage{lessoncheck.StagePreWrite, lessoncheck.StagePostEdit} {
+			p := lessoncheck.InstalledPath{
+				Client: client, Tool: "Write", Stage: stage, Context: lessoncheck.ContextRoot, Installed: true,
+				Marker: lessoncheck.MarkerGuard, BinaryState: lessoncheck.BinaryCurrent,
+				Verification: lessoncheck.CapVerification{Level: lessoncheck.LevelVerified, Limit: limit},
+			}
+			if stage == lessoncheck.StagePostEdit {
+				p.Marker = "lessons --verify --hook"
+			}
+
+			if client == "codex" {
+				p.Verification = lessoncheck.CapVerification{Level: "pending"}
+				p.Reasons = []lessoncheck.CapReason{lessoncheck.CapTrustUnknown}
+			}
+
+			paths = append(paths, p)
+		}
+	}
+
+	capability := lessoncheck.CapabilityReportOf(cfg, nil, paths, nil)
+	ref := cfg.Pins[0].Ref
+
+	pin, ok := capability.Pin(ref)
+	require.True(t, ok)
+	require.Len(t, pin.Clients, 2)
+
+	assert.NotEmpty(t, pin.Clients[0].Limits, "claude has a limit")
+	assert.NotEmpty(t, pin.Clients[1].Reasons, "codex has reasons")
+
+	// A note can hold a comma, so the test builds each whole line from the
+	// result lines instead of splitting the impact line.
+	lines := capability.ActiveLines(ref)
+	require.Len(t, lines, 2)
+
+	badges := make([]string, 0, len(lines))
+
+	for _, line := range lines {
+		badge, _, _ := strings.Cut(strings.TrimPrefix(line, "active: "), " · ")
+		assert.Contains(t, badge, " (", "each badge has a note")
+
+		badges = append(badges, badge)
+	}
+
+	assert.Equal(t, "requested; "+strings.Join(badges, ", "), capability.ActiveText(ref))
+	assert.Equal(t, strings.Join(badges, " · "), enforcementText(pin.Clients))
+}
+
 // TestEnforcementTextNamesTheLimit proves that the enforcement line of a
 // prepared check names the limit of an enforced badge.
 func TestEnforcementTextNamesTheLimit(t *testing.T) {
@@ -1288,4 +1353,18 @@ func TestEnforcementTextNamesTheLimit(t *testing.T) {
 	})
 	assert.Equal(t, "claude enforced (limit: the client lets the write run after its 10 s hook timeout) · "+
 		"codex requested-inactive (not-installed)", got)
+}
+
+// TestEnforcementTextScrubsTheBadge proves that the enforcement line
+// keeps its own scrub. The badge fields are constants today, but the
+// line reaches the terminal, so a control character in any field never
+// does.
+func TestEnforcementTextScrubsTheBadge(t *testing.T) {
+	got := enforcementText([]lessoncheck.PinClient{{
+		Client: "claude\x1b]0;title\x07", Badge: lessoncheck.BadgeEnforced, Limits: []string{"limit\x1b[2J"},
+	}})
+
+	assert.NotContains(t, got, "\x1b")
+	assert.NotContains(t, got, "\x07")
+	assert.Equal(t, "claude]0;title enforced (limit: limit[2J)", got)
 }

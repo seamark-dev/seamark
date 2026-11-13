@@ -553,7 +553,8 @@ func (r CapabilityReport) Pin(ref string) (PinCapability, bool) {
 // ActiveText returns the one-line active state of a pin, for the
 // checker impact block. A pin that no client covers reads "requested;
 // inactive: <reasons>", the same form as ActiveRequested. Else the text
-// names the badge of each client.
+// names the badge of each client in the form of PinClient.Text, so the
+// impact line gives the reasons and limits that the result lines give.
 func (r CapabilityReport) ActiveText(ref string) string {
 	pin, fixed := r.joinedPin(ref)
 	if fixed != "" {
@@ -567,12 +568,7 @@ func (r CapabilityReport) ActiveText(ref string) string {
 	)
 
 	for _, c := range pin.Clients {
-		badge := c.Client + " " + c.Badge
-		if len(c.Limits) > 0 {
-			badge += " (" + LimitText(c.Limits) + ")"
-		}
-
-		badges = append(badges, badge)
+		badges = append(badges, c.Text())
 		reasons = append(reasons, c.Reasons...)
 		covered = covered || c.Badge != BadgeRequestedInactive
 	}
@@ -608,10 +604,7 @@ func (r CapabilityReport) ActiveLines(ref string) []string {
 			continue
 		}
 
-		line := "active: " + pc.Client + " " + pc.Badge
-		if note := pc.Note(); note != "" {
-			line += " (" + note + ")"
-		}
+		line := "active: " + pc.Text()
 
 		if c, ok := r.Client(pc.Client); ok {
 			line += " · " + c.StageText(stage)
@@ -652,10 +645,22 @@ func (r CapabilityReport) Client(id string) (ClientCapability, bool) {
 	return r.Clients[i], true
 }
 
+// Text returns the badge of the client with its note: "<client>
+// <badge>", then " (<note>)" when Note is not empty. Every surface that
+// prints a client badge builds it here, so no surface drops a reason or
+// a limit. Each surface still applies its own terminal scrub.
+func (c PinClient) Text() string {
+	text := c.Client + " " + c.Badge
+	if note := c.Note(); note != "" {
+		text += " (" + note + ")"
+	}
+
+	return text
+}
+
 // Note returns the text that follows the badge in parentheses: the
-// reasons, then the limits. It is "" when the client has neither. The
-// surfaces that print a badge share it, so a limit never goes missing
-// from one of them.
+// reasons, then the limits. It is "" when the client has neither. Text
+// is the shared form of a badge with its note.
 func (c PinClient) Note() string {
 	var parts []string
 

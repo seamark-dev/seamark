@@ -61,7 +61,8 @@ func capabilityInstall(t *testing.T, root string, setups ...integration.ClientSe
 // and no Codex hooks. The reviewed recording verifies Edit and Write
 // only, so MultiEdit keeps the pin enforced-unverified.
 const (
-	activeEnforceBlock  = "  active: requested; claude enforced-unverified, codex requested-inactive\n"
+	activeEnforceBlock = "  active: requested; claude enforced-unverified (native-deny-unverified, native-timeout-unverified), " +
+		"codex requested-inactive (not-installed)\n"
 	activeEnforceClaude = "active: claude enforced-unverified (native-deny-unverified, native-timeout-unverified) · " +
 		"pre-write Edit, Write active (limit: the client lets the write run after its 10 s hook timeout); " +
 		"MultiEdit active-unverified\n"
@@ -89,7 +90,7 @@ func TestLessonsSetModeShowsActiveState(t *testing.T) {
 		stdout, _ = goldenRun(t, root, "lessons", "--set-mode", "check", "--pin", setModePinRef)
 		assert.Contains(t, stdout, "\nrequested mode: check\n"+
 			"active: claude checked · post-edit active-unverified\n"+activeCodexInactive)
-		assert.Contains(t, stdout, "  active: requested; claude checked, codex requested-inactive\n")
+		assert.Contains(t, stdout, "  active: requested; claude checked, codex requested-inactive (not-installed)\n")
 
 		stdout, _ = goldenRun(t, root, "lessons", "--set-mode", "advisory", "--pin", setModePinRef)
 		assert.Contains(t, stdout, "\nrequested mode: advisory\nactive: "+lessoncheck.ActiveAdvisory+"\n")

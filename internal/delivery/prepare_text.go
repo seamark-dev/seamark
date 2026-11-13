@@ -220,17 +220,13 @@ func writeChecks(w io.Writer, p *Preparation) {
 // limits, for example "claude enforced-unverified
 // (native-deny-unverified) · codex requested-inactive (not-installed)".
 // The badges come from the capability report, so preparation never
-// computes one.
+// computes one. PinClient.Text gives the form that every badge surface
+// prints.
 func enforcementText(clients []lessoncheck.PinClient) string {
 	parts := make([]string, 0, len(clients))
 
 	for _, c := range clients {
-		text := render.Sanitize(c.Client) + " " + render.Sanitize(c.Badge)
-		if note := c.Note(); note != "" {
-			text += " (" + render.Sanitize(note) + ")"
-		}
-
-		parts = append(parts, text)
+		parts = append(parts, render.Sanitize(c.Text()))
 	}
 
 	return strings.Join(parts, " · ")

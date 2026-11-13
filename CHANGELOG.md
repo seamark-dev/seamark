@@ -201,6 +201,9 @@ model-boundary delivery.
 - **Report-only lesson guards.** The enforce refusal and the doctor
   action for a report-only lesson guard name the document, the
   definition, and the step that removes it, in place of "resolve it".
+- **Checker impact reasons.** The checker impact line of set-mode,
+  retarget, and the console names the reasons and limits of each client
+  badge, as the result lines do.
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`. Doctor, status, and the
   console print the word once: `hooks unreadable (<reason>)`, not

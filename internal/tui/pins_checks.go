@@ -170,10 +170,7 @@ func (p *pinsView) activeValues(in *maintain.Inspection, c maintain.PinCheck, w 
 	var out []string
 
 	for _, client := range pc.Clients {
-		text := ui.OneLine(client.Client) + " " + client.Badge
-		if note := client.Note(); note != "" {
-			text += " (" + ui.OneLine(note) + ")"
-		}
+		text := ui.OneLine(client.Text())
 
 		style := t.Body
 		if client.Badge == lessoncheck.BadgeRequestedInactive {
