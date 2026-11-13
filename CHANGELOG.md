@@ -348,6 +348,8 @@ model-boundary delivery.
 - **why partner counts.** The `why` help, the MCP `why` description and
   the docs now say that M in `N/M commits` counts the commits in the
   mined window, the same for every partner.
+- **change_set partner counts.** The MCP `change_set` description and
+  the docs now give M in `N/M commits` the same meaning as `why` does.
 - **Full lesson view of a file.** `seamark lessons --file <path>` now
   lists every lesson that applies. It kept at most 8 and dropped the
   rest without a count, while change_set, check, `lessons --prepare` and
