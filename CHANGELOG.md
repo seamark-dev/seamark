@@ -112,6 +112,9 @@ model-boundary delivery.
   --hook` in `.claude/settings.local.json`, sits beside a warn gate hook,
   the init `gate` line now says that the gate hooks that certainly run
   block nothing, not that nothing blocks.
+- **New policy file on the gate line.** The init `gate` line calls
+  `.seamark/policy.yaml` new when the same run writes it, and kept only
+  when it existed before the run.
 - **Gate failure wording.** `init` and the docs no longer say that
   every gate failure fails closed under enforce. The gate's own failures
   still exit 2 and block. A hook that the client stops at its timeout,

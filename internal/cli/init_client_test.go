@@ -712,9 +712,10 @@ func TestPrintGateLineNamesTheUncheckedFileUnderEveryGateLine(t *testing.T) {
 				require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", tc.policy))
 			}
 
+			// A run writes the policy file only when none exists.
 			var plain, explicit testWriter
-			printGateLine(&plain, root, tc.gateMode, tc.hooks, []string{local})
-			printGateLine(&explicit, root, tc.gateMode, tc.hooks, nil)
+			printGateLine(&plain, root, tc.gateMode, tc.hooks, []string{local}, tc.policy == "")
+			printGateLine(&explicit, root, tc.gateMode, tc.hooks, nil, tc.policy == "")
 
 			out := plain.String()
 
@@ -818,12 +819,92 @@ func TestPrintGateLinePicksTheRouteOfEachPossibleDefinition(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var b testWriter
-			printGateLine(&b, t.TempDir(), gateModeWarn, tc.hooks, nil)
+			printGateLine(&b, t.TempDir(), gateModeWarn, tc.hooks, nil, true)
 
 			assert.Contains(t, b.String(), unknown+tc.want)
 			assert.NotContains(t, b.String(), "run the seamark gate directly")
 		})
 	}
+}
+
+func TestPrintGateLineCallsAPolicyFileKeptOnlyWhenItExistedBefore(t *testing.T) {
+	// The gate line runs after the writes, so the policy file is on disk
+	// in both cases. A file that this run wrote carries the mode of the
+	// run, so the line calls it new. Only an earlier file is kept.
+	const shared, local = ".claude/settings.json", ".claude/settings.local.json"
+
+	managedWarn := integration.GateHook{Path: shared, Mode: gateModeWarn, Managed: true}
+	managedEnforce := integration.GateHook{Path: shared, Mode: gateModeEnforce, Managed: true}
+	localEnforce := integration.GateHook{Path: local, Mode: gateModeEnforce}
+
+	for name, tc := range map[string]struct {
+		gateMode string
+		hooks    []integration.GateHook
+		policy   string
+		text     string // the line text after "the new" or "the kept"
+	}{
+		"the hook follows an enforcing policy": {
+			gateModeEnforce, []integration.GateHook{managedWarn}, "mode: enforce\n",
+			" .seamark/policy.yaml sets mode: enforce and the hook\n",
+		},
+		"an enforcing policy beside a local enforcing hook": {
+			gateModeEnforce, []integration.GateHook{managedWarn, localEnforce}, "mode: enforce\n",
+			" .seamark/policy.yaml also sets mode: enforce, so every gate hook blocks\n",
+		},
+		"a warn policy beside an enforcing managed hook": {
+			gateModeEnforce, []integration.GateHook{managedEnforce}, "mode: warn\n",
+			" .seamark/policy.yaml says mode: warn — it still governs plain\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", tc.policy))
+
+			var written, kept testWriter
+			printGateLine(&written, root, tc.gateMode, tc.hooks, nil, true)
+			printGateLine(&kept, root, tc.gateMode, tc.hooks, nil, false)
+
+			assert.Contains(t, written.String(), "the new"+tc.text)
+			assert.NotContains(t, written.String(), "the kept")
+			assert.Contains(t, kept.String(), "the kept"+tc.text)
+			assert.NotContains(t, kept.String(), "the new")
+		})
+	}
+}
+
+func TestInitClientCallsThePolicyFileThatItWritesNew(t *testing.T) {
+	// No policy file exists. An idle managed gate hook and a running warn
+	// gate hook in the local file make the gate line name the policy file.
+	// The run writes that file, so the line must not call it kept. A
+	// second run finds the file, so it is kept then.
+	for name, printOnly := range map[string]bool{"a run that writes": false, "a run with --print": true} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeHookDocument(t, root, ".claude/settings.json", "Shell", "/bin/seamark gate --hook")
+			writeHookDocument(t, root, ".claude/settings.local.json", "Bash", "/bin/seamark gate --hook")
+
+			out := initClients(t, root, printOnly, false, false, gateModeEnforce, "claude")
+
+			if printOnly {
+				assert.Contains(t, out, "  would write  .seamark/policy.yaml\n")
+				assert.NoFileExists(t, filepath.Join(root, ".seamark", "policy.yaml"))
+			} else {
+				assert.Contains(t, out, "  wrote  .seamark/policy.yaml\n")
+			}
+
+			assert.Contains(t, out, "  gate    enforce — the new .seamark/policy.yaml sets mode: enforce and the hook\n")
+			assert.NotContains(t, out, "the kept .seamark/policy.yaml")
+		})
+	}
+
+	root := t.TempDir()
+	writeHookDocument(t, root, ".claude/settings.json", "Shell", "/bin/seamark gate --hook")
+	writeHookDocument(t, root, ".claude/settings.local.json", "Bash", "/bin/seamark gate --hook")
+	initClients(t, root, false, false, false, gateModeEnforce, "claude")
+
+	out := initClients(t, root, false, false, false, gateModeEnforce, "claude")
+	assert.Contains(t, out, "  kept    .seamark/policy.yaml (already present)\n")
+	assert.Contains(t, out, "  gate    enforce — the kept .seamark/policy.yaml sets mode: enforce and the hook\n")
 }
 
 // writeLocalGate puts an enforcing seamark gate hook into the user's
@@ -837,6 +918,17 @@ func writeLocalGate(t *testing.T, root string) string {
 	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"), []byte(local), 0o644))
 
 	return local
+}
+
+// writeHookDocument writes a hook document with one PreToolUse command
+// under the matcher. Claude Code and Codex share the shape.
+func writeHookDocument(t *testing.T, root, rel, matcher, command string) {
+	t.Helper()
+
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(
+		`{"hooks":{"PreToolUse":[{"matcher":"`+matcher+`","hooks":[{"type":"command","command":"`+command+`"}]}]}}`), 0o644))
 }
 
 func TestInitClientGateSummaryIncludesALocalEnforcingHook(t *testing.T) {

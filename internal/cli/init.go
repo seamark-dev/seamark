@@ -398,7 +398,7 @@ func applyInit(run initRun, reg *integration.Registry, setups []integration.Clie
 
 		printNoGateHook(w, run.root, gateMode)
 	} else {
-		printGateLine(w, run.root, gateMode, plan.GateHooks, plan.UncheckedGateSources)
+		printGateLine(w, run.root, gateMode, plan.GateHooks, plan.UncheckedGateSources, writesPolicy(plan))
 
 		// The gate line describes the clients with a gate hook. A selected
 		// client without one must not look covered by it.
@@ -534,8 +534,19 @@ func printFindings(w io.Writer, findings []integration.Finding, showInfo bool) {
 // reads the user's local settings file for gate hooks. The line then
 // names that file and the command that checks it, because a hook there
 // can block or stop blocking without this run knowing.
-func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook, unchecked []string) {
+//
+// policyNew is true when this run writes .seamark/policy.yaml. The line
+// then calls the file new, not kept: the file carries the mode of this
+// run, not an earlier choice of the user.
+func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook, unchecked []string,
+	policyNew bool,
+) {
 	policyMode, policyErr := policyFileMode(root, gateMode)
+
+	policyWord := "kept"
+	if policyNew {
+		policyWord = "new"
+	}
 
 	// The summary comes from the hooks the run leaves, never from the
 	// mode it asked for: a hook setup does not manage keeps its own mode,
@@ -602,8 +613,8 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 			"          edits a gate hook it does not manage; remove that hook to stop blocking\n", strings.Join(enforcing, ", "), beside)
 
 		if policyMode == gateModeEnforce {
-			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml also sets mode: enforce, so every gate hook blocks\n"+
-				"          too; both must change to stop blocking\n")
+			fmt.Fprintf(w, "          note: the %s .seamark/policy.yaml also sets mode: enforce, so every gate hook blocks\n"+
+				"          too; both must change to stop blocking\n", policyWord)
 		}
 	case effect == integration.GateEffectReportOnly:
 		// Every gate hook of the run discards its exit status or runs in
@@ -640,13 +651,13 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 			"          writes %d s) or cannot start the seamark binary\n", hooks.GateTimeout)
 
 		if policyMode != gateModeEnforce {
-			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml says mode: %s — it still governs plain\n"+
-				"          `seamark gate` and `seamark check` runs; only a gate hook with --enforce blocks\n", policyMode)
+			fmt.Fprintf(w, "          note: the %s .seamark/policy.yaml says mode: %s — it still governs plain\n"+
+				"          `seamark gate` and `seamark check` runs; only a gate hook with --enforce blocks\n", policyWord, policyMode)
 		}
 	case policyMode == gateModeEnforce:
-		fmt.Fprintf(w, "  gate    enforce — the kept .seamark/policy.yaml sets mode: enforce and the hook\n"+
+		fmt.Fprintf(w, "  gate    enforce — the %s .seamark/policy.yaml sets mode: enforce and the hook\n"+
 			"          follows it: deny/require_approval verdicts exit 2 and block; edit policy.yaml\n"+
-			"          to stop blocking\n")
+			"          to stop blocking\n", policyWord)
 	case gateMode == gateModeEnforce && len(summary.Possible) > 0:
 		// A definition that may run a gate can block, for example a
 		// filtered one that enforces. So the line limits its claim to the
@@ -741,6 +752,15 @@ func printNoGateHook(w io.Writer, root, gateMode string) {
 
 	fmt.Fprintf(w, "  gate    no gate hook for the selected clients — .seamark/policy.yaml (mode: %s) governs\n"+
 		"          plain `seamark gate` and `seamark check` runs\n", policyMode)
+}
+
+// writesPolicy reports whether the plan writes .seamark/policy.yaml. The
+// plan keeps an existing starter file, so a write means that the file is
+// new in this run. A preview plans the same write.
+func writesPolicy(plan *integration.SetupPlan) bool {
+	return slices.ContainsFunc(plan.Writes, func(fw integration.FileWrite) bool {
+		return fw.Path == ".seamark/policy.yaml"
+	})
 }
 
 // policyFileMode reads the mode of .seamark/policy.yaml through the real
