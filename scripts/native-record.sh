@@ -41,7 +41,7 @@
 set -eu
 
 usage() {
-    echo "usage: $0 record <claude|codex> <path-to-seamark-binary>" >&2
+    printf '%s\n' "usage: $0 record <claude|codex> <path-to-seamark-binary>" >&2
     exit 2
 }
 
@@ -62,7 +62,7 @@ esac
 case "$CLIENT" in
     claude) CLI=claude ;;
     codex)  CLI=codex ;;
-    *) echo "$0: unknown client \"$CLIENT\" (known: claude, codex)" >&2; exit 2 ;;
+    *) printf '%s\n' "$0: unknown client \"$CLIENT\" (known: claude, codex)" >&2; exit 2 ;;
 esac
 
 # The scenario selects the prompts of record. The script refuses an
@@ -72,7 +72,7 @@ SCENARIO=${NATIVE_RECORD_SCENARIO:-timing}
 
 case "$SCENARIO" in
     timing|guard) ;;
-    *) echo "$0: unknown scenario \"$SCENARIO\" (known: timing, guard)" >&2; exit 2 ;;
+    *) printf '%s\n' "$0: unknown scenario \"$SCENARIO\" (known: timing, guard)" >&2; exit 2 ;;
 esac
 
 SEAMARK_REPO=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -84,15 +84,20 @@ FAILED=0
 BLOCKED=0
 SUMMARIZED=
 
-ok()      { OK=$((OK + 1));           echo "  ok       $1"; }
-fail()    { FAILED=$((FAILED + 1));   echo "  FAIL     $1" >&2; }
-blocked() { BLOCKED=$((BLOCKED + 1)); echo "  blocked  $1"; }
-note()    { echo "  note     $1"; }
+# Each line that prints a value uses printf '%s\n', not echo. The echo of
+# some POSIX shells expands backslash escapes, and "\c" ends its output.
+# A client text, a path, or an environment value can hold a backslash, so
+# echo can split one FAIL line or join two lines. Lines with fixed text
+# can keep echo.
+ok()    { OK=$((OK + 1));           printf '%s\n' "  ok       $1"; }
+fail()    { FAILED=$((FAILED + 1));   printf '%s\n' "  FAIL     $1" >&2; }
+blocked() { BLOCKED=$((BLOCKED + 1)); printf '%s\n' "  blocked  $1"; }
+note()    { printf '%s\n' "  note     $1"; }
 
 summary() {
     SUMMARIZED=1
     echo
-    echo "native-record $MODE ($CLIENT): $OK ok, $FAILED failed, $BLOCKED blocked"
+    printf '%s\n' "native-record $MODE ($CLIENT): $OK ok, $FAILED failed, $BLOCKED blocked"
 
     if [ "$FAILED" -gt 0 ]; then
         echo "result: FAIL"
@@ -120,9 +125,9 @@ new_repo() {
     git -C "$1" commit -q -m fixture
 }
 
-echo "native-record $MODE — client $CLIENT"
-echo "  seamark   $("$BIN" version)"
-echo "  date      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '%s\n' "native-record $MODE — client $CLIENT"
+printf '%s\n' "  seamark   $("$BIN" version)"
+printf '%s\n' "  date      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo
 
 # Under set -e, a failed command outside the checks stops the script.
@@ -148,7 +153,7 @@ record_mode() {
         summary
     fi
 
-    echo "  $CLI    $("$CLI" --version 2>&1 | head -1)"
+    printf '%s\n' "  $CLI    $("$CLI" --version 2>&1 | head -1)"
 
     # A paid run from an uncommitted tree records evidence against code
     # that no commit names. So the script refuses such a run unless the
@@ -181,9 +186,9 @@ record_mode() {
     REPO=${NATIVE_RECORD_REPO:-$OUT/repo}
     INSTR=$REPO/.native-instrumentation
     OBS=$INSTR/observed
-    echo "  output    $OUT"
-    echo "  repo      $REPO"
-    echo "  scenario  $SCENARIO"
+    printf '%s\n' "  output    $OUT"
+    printf '%s\n' "  repo      $REPO"
+    printf '%s\n' "  scenario  $SCENARIO"
     echo
 
     echo "scratch repository"
@@ -252,7 +257,7 @@ record_mode() {
     if [ "${NATIVE_RECORD_RUNS:-1}" = 0 ]; then
         note "NATIVE_RECORD_RUNS=0: no paid run; collecting what the repository already holds"
     else
-        echo "paid runs ($CLIENT; costs tokens)"
+        printf '%s\n' "paid runs ($CLIENT; costs tokens)"
         case "$SCENARIO:$CLIENT" in
             timing:claude) timing_begin; record_claude_timing ;;
             timing:codex)  timing_begin; record_codex_timing ;;
@@ -533,13 +538,13 @@ claude_advisor() {
 
     case "$advisor_state" in
         on)
-            echo "  advisor  run $1: on, with the advisor model ${advisor_model:-(not named)}"
+            printf '%s\n' "  advisor  run $1: on, with the advisor model ${advisor_model:-(not named)}"
             fail "run $1 used the advisor tool; no recording run may use it" ;;
         unknown)
-            echo "  advisor  run $1: unknown"
+            printf '%s\n' "  advisor  run $1: unknown"
             fail "run $1 has no advisor state, because its debug log is missing or empty" ;;
         *)
-            echo "  advisor  run $1: $advisor_state" ;;
+            printf '%s\n' "  advisor  run $1: $advisor_state" ;;
     esac
 }
 
@@ -778,7 +783,7 @@ timing_begin() {
 # names the case of the run.
 timing_start() {
     RUN=$(( $(wc -l < "$OUT/runs.txt") + 1 ))
-    perl -MTime::HiRes=time -e 'printf "%d\n", time * 1e9' >> "$OUT/runs.txt" 2>/dev/null || echo "$(date +%s)000000000" >> "$OUT/runs.txt"
+    perl -MTime::HiRes=time -e 'printf "%d\n", time * 1e9' >> "$OUT/runs.txt" 2>/dev/null || printf '%s\n' "$(date +%s)000000000" >> "$OUT/runs.txt"
     printf '{"run": %d, "case": "%s"}\n' "$RUN" "$1" >> "$OUT/timing-cases.jsonl"
 }
 
@@ -808,7 +813,7 @@ import json, sys
 d = json.load(open(sys.argv[1]))
 print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "$OUT/run-$RUN.json")
         SESSION=${line%% *}
-        echo "  cost     run $RUN ($tcase): claude -p --model $model: total_cost_usd $(printf '%s' "$line" | cut -d' ' -f2) (a resumed session reports the session total)"
+        printf '%s\n' "  cost     run $RUN ($tcase): claude -p --model $model: total_cost_usd $(printf '%s' "$line" | cut -d' ' -f2) (a resumed session reports the session total)"
 
         if [ "$(printf '%s' "$line" | cut -d' ' -f3)" = True ]; then
             fail "run $RUN ($tcase) reported an error; see $OUT/run-$RUN.json"
@@ -952,7 +957,7 @@ for raw in open(sys.argv[1]):
         usage = e.get("usage", {})
 print(thread, " ".join("%s=%s" % kv for kv in sorted(usage.items())))' "$OUT/run-$RUN-events.jsonl")
         [ -z "${line%% *}" ] || SESSION=${line%% *}
-        echo "  cost     run $RUN ($tcase): codex exec -m $model -c model_reasoning_effort=low: ${line#* }"
+        printf '%s\n' "  cost     run $RUN ($tcase): codex exec -m $model -c model_reasoning_effort=low: ${line#* }"
         ok "run $RUN ($tcase) finished (thread $SESSION)"
     else
         SESSION=
@@ -1630,7 +1635,7 @@ guard_run() {
 
     gcase=$2
     RUN=$(( $(wc -l < "$OUT/runs.txt") + 1 ))
-    perl -MTime::HiRes=time -e 'printf "%d\n", time * 1e9' >> "$OUT/runs.txt" 2>/dev/null || echo "$(date +%s)000000000" >> "$OUT/runs.txt"
+    perl -MTime::HiRes=time -e 'printf "%d\n", time * 1e9' >> "$OUT/runs.txt" 2>/dev/null || printf '%s\n' "$(date +%s)000000000" >> "$OUT/runs.txt"
     printf '%s' "$3" > "$OUT/prompt-$RUN.txt"
     : > "$OUT/reply-$RUN.txt"
 
@@ -1693,7 +1698,7 @@ with open(sys.argv[2], "w") as f:
     f.write(str(d.get("result") or ""))
 print(d.get("session_id", ""), d.get("total_cost_usd", 0), d.get("is_error"))' "$OUT/run-$RUN.json" "$OUT/reply-$RUN.txt")
         SESSION=${line%% *}
-        echo "  cost     run $RUN ($gcase): claude -p --model $model: total_cost_usd $(printf '%s' "$line" | cut -d' ' -f2)"
+        printf '%s\n' "  cost     run $RUN ($gcase): claude -p --model $model: total_cost_usd $(printf '%s' "$line" | cut -d' ' -f2)"
 
         if [ "$(printf '%s' "$line" | cut -d' ' -f3)" = True ]; then
             fail "run $RUN ($gcase) reported an error; see $OUT/run-$RUN.json"
@@ -1735,7 +1740,7 @@ with open(sys.argv[2], "w") as f:
     f.write(reply)
 print(thread, " ".join("%s=%s" % kv for kv in sorted(usage.items())))' "$OUT/run-$RUN-events.jsonl" "$OUT/reply-$RUN.txt")
         [ -z "${line%% *}" ] || SESSION=${line%% *}
-        echo "  cost     run $RUN ($gcase): codex exec -m $model -c model_reasoning_effort=low: ${line#* }"
+        printf '%s\n' "  cost     run $RUN ($gcase): codex exec -m $model -c model_reasoning_effort=low: ${line#* }"
         ok "run $RUN ($gcase) finished (thread $SESSION)"
     fi
 }

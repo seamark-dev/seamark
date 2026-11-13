@@ -273,7 +273,8 @@ func TestServicesCheckDefinitionTakesEngineLock(t *testing.T) {
 	require.NoError(t, err, "the plan takes no lock")
 	require.True(t, p.Confirmable, "blocked: %v", p.Blockers)
 	require.Len(t, p.Impact, 1, "the enforce pin binds the edited definition")
-	assert.Equal(t, "requested; claude enforced-unverified, codex requested-inactive", p.Impact[0].Active)
+	assert.Equal(t, "requested; claude enforced-unverified (native-deny-unverified, native-timeout-unverified), "+
+		"codex requested-inactive (not-installed)", p.Impact[0].Active)
 
 	e.mu.Lock()
 	res, err := e.CommitCheckDef(p)

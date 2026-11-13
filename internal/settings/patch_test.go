@@ -832,7 +832,7 @@ func TestActivationNotesPerGroup(t *testing.T) {
 		note string
 	}{
 		{Edit{Field: AgentCLI, String: "codex"}, "next distillation or trigger extraction", "Claude and Codex integration files do not change."},
-		{Edit{Field: DistillWrite, Bool: true}, "next pin-write preview: apply, retarget, prune, and new pins, pin edits, and pin removals in Lessons › Pins", "Saving writes no pin; only a new preview offers the write."},
+		{Edit{Field: DistillWrite, Bool: true}, "next pin-write preview: apply, retarget, prune, and new pins, pin edits, check definitions, and pin removals in Lessons › Pins", "Saving writes no pin; only a new preview offers the write."},
 		{Edit{Field: ReviewWindow, Days: 30}, "next confirmed evidence refresh", "The newest 200 review comments are always kept."},
 		{Edit{Field: IndexGenerated, Bool: true}, "next explicit index build", "Nothing is scanned or removed until the build."},
 	}

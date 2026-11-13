@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -161,6 +162,8 @@ func TestFirstRunCreateConfigPlansThenAppliesOnY(t *testing.T) {
 	frame = h.view()
 	assert.Regexp(t, `1  Create config +✓ done · 4 files written`, frame)
 	assert.Regexp(t, `› 2  Build the index`, frame)
+	assert.Contains(t, frame, "Config written to .seamark/ in /work/repo.")
+	assert.NotContains(t, frame, "No .seamark/ directory")
 	assert.NotNil(t, h.m.welcome, "the guide stays for the next steps")
 
 	h.press("y")
@@ -179,6 +182,7 @@ func TestFirstRunEscFromTheReviewWritesNothing(t *testing.T) {
 
 	h.press("y")
 	assert.Equal(t, []string{"PlanSetup", "PlanSetup"}, f.called(), "no apply without a review on screen")
+	assert.Contains(t, h.view(), "No .seamark/ directory in /work/repo.", "a plan alone keeps the start lead")
 }
 
 func TestFirstRunDropsALatePlan(t *testing.T) {
@@ -202,6 +206,11 @@ func TestFirstRunApplyWaitsForTheMutationSlot(t *testing.T) {
 	assert.Equal(t, []string{"PlanSetup"}, f.called(), "a second mutation does not start")
 	assert.Contains(t, h.view(), "Another operation is running: Building the index")
 	assert.Equal(t, frPreview, h.m.welcome.stage)
+
+	// The refused y gave no apply result, so the start lead stays.
+	h.press("esc")
+	assert.Equal(t, frSteps, h.m.welcome.stage)
+	assert.Contains(t, h.view(), "No .seamark/ directory in /work/repo.", "a refused apply keeps the start lead")
 }
 
 func TestFirstRunStalePlanCannotApply(t *testing.T) {
@@ -278,7 +287,11 @@ func TestFirstRunApplyFailureSaysWhatLanded(t *testing.T) {
 
 	h.press("enter")
 	assert.Equal(t, frStepConfig, h.m.welcome.cursor, "an incomplete step stays selected")
-	assert.NotContains(t, h.view(), "✓ done")
+
+	frame = h.view()
+	assert.NotContains(t, frame, "✓ done")
+	assert.Contains(t, frame, "Step 1 did not finish in /work/repo.")
+	assert.NotContains(t, frame, "No .seamark/ directory", "a failed write can leave .seamark/ behind")
 }
 
 func TestFirstRunStalePlanAtApplyWritesNothing(t *testing.T) {
@@ -291,6 +304,192 @@ func TestFirstRunStalePlanAtApplyWritesNothing(t *testing.T) {
 	h.press("enter", "y")
 
 	assert.Contains(t, docFlat(h.view()), "A file changed after the plan. Nothing was written.")
+
+	h.press("enter")
+
+	frame := h.view()
+	assert.Contains(t, frame, "Step 1 did not finish in /work/repo.")
+	assert.NotContains(t, frame, "No .seamark/ directory", "a stale plan means a file changed after the start check")
+}
+
+func TestFirstRunLeadFollowsTheApplyResults(t *testing.T) {
+	f := frFake(nil)
+	h := newHarness(t, f, 120, 40)
+
+	assert.Contains(t, h.view(), "No .seamark/ directory in /work/repo.")
+
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
+		return integration.SetupResult{Ops: []integration.OpResult{
+			{Path: ".seamark/policy.yaml", Status: integration.OpApplied, Created: true},
+			{Path: ".seamark/lessons.yaml", Status: integration.OpNotAttempted},
+		}}, errors.New(".seamark/lessons.yaml: disk full")
+	}
+	h.press("enter", "y", "enter")
+
+	frame := h.view()
+	assert.Equal(t, frStepConfig, h.m.welcome.cursor)
+	assert.Contains(t, frame, "Step 1 did not finish in /work/repo.")
+	assert.NotContains(t, frame, "No .seamark/ directory")
+
+	// A new plan is not an apply result, so esc from its review keeps
+	// the lead of the last result.
+	h.press("enter", "esc")
+
+	frame = h.view()
+	assert.Contains(t, frame, "Step 1 did not finish in /work/repo.", "a plan and esc keep the lead")
+	assert.NotContains(t, frame, "No .seamark/ directory")
+
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) { return frAppliedResult(), nil }
+	h.press("enter", "y", "enter")
+
+	frame = h.view()
+	assert.Equal(t, frStepIndex, h.m.welcome.cursor)
+	assert.Contains(t, frame, "Config written to .seamark/ in /work/repo.")
+	assert.NotContains(t, frame, "Step 1 did not finish")
+
+	// After a complete apply, a new plan finds nothing to write. esc from
+	// that review keeps the done lead and the done row.
+	docs := f.planSetup
+	f.planSetup = nil
+	h.press("up", "enter")
+	require.Contains(t, h.view(), "Nothing to write.")
+
+	h.press("esc")
+
+	frame = h.view()
+	assert.Equal(t, frStepIndex, h.m.welcome.cursor)
+	assert.Contains(t, frame, "Config written to .seamark/ in /work/repo.", "a plan and esc keep the done lead")
+	assert.Regexp(t, `1  Create config +✓ done · 4 files written`, frame)
+
+	f.planSetup = docs
+
+	// A result with no operation is not done, and the lead does not go
+	// back to the start text.
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) { return integration.SetupResult{}, nil }
+	h.press("up", "enter", "y", "enter")
+
+	frame = h.view()
+	assert.Equal(t, frStepConfig, h.m.welcome.cursor)
+	assert.Contains(t, frame, "Step 1 did not finish in /work/repo.")
+	assert.NotContains(t, frame, "No .seamark/ directory")
+}
+
+func TestFirstRunFirstResultWithNoOperationIsNotDone(t *testing.T) {
+	f := frFake(nil)
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) { return integration.SetupResult{}, nil }
+
+	h := newHarness(t, f, 120, 40)
+	h.press("enter", "y", "enter")
+
+	// The result has no error, but it is still an apply result. The lead
+	// does not keep the start text.
+	frame := h.view()
+	assert.Equal(t, frStepConfig, h.m.welcome.cursor)
+	assert.Contains(t, frame, "Step 1 did not finish in /work/repo.")
+	assert.NotContains(t, frame, "No .seamark/ directory")
+	assert.NotContains(t, frame, "✓ done")
+}
+
+func TestFirstRunKeptFileCompletesTheStep(t *testing.T) {
+	// A fresh repository can have a .gitignore that already holds the
+	// carve-outs. The apply then keeps that file, and a kept file must
+	// count as landed, or step 1 never shows as done.
+	const carveOuts = "seamark carve-outs already present"
+
+	f := frFake(nil)
+	f.planSetup = func([]integration.ClientSetup) (*services.SetupPreview, error) {
+		p := frDocsPreview()
+		p.Writes = p.Writes[:3]
+		p.Plan.Kept = []integration.FileKeep{{Path: ".gitignore", Detail: carveOuts}}
+
+		return p, nil
+	}
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
+		res := frAppliedResult()
+		res.Ops[3] = integration.OpResult{Path: ".gitignore", Status: integration.OpKept, Detail: carveOuts}
+
+		return res, nil
+	}
+
+	h := newHarness(t, f, 120, 40)
+	h.press("enter")
+	require.Regexp(t, `= \.gitignore +kept · seamark carve-outs`, h.view())
+
+	h.press("y")
+
+	frame := h.view()
+	assert.Regexp(t, `kept +\.gitignore`, frame)
+	assert.Contains(t, frame, "The config is written. Next: build the index.")
+
+	// The lead and the step row read the same done state, so one frame
+	// shows both.
+	h.press("enter")
+
+	frame = h.view()
+	assert.Equal(t, frStepIndex, h.m.welcome.cursor, "a complete step moves the cursor on")
+	assert.Contains(t, frame, "Config written to .seamark/ in /work/repo.")
+	assert.Regexp(t, `1  Create config +✓ done · 3 files written`, frame)
+	assert.NotContains(t, frame, "Step 1 did not finish")
+}
+
+func TestFirstRunLeadScrubsTheRootPath(t *testing.T) {
+	// A directory name can hold control bytes. The lead must print the
+	// one-line form of the path, because a raw escape sequence changes
+	// the terminal state.
+	f := frFake(nil)
+	f.root = "/work/x\x1b[31mred\x1b[0m\x1b]0;title\x07\ty"
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
+		return integration.SetupResult{}, integration.ErrStalePlan
+	}
+
+	h := newHarness(t, f, 120, 40)
+
+	assertScrubbedLead := func(lead string) {
+		t.Helper()
+
+		raw := h.m.View()
+		assert.NotContains(t, raw, "\x1b", "lead %q: no escape byte reaches the terminal", lead)
+		assert.NotContains(t, raw, "\x07", "lead %q", lead)
+		assert.Contains(t, h.view(), lead+"/work/x[31mred[0m]0;title y.")
+	}
+
+	assertScrubbedLead("No .seamark/ directory in ")
+
+	h.press("enter", "y", "enter")
+	assertScrubbedLead("Step 1 did not finish in ")
+
+	f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) { return frAppliedResult(), nil }
+	h.press("enter", "y", "enter")
+	assertScrubbedLead("Config written to .seamark/ in ")
+}
+
+func TestFirstRunLeadKeepsThePathEndAtEverySize(t *testing.T) {
+	// The path is longer than the room next to each lead, so each lead
+	// row fills the box. A path budget that another lead sets makes the
+	// box cut the path end, or it leaves a gap before the border.
+	leadRow := func(lead string) string {
+		return `│ ` + regexp.QuoteMeta(lead) + `…\S+-name\. │`
+	}
+
+	for _, size := range [][2]int{{120, 40}, {200, 50}, {80, 24}, {ui.MinWidth, ui.MinHeight}} {
+		w, hgt := size[0], size[1]
+
+		f := frFake(nil)
+		f.root = "/work/projects/a-repository-with-a-long-directory-name"
+		f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) {
+			return integration.SetupResult{}, integration.ErrStalePlan
+		}
+
+		h := newHarness(t, f, w, hgt)
+		assert.Regexp(t, leadRow("No .seamark/ directory in "), h.view(), "size %v", size)
+
+		h.press("enter", "y", "enter")
+		assert.Regexp(t, leadRow("Step 1 did not finish in "), h.view(), "size %v", size)
+
+		f.applySetup = func(*services.SetupPreview) (integration.SetupResult, error) { return frAppliedResult(), nil }
+		h.press("enter", "y", "enter")
+		assert.Regexp(t, leadRow("Config written to .seamark/ in "), h.view(), "size %v", size)
+	}
 }
 
 func TestFirstRunBuildStepOpensTheOverviewBuild(t *testing.T) {
@@ -408,6 +607,12 @@ func TestFirstRunFramesFitAtEverySize(t *testing.T) {
 		frame = h.view()
 		assertFrame(t, frame, w, hgt)
 		assert.Contains(t, frame, "back to the steps", "size %v", size)
+
+		h.press("enter")
+
+		frame = h.view()
+		assertFrame(t, frame, w, hgt)
+		assert.Contains(t, frame, "Config written to .seamark/", "size %v: the done lead fits", size)
 	}
 }
 

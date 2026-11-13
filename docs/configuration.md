@@ -105,7 +105,7 @@ takes effect at the step that reads it next.
 | --- | --- | --- |
 | `agent.cli` | a registered preset with a one-shot command (`claude`, `codex`) | at the next prepared distillation or trigger extraction. Saving runs no model, authenticates nothing, and changes no integration file. |
 | `agent.argv` | read-only in the console; a custom command overrides the preset | when the console saves a preset while it is set, the diff shows its removal. The console never writes a custom command. |
-| `distill.write` | off (default) or on | at the next pin-write preview: apply, retarget, prune, new pins, pin edits, check definitions, and pin removals in Lessons › Pins; and for `lessons --apply`, `--prune`, `--retarget`, and `--set-mode`. Saving this setting writes no pin. A trigger extraction does not read it. |
+| `distill.write` | off (default) or on | at the next pin-write preview: apply, retarget, prune, and new pins, pin edits, check definitions, and pin removals in Lessons › Pins; and for `lessons --apply`, `--prune`, `--retarget`, and `--set-mode`. Saving this setting writes no pin. A trigger extraction does not read it. |
 | `reviews.window_days` | default, a positive number of days, or unlimited (writes `0`) | at the next evidence refresh. The stored findings stay until then. |
 | `index.generated` | skip (default) or include generated files | at the next index build. |
 | `index.exclude` | an ordered list of globs | at the next index build. Nothing is deleted or scanned at the save. |

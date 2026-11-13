@@ -354,6 +354,9 @@ const (
 // The fixed texts and routes of the blockers. A blocker can also quote a
 // pinfile, store, or engine error. routeByHand and reasonLedgerFixes are
 // in plan.go, because the maintenance plan uses them too.
+//
+// These texts and the review texts name a proposal pN, as the proposal
+// rows and the ledger do. Finding IDs use #N, so the two forms stay apart.
 const (
 	routeIndex    = "build the index in Overview, then review again"
 	routeOwnIndex = "build the index of this workspace in Overview, then review again"
@@ -374,10 +377,10 @@ const (
 	routeRefresh   = "review the entry in Pins again"
 	textFileBlock  = "the pin file cannot be changed: "
 	textEntryGone  = "the pin changed since the draft started"
-	textLinkedNote = "linked to proposal #%d; only its note, mode, check, and regions can change here"
+	textLinkedNote = "linked to proposal p%d; only its note, mode, check, and regions can change here"
 	// textLinkedScope has no route, because the text names the way.
-	textLinkedScope = "linked to proposal #%d; a change of its regions needs the scope preview"
-	textLinkedOnly  = "linked to proposal #%d; Remove is only for unlinked pins"
+	textLinkedScope = "linked to proposal p%d; a change of its regions needs the scope preview"
+	textLinkedOnly  = "linked to proposal p%d; Remove is only for unlinked pins"
 	textOwnedBy     = "the rule and scope are already held by "
 	textGateUnread  = "distill.write cannot be read"
 	routeGateUnread = "fix .seamark/config.yaml first"
@@ -392,13 +395,13 @@ const (
 	textIdentityChanged = "Earlier deliveries stay recorded under the earlier wording and scope. " +
 		"Nothing is reset or moved. The new wording is a new delivery identity: a context that " +
 		"already saw the old wording can receive it again, also in once-per-context mode."
-	textIdentityLinked = "Proposal #%d measures its outcome by the live wording, so its Outcome reads " +
+	textIdentityLinked = "Proposal p%d measures its outcome by the live wording, so its Outcome reads " +
 		"'untested' until the new wording is delivered."
 	textIdentityKept = "The delivery identity does not change. Stats can still list the old and new " +
 		"spelling as separate rows."
 	// textLinkedEdited holds the sentences that a note edit and a scoped plan
 	// share, so the two texts cannot differ on the 'edited' mark.
-	textLinkedEdited = "Proposal #%d keeps its recorded rule, note, and evidence. Pins shows the " +
+	textLinkedEdited = "Proposal p%d keeps its recorded rule, note, and evidence. Pins shows the " +
 		"difference as 'edited'. Trigger extraction still asks about the recorded note."
 	textLinkedKeeps = textLinkedEdited + " Saving does not extract triggers or retarget."
 	// The two texts below replace textIdentityKept and textLinkedKeeps for
@@ -407,7 +410,7 @@ const (
 	// effects that it does not have.
 	textChecksKept = "The delivery identity does not change. This edit changes only the %s of the pin; its " +
 		"rule, note, and scope stay as they are."
-	textLinkedChecks = "Proposal #%d keeps its recorded rule, note, and evidence. This edit leaves the note as " +
+	textLinkedChecks = "Proposal p%d keeps its recorded rule, note, and evidence. This edit leaves the note as " +
 		"it is, and Pins marks a pin 'edited' only for a note difference. Saving does not extract triggers " +
 		"or retarget."
 	// textVersionChanged follows a text that keeps the delivery identity, when
@@ -1338,11 +1341,11 @@ func owners(o pinfile.Owners) []owner {
 	}
 
 	for _, r := range o.Applied {
-		out = append(out, owner{id: r.ID, status: r.Status, label: fmt.Sprintf("applied #%d", r.ID)})
+		out = append(out, owner{id: r.ID, status: r.Status, label: fmt.Sprintf("applied p%d", r.ID)})
 	}
 
 	for _, r := range o.Pending {
-		out = append(out, owner{id: r.ID, status: r.Status, label: fmt.Sprintf("pending #%d", r.ID)})
+		out = append(out, owner{id: r.ID, status: r.Status, label: fmt.Sprintf("pending p%d", r.ID)})
 	}
 
 	return out
@@ -1481,7 +1484,7 @@ func authorDifferences(p, q *AuthorPlan) []string {
 
 	if p.Proposal != nil && q.Proposal != nil &&
 		(p.Proposal.ID != q.Proposal.ID || p.ProposalGuard == nil || !p.ProposalGuard.Matches(*q.Proposal)) {
-		add(true, fmt.Sprintf("proposal #%d changed", p.Proposal.ID))
+		add(true, fmt.Sprintf("proposal p%d changed", p.Proposal.ID))
 	}
 
 	// Without a known ledger, q lists no rows, and diffLedger names the
@@ -1523,13 +1526,13 @@ func relationChange(p, q *AuthorPlan) (text string, named []int64) {
 
 	switch {
 	case q.Link == pinfile.LinkLinked && q.Proposal != nil && (p.Proposal == nil || p.Proposal.ID != q.Proposal.ID):
-		// The line "proposal #N changed" names the earlier linked row.
+		// The line "proposal pN changed" names the earlier linked row.
 		named = []int64{q.Proposal.ID}
 		if p.Proposal != nil {
 			named = append(named, p.Proposal.ID)
 		}
 
-		return fmt.Sprintf("now linked to proposal #%d", q.Proposal.ID), named
+		return fmt.Sprintf("now linked to proposal p%d", q.Proposal.ID), named
 	case p.Link != q.Link:
 		return "relationship: " + q.Link.Reason(), nil
 	}

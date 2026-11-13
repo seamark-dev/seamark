@@ -534,3 +534,44 @@ func TestPinClientNote(t *testing.T) {
 	assert.Equal(t, "not-installed; limit: a",
 		PinClient{Reasons: []CapReason{CapNotInstalled}, Limits: []string{"a"}}.Note())
 }
+
+// TestPinClientText proves the shared form of a client badge: the
+// client and the badge, then the note in parentheses when it is not
+// empty.
+func TestPinClientText(t *testing.T) {
+	for name, tc := range map[string]struct {
+		client PinClient
+		want   string
+	}{
+		"no note": {PinClient{Client: "claude", Badge: BadgeChecked}, "claude checked"},
+		"reasons only": {
+			PinClient{Client: "codex", Badge: BadgeChecked, Reasons: []CapReason{CapTrustUnknown}}, "codex checked (trust-unknown)",
+		},
+		"limits only": {PinClient{Client: "claude", Badge: BadgeEnforced, Limits: []string{"a"}}, "claude enforced (limit: a)"},
+		"both": {
+			PinClient{Client: "codex", Badge: BadgeRequestedInactive, Reasons: []CapReason{CapNotInstalled}, Limits: []string{"a", "b"}},
+			"codex requested-inactive (not-installed; limit: a; b)",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.client.Text())
+		})
+	}
+}
+
+// TestActiveTextNamesTheReasons proves that the impact line names the
+// reasons of a covered client badge, as the result lines do.
+func TestActiveTextNamesTheReasons(t *testing.T) {
+	cfg := capabilityConfig(t, capabilityYAML)
+	check := cfg.Pins[1]
+
+	paths := installedPaths("claude", testBaseline, true, "pending", BinaryCurrent)
+	for _, p := range installedPaths("codex", testBaseline, true, "pending", BinaryCurrent) {
+		paths = append(paths, withReasons(p, CapTrustUnknown))
+	}
+
+	r := CapabilityReportOf(cfg, nil, paths, nil)
+	assert.Equal(t, "requested; claude checked, codex checked (trust-unknown)", r.ActiveText(check.Ref))
+	assert.Equal(t, "active: codex checked (trust-unknown) · post-edit active-unverified",
+		r.ActiveLines(check.Ref)[1])
+}

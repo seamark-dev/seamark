@@ -968,6 +968,26 @@ func TestPrintFiringSummaryReportsSuppressionOnlyHistory(t *testing.T) {
 	assert.NotContains(t, out.String(), "no lesson firings recorded yet")
 }
 
+// TestPrintFiringSummaryWithoutFiringsNamesEverySurface proves that the
+// empty state of lessons --stats names each surface that writes a firing.
+// The test spells the phrases out, so a dropped surface fails here.
+func TestPrintFiringSummaryWithoutFiringsNamesEverySurface(t *testing.T) {
+	var out strings.Builder
+	PrintFiringSummary(&out, reviews.Summary{})
+
+	for surface, phrase := range map[string]string{
+		"hook":       "the edit hook before an edit",
+		"explore":    "the exploration hook after a Claude Code file read",
+		"prepare":    "seamark lessons --prepare",
+		"change_set": "the MCP change_set tool",
+		"check":      "check from the CLI or MCP",
+	} {
+		assert.Contains(t, out.String(), phrase, "the empty state names the surface %q", surface)
+	}
+
+	assert.NotContains(t, out.String(), "the edit hook logs each time", "the old text named one surface")
+}
+
 func TestPrintFiringSummaryShowsPerLessonMatchesWhenDeliveryIsSuppressed(t *testing.T) {
 	var out strings.Builder
 	PrintFiringSummary(&out, reviews.Summary{

@@ -112,7 +112,7 @@ delivery scopes; evidence coverage is the fallback when none verify.
 | `init` | no | no | `.seamark/` scaffolds; per selected agent `.claude/settings.json`, `.mcp.json`, `.codex/hooks.json`, `.codex/config.toml`, the skill directories | `.gitignore`, scaffolded YAML (meant to be committed) | no | no |
 | `index` | only `--reviews`, via `gh` | no | `index.db` | no | no | `gh` auth for `--reviews` |
 | `why` / `orient` | no | no | no | no | no | no |
-| `lessons` | no | `--distill` and `--extract-triggers`: your agent CLI | proposals, trigger paths in `index.db`; firing log | `lessons.yaml`, only via `--apply`/`--prune`/`--retarget` with `distill.write` | no | the agent CLI's own |
+| `lessons` | no | `--distill` and `--extract-triggers`: your agent CLI | proposals, trigger paths in `index.db`; firing log | `lessons.yaml`, only via `--apply`/`--prune`/`--retarget`/`--set-mode` with `distill.write` | no | the agent CLI's own |
 | `report` | no | no | the HTML file | no | no | no |
 | `gate` | no | no | `audit.jsonl` | no | exit 2 under enforce | no |
 | `check` | no | no | `audit.jsonl`, index refresh, the `lessons-audit.jsonl` firing record, `lesson-check-audit.jsonl` with `--lessons` | no | exit 2 under enforce | no |

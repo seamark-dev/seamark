@@ -459,3 +459,20 @@ func TestWhyDescriptionSaysWhatMCounts(t *testing.T) {
 	assert.Contains(t, desc, "N/M commits")
 	assert.Contains(t, desc, "M counted in the mined window")
 }
+
+// TestChangeSetDescriptionSaysWhatMCounts keeps the meaning of M in the
+// change_set description. change_set prints the same unlabeled "N/M commits"
+// partner line as why, so both descriptions use the same words.
+func TestChangeSetDescriptionSaysWhatMCounts(t *testing.T) {
+	const clause = "N/M commits: N shared, M counted in the mined window"
+
+	descs := map[string]string{}
+
+	for _, d := range toolDefs {
+		name, _ := d["name"].(string)
+		descs[name], _ = d["description"].(string)
+	}
+
+	assert.Contains(t, descs["why"], clause)
+	assert.Contains(t, descs["change_set"], clause)
+}

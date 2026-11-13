@@ -269,10 +269,14 @@ func TestRenderTextExpansion(t *testing.T) {
 }
 
 func TestRenderTextSourcesAndSanitization(t *testing.T) {
-	cfg := &reviews.Config{Pin: []reviews.PinRule{{Rule: "safe\x1b\nrule", Note: "PRIVATE-pin-note"}}}
+	// The region holds an escape byte. Build does not sanitize regions,
+	// so the scope line must remove it.
+	cfg := &reviews.Config{Pin: []reviews.PinRule{{Rule: "safe\x1b\nrule", Region: "web\x1b", Note: "PRIVATE-pin-note"}}}
 	r := mustBuild(t, Inputs{Config: cfg, AuditError: "bad\x1b\naudit", CheckAuditError: "check\x00audit"}, "")
+	require.Equal(t, []string{"web\x1b"}, r.Pins[0].Scope, "the escape must reach the renderer, or this test proves nothing")
+
 	out := rendered(t, r)
-	for _, needle := range []string{"delivery audit: unreadable", "check audit: unreadable", "safe", "bad audit", "prevented: 0"} {
+	for _, needle := range []string{"delivery audit: unreadable", "check audit: unreadable", "safe", "bad audit", "prevented: 0", "\n    scope: web\n"} {
 		assert.Contains(t, out, needle)
 	}
 
@@ -283,6 +287,93 @@ func TestRenderTextSourcesAndSanitization(t *testing.T) {
 	assert.NotContains(t, out, "\x00")
 	assert.NotContains(t, out, "PRIVATE-pin-note")
 	assert.NotContains(t, out, "enforced")
+}
+
+// TestRenderTextLeavesOutEmptySlots proves that a slot prints only when it
+// has a value, as in the JSON. An empty slot would end the line with a
+// stray separator or space.
+func TestRenderTextLeavesOutEmptySlots(t *testing.T) {
+	const (
+		deliveryAbsent = "delivery audit: absent (.seamark/lessons-audit.jsonl); generations 0; bytes 0; records 0; " +
+			"legacy 0; malformed 0; newer schema 0; partial tail false"
+		checkAbsent = "check audit: absent (.seamark/lesson-check-audit.jsonl); generations 0; bytes 0; records 0; " +
+			"legacy 0; malformed 0; newer schema 0; partial tail false"
+	)
+
+	lines := strings.Split(rendered(t, mustBuild(t, Inputs{}, "")), "\n")
+	require.Greater(t, len(lines), 5)
+	assert.Equal(t, deliveryAbsent, lines[2])
+	assert.Equal(t, checkAbsent, lines[3])
+	assert.Equal(t, "config: absent; pins 0", lines[4])
+
+	cfg := testConfig("n")
+	id, ver := pinOf(cfg, 0)
+	read := Inputs{Audit: auditLines(v2("e1", "s1", "m1", pin(id, ver, reviews.PinInjected))), Config: cfg, Now: fixedNow}
+	readLines := strings.Split(rendered(t, mustBuild(t, read, "")), "\n")
+	assert.True(t, strings.HasPrefix(readLines[2], "delivery audit: read "), readLines[2])
+	assert.True(t, strings.HasSuffix(readLines[2], "; partial tail false"), readLines[2])
+
+	r := mustBuild(t, read, "")
+	require.Len(t, r.AsOf.Config.GuidanceSHA256, 64)
+	assert.Equal(t, "config: ok; pins 2; guidance "+r.AsOf.Config.GuidanceSHA256, readLines[4])
+
+	overLimit := strings.Split(rendered(t, mustBuild(t, unknownEvidenceInputs(cfg)[StateOverLimit], "")), "\n")
+	assert.True(t, strings.HasPrefix(overLimit[2], "delivery audit: over-limit "), overLimit[2])
+	assert.True(t, strings.HasSuffix(overLimit[2], "; partial tail false"), overLimit[2])
+
+	// A read that fails with a text names it in a labeled slot. The
+	// sanitizer joins the line break and drops the NUL.
+	failed := strings.Split(rendered(t, mustBuild(t, Inputs{AuditError: "bad\x1b\naudit", CheckAuditError: "check\x00audit"}, "")), "\n")
+	assert.Equal(t, strings.Replace(deliveryAbsent, "absent", "unreadable", 1)+"; error bad audit", failed[2])
+	assert.Equal(t, strings.Replace(checkAbsent, "absent", "unreadable", 1)+"; error checkaudit", failed[3])
+
+	// An error text that sanitizes to empty prints no slot. The state
+	// word already names the failure.
+	blank := strings.Split(rendered(t, mustBuild(t, Inputs{AuditError: "\x1b"}, "")), "\n")
+	assert.Equal(t, strings.Replace(deliveryAbsent, "absent", "unreadable", 1), blank[2])
+
+	invalid := strings.Split(rendered(t, mustBuild(t, Inputs{ConfigRead: ConfigRead{State: ConfigInvalid}}, "")), "\n")
+	assert.Equal(t, "config: invalid; pins 0", invalid[4])
+
+	// A config that reads keeps its digest when it has no pins. The
+	// starter lessons.yaml that seamark init writes has this shape.
+	noPins := mustBuild(t, Inputs{Config: &reviews.Config{}, Now: fixedNow}, "")
+	require.Regexp(t, `^[0-9a-f]{64}$`, noPins.AsOf.Config.GuidanceSHA256)
+
+	noPinsOut := rendered(t, noPins)
+	assert.Equal(t, "config: ok; pins 0; guidance "+noPins.AsOf.Config.GuidanceSHA256, strings.Split(noPinsOut, "\n")[4])
+
+	// An empty scope is repository-wide, for no region and for "*".
+	wide := &reviews.Config{Pin: []reviews.PinRule{
+		{Rule: "no-region"},
+		{Rule: "star-region", Region: "*"},
+		{Rule: "two-regions", Region: "web", Regions: []string{"api"}},
+	}}
+	wideOut := rendered(t, mustBuild(t, Inputs{Config: wide, Now: fixedNow}, ""))
+	assert.Equal(t, 2, strings.Count(wideOut, "\n    scope: repository-wide\n"), wideOut)
+	assert.Contains(t, wideOut, "\n    scope: api, web\n")
+
+	// No line of any text ends with a space or a separator. Each input
+	// sets a time, as the CLI does, so that the "as of" line has a value.
+	outputs := []string{
+		rendered(t, mustBuild(t, Inputs{AuditError: "bad\x1b\naudit", CheckAuditError: "check\x00audit", Now: fixedNow}, "")),
+		rendered(t, mustBuild(t, Inputs{AuditError: "\x1b", Now: fixedNow}, "")),
+		rendered(t, mustBuild(t, Inputs{ConfigRead: ConfigRead{State: ConfigInvalid}, Now: fixedNow}, "")),
+		rendered(t, mustBuild(t, read, "")),
+		rendered(t, mustBuild(t, read, id[:12])),
+		noPinsOut,
+		wideOut,
+	}
+	for _, in := range unknownEvidenceInputs(cfg) {
+		in.Now = fixedNow
+		outputs = append(outputs, rendered(t, mustBuild(t, in, "")))
+	}
+
+	for _, out := range outputs {
+		for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+			assert.False(t, strings.HasSuffix(line, " ") || strings.HasSuffix(line, ";"), "line %q ends with a stray separator", line)
+		}
+	}
 }
 
 func TestRenderTextWriterErrors(t *testing.T) {

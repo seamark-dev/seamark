@@ -268,8 +268,11 @@ func TestLessonsStatsGoldenWithoutDelivery(t *testing.T) {
 		assert.Empty(t, stderr)
 
 		// No pin fired, so every applied pin is untested. The newest
-		// proposal still comes first.
-		assert.Equal(t, `no lesson firings recorded yet — the edit hook logs each time it reminds an agent (wire it with `+"`seamark init`"+`)
+		// proposal still comes first. The empty state names every surface
+		// that writes a firing, as the Stats view of the console does.
+		assert.Equal(t, `no lesson firings recorded yet — seamark records a firing when one of these surfaces returns or injects lessons:
+  the edit hook before an edit, the exploration hook after a Claude Code file read, seamark lessons --prepare, the MCP change_set tool, and check from the CLI or MCP
+wire the edit hook with `+"`seamark init`"+`
 
 pin outcomes — 4 measured: 0 working, 0 not landing, 4 untested
   p4    billing-round-cents                untested — never fired

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,33 @@ func TestTUIPinsShowCheckSection(t *testing.T) {
 		assert.Subset(t, pinsKeys(h), []string{"M", "V"}, "a repository with checks offers M and V")
 		assert.Empty(t, f.called(), "browsing plans, verifies, and writes nothing")
 		assert.Positive(t, f.readCount("LessonCapability"), "the report is a read")
+	})
+
+	t.Run("a control character in a badge never reaches the detail", func(t *testing.T) {
+		// The badge fields are constants today, but the detail reaches the
+		// terminal, so the console keeps its own scrub of each badge line.
+		f := checkFake(t)
+		ref := f.pins.Pins[0].Check.Ref
+
+		i := slices.IndexFunc(f.lessonCapability.Pins, func(p lessoncheck.PinCapability) bool { return p.PinRef == ref })
+		require.GreaterOrEqual(t, i, 0)
+		require.NotEmpty(t, f.lessonCapability.Pins[i].Clients)
+
+		f.lessonCapability.Pins[i].Clients[0].Client = "claude\x1b]0;PWNED\x07"
+
+		h := pinsOpen(t, f, 120, 40)
+		pinsCursorTo(h, 1)
+
+		p := pinsOf(h)
+		cur, ok := p.cursorRow(p.rows())
+		require.True(t, ok)
+
+		raw := strings.Join(p.pinDetail(p.inspection(), cur, 400), "\n")
+		for _, bad := range []string{"\x1b", "\x07"} {
+			assert.NotContains(t, raw, bad)
+		}
+
+		assert.Contains(t, lesFlat(raw), "claude]0;PWNED enforced-unverified")
 	})
 
 	t.Run("a report of other bytes is unknown, never a badge", func(t *testing.T) {

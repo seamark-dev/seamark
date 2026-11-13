@@ -35,10 +35,12 @@ var toolDefs = []map[string]any{
 	{
 		// The preparation clause states the preparation guidance in the
 		// words of the preparation notice. So all surfaces give one meaning
-		// to "prepare" and "construct".
+		// to "prepare" and "construct". The N/M clause uses the words of
+		// the why description, because both tools print the same counts.
 		"name": "change_set",
 		"description": "Pre-edit blast radius for planned files: what history says changes " +
-			"together with them, who calls their symbols, which effects they can reach. " +
+			"together with them (N/M commits: N shared, M counted in the mined window), " +
+			"who calls their symbols, which effects they can reach. " +
 			"It also prepares the pins and checks that apply; call it before you construct " +
 			"any change, also for one file or a new path, then construct the change in a " +
 			"later step, not in the same generated program. Preparation authorizes no write.",

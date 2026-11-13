@@ -29,6 +29,13 @@ const codexLimitEvents = `{"type":"thread.started","thread_id":"thread-1"}
 {"type":"turn.failed","error":{"message":"` + codexLimitMessage + `"}}
 `
 
+// codexBackslashEvents is the event stream of a failed turn whose message
+// holds backslash escapes and "\c", as a Windows path can. The JSON text
+// escapes each backslash.
+const codexBackslashEvents = `{"type":"thread.started","thread_id":"thread-4"}
+{"type":"turn.failed","error":{"message":"path C:\\new\\table and \\c end"}}
+`
+
 // codexDoneEvents is the event stream of a turn that completed.
 const codexDoneEvents = `{"type":"thread.started","thread_id":"thread-2"}
 {"type":"turn.started"}
@@ -125,21 +132,32 @@ func TestNativeRecordCodexFailureReadsEvents(t *testing.T) {
 
 // TestNativeRecordCodexVerdictStopsAtLimit proves that codex_verdict
 // stops the record call at a usage limit, also when codex exits non-zero
-// with an empty stderr. The FAIL line names the limit message, the
-// summary exits 1, and the next turn never starts.
+// with an empty stderr. The FAIL line names the limit message as given,
+// the summary exits 1, and the next turn never starts.
 func TestNativeRecordCodexVerdictStopsAtLimit(t *testing.T) {
-	events := writeEvents(t, codexLimitEvents)
-	stderr := writeEvents(t, "")
+	cases := []struct{ name, events, message string }{
+		{"recorded limit", codexLimitEvents, codexLimitMessage},
+		{"limit message with backslashes",
+			`{"type":"turn.failed","error":{"message":"Your usage limit is reached at C:\\c"}}` + "\n",
+			`Your usage limit is reached at C:\c`},
+	}
 
-	got, code := recordScript(t,
-		"codex_verdict 'run 1 (add-violation)' 1 '"+events+"' '"+stderr+"' || true\necho 'next turn starts'\n",
-		"summary", "codex_failure", "codex_verdict", "limit_stop")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			events := writeEvents(t, tc.events)
+			stderr := writeEvents(t, "")
 
-	assert.Equal(t, 1, code, got)
-	assert.Contains(t, got, "FAIL     run 1 (add-violation) stopped at a Codex usage or account limit: "+codexLimitMessage+"\n")
-	assert.Contains(t, got, "no later run starts")
-	assert.Contains(t, got, "result: FAIL")
-	assert.NotContains(t, got, "next turn starts")
+			got, code := recordScript(t,
+				"codex_verdict 'run 1 (add-violation)' 1 '"+events+"' '"+stderr+"' || true\necho 'next turn starts'\n",
+				"summary", "codex_failure", "codex_verdict", "limit_stop")
+
+			assert.Equal(t, 1, code, got)
+			assert.Contains(t, got, "  FAIL     run 1 (add-violation) stopped at a Codex usage or account limit: "+
+				tc.message+"\n  note     no later run starts;")
+			assert.Contains(t, got, "result: FAIL")
+			assert.NotContains(t, got, "next turn starts")
+		})
+	}
 }
 
 // TestNativeRecordCodexVerdictFailsAndPasses proves that codex_verdict
@@ -158,6 +176,10 @@ func TestNativeRecordCodexVerdictFailsAndPasses(t *testing.T) {
 			"  FAIL     run 2 (case) failed: Error: not logged in\nreturned=1\nfailed=1\n"},
 		{"no message at all", "", "", "7",
 			"  FAIL     run 2 (case) failed: codex exited with status 7 and printed no message\nreturned=1\nfailed=1\n"},
+		{"failed turn with backslashes", codexBackslashEvents, "", "1",
+			"  FAIL     run 2 (case) failed: path C:\\new\\table and \\c end\nreturned=1\nfailed=1\n"},
+		{"stderr with backslashes", "", "first\nError: C:\\temp\\c\n", "1",
+			"  FAIL     run 2 (case) failed: Error: C:\\temp\\c\nreturned=1\nfailed=1\n"},
 		{"completed turn", codexDoneEvents, "", "0", "returned=0\nfailed=0\n"},
 	}
 

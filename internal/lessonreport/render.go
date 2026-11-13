@@ -42,8 +42,7 @@ func RenderText(w io.Writer, report Report) error {
 	p.line("as of: %s", report.AsOf.GeneratedAt)
 	p.source("delivery audit", report.AsOf.Audit)
 	p.source("check audit", report.AsOf.CheckAudit)
-	p.line("config: %s; pins %d; guidance %s", report.AsOf.Config.State,
-		report.AsOf.Config.Pins, report.AsOf.Config.GuidanceSHA256)
+	p.config(report.AsOf.Config)
 
 	gap := deliveryGap(report)
 	p.totals(report.Totals, gap)
@@ -89,9 +88,31 @@ func (p *textReport) line(format string, args ...any) {
 	p.WriteByte('\n')
 }
 
+// source prints one audit source. The error slot prints only when the read
+// failed with a text. An empty slot would end the line with a separator,
+// and the JSON also leaves out an empty error.
 func (p *textReport) source(name string, s SourceRead) {
-	p.line("%s: %s (%s); generations %d; bytes %d; records %d; legacy %d; malformed %d; newer schema %d; partial tail %t; %s",
-		name, s.State, s.Path, s.Generations, s.Bytes, s.Records, s.Legacy, s.Malformed, s.NewerSchema, s.PartialTail, s.Error)
+	text := fmt.Sprintf("%s: %s (%s); generations %d; bytes %d; records %d; legacy %d; malformed %d; newer schema %d; partial tail %t",
+		name, s.State, s.Path, s.Generations, s.Bytes, s.Records, s.Legacy, s.Malformed, s.NewerSchema, s.PartialTail)
+
+	if s.Error != "" {
+		text += "; error " + s.Error
+	}
+
+	p.line("%s", text)
+}
+
+// config prints the config state and the pin count. Only a config that
+// reads has a guidance digest, so the guidance slot prints only then. The
+// state word already says why a digest is missing.
+func (p *textReport) config(c ConfigRead) {
+	text := fmt.Sprintf("config: %s; pins %d", c.State, c.Pins)
+
+	if c.GuidanceSHA256 != "" {
+		text += "; guidance " + c.GuidanceSHA256
+	}
+
+	p.line("%s", text)
 }
 
 // totals prints the record totals, or gap in their place when it is not
@@ -145,11 +166,22 @@ func (p *textReport) delivery(d DeliveryCounts, gap string) {
 	p.line("    delivered sessions: %d; legacy identity records (unversioned): %d", d.Sessions, d.LegacyIdentityRecords)
 }
 
+// scopeText joins the regions of a pin. An empty scope is repository-wide,
+// the word that the preparation prints for the same pin. An empty join
+// would end the line with a space.
+func scopeText(scope []string) string {
+	if len(scope) == 0 {
+		return "repository-wide"
+	}
+
+	return strings.Join(scope, ", ")
+}
+
 // pin prints one reading under its shown pin-ref. A gap that is not empty
 // replaces the delivery counts.
 func (p *textReport) pin(pin PinReading, ref, gap string) {
 	p.line("  pin %s; version %s; mode %s; rule: %s", ref, pin.PinVersion, pin.Mode, pin.Rule)
-	p.line("    scope: %s", strings.Join(pin.Scope, ", "))
+	p.line("    scope: %s", scopeText(pin.Scope))
 	p.delivery(pin.Delivery, gap)
 	p.line("    check pin evaluations: %d; outcomes: %s; requested denies (guard attempts): %d",
 		pin.Checks.PinEvaluations, textCounts(pin.Checks.Outcomes), pin.Checks.RequestedDenies)

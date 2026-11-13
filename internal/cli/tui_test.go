@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/settings"
 )
 
 // TestTUIWithoutTerminalPrintsPlainGuidance proves the noninteractive
@@ -75,6 +77,37 @@ func TestTUIGuidanceNamesLessonChecks(t *testing.T) {
 	}
 
 	assert.Equal(t, before, snapshot(t, root), "a refused launch writes nothing")
+}
+
+// TestTUIGuidanceGatedCommandsMatchSettings proves that the plain
+// guidance and the distill.write setting name the same gated commands.
+// Both texts list the commands by hand, so a new gated command in only
+// one text fails here.
+func TestTUIGuidanceGatedCommandsMatchSettings(t *testing.T) {
+	flag := regexp.MustCompile(`--[a-z][a-z-]*`)
+
+	guidance := map[string]bool{}
+
+	for _, line := range strings.Split(tuiGuidance, "\n") {
+		if !strings.Contains(line, "(needs distill.write)") {
+			continue
+		}
+
+		// The first flag of a guidance line is its command.
+		cmd := flag.FindString(line)
+		require.NotEmpty(t, cmd, "a gated guidance line names a flag: %q", line)
+
+		guidance[cmd] = true
+	}
+
+	setting := map[string]bool{}
+	for _, f := range flag.FindAllString(settings.PinWriteCommands, -1) {
+		setting[f] = true
+	}
+
+	want := map[string]bool{"--apply": true, "--retarget": true, "--prune": true, "--set-mode": true}
+	assert.Equal(t, want, guidance, "the guidance marks these commands as gated")
+	assert.Equal(t, guidance, setting, "the setting names every gated command of the guidance")
 }
 
 // TestTUIRejectsInvalidWorkspaceFirst proves that a bad workspace fails

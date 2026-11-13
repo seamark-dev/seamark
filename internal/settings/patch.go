@@ -136,11 +136,18 @@ type PlanBytes struct {
 	Before, After []byte
 }
 
-// PinWriteScope names every write that distill.write governs (spec R-5).
-// The proposal apply, the Pins retarget and prune, and the pin authoring
-// of Lessons › Pins read the same gate. Every text that says what the
-// gate governs uses this phrase, so no text names a part of the scope.
-const PinWriteScope = "apply, retarget, prune, and new pins, pin edits, and pin removals in Lessons › Pins"
+// PinWriteScope names every console write that distill.write governs.
+// The proposal apply, the Pins retarget and prune, the pin authoring, and
+// the check definitions of Lessons › Pins read the same gate. Every text
+// that says what the gate governs uses this phrase, so no text names a
+// part of the scope.
+const PinWriteScope = "apply, retarget, prune, and new pins, pin edits, check definitions, and pin removals in Lessons › Pins"
+
+// PinWriteCommands names every CLI command that distill.write governs.
+// The CLI writes through the same engines as the console. The setting
+// must name every route that refuses while it is off, so both notes of
+// the setting use this list.
+const PinWriteCommands = "seamark lessons --apply, --prune, --retarget, and --set-mode"
 
 // Activation text: when a field takes effect (spec R-13). The pin-write
 // gate names its whole scope, because every pin write reads the gate.
@@ -1214,7 +1221,7 @@ func (f Field) Activation() Activation {
 		a.When = whenPreview
 		a.Notes = []string{
 			"Saving writes no pin; only a new preview offers the write.",
-			"The setting also governs seamark lessons --apply, --prune, and --retarget.",
+			"The setting also governs " + PinWriteCommands + ".",
 		}
 	case GroupEvidence:
 		a.When = whenEvidence

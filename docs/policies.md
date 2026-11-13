@@ -89,7 +89,10 @@ runs in the background (`"async": true`, and for Claude Code also
 key from its own gate hook. A hook that only may run, for
 example one that another program gets as its arguments, never makes
 the `gate` line say `enforce`: the line names it as a definition that
-may run a gate, and nothing is known to block. An explicit `--gate-mode`
+may run a gate, and nothing is known to block. Beside a gate hook that
+runs in warn mode, such a definition never makes the line say that
+nothing blocks either: the line says that the gate hooks that certainly
+run block nothing, and a note names the definition. An explicit `--gate-mode`
 also installs the managed gate hook beside a wrapped gate that cannot
 deliver the mode you asked for, such as a `report-only` one, and warns
 that the hook then runs twice.

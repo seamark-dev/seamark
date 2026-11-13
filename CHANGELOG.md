@@ -107,6 +107,14 @@ model-boundary delivery.
   init, and status name the removal of the idle handler, not a matcher
   edit, and two Codex handlers of the gate or lessons hook that both run
   now get a warning that the hook runs twice.
+- **No "nothing blocks" beside a gate that may block.** When a
+  definition that may run a gate, such as a filtered `gate --enforce
+  --hook` in `.claude/settings.local.json`, sits beside a warn gate hook,
+  the init `gate` line now says that the gate hooks that certainly run
+  block nothing, not that nothing blocks.
+- **New policy file on the gate line.** The init `gate` line calls
+  `.seamark/policy.yaml` new when the same run writes it, and kept only
+  when it existed before the run.
 - **Gate failure wording.** `init` and the docs no longer say that
   every gate failure fails closed under enforce. The gate's own failures
   still exit 2 and block. A hook that the client stops at its timeout,
@@ -201,6 +209,9 @@ model-boundary delivery.
 - **Report-only lesson guards.** The enforce refusal and the doctor
   action for a report-only lesson guard name the document, the
   definition, and the step that removes it, in place of "resolve it".
+- **Checker impact reasons.** The checker impact line of set-mode,
+  retarget, and the console names the reasons and limits of each client
+  badge, as the result lines do.
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`. Doctor, status, and the
   console print the word once: `hooks unreadable (<reason>)`, not
@@ -337,6 +348,8 @@ model-boundary delivery.
 - **why partner counts.** The `why` help, the MCP `why` description and
   the docs now say that M in `N/M commits` counts the commits in the
   mined window, the same for every partner.
+- **change_set partner counts.** The MCP `change_set` description and
+  the docs now give M in `N/M commits` the same meaning as `why` does.
 - **Full lesson view of a file.** `seamark lessons --file <path>` now
   lists every lesson that applies. It kept at most 8 and dropped the
   rest without a count, while change_set, check, `lessons --prepare` and
