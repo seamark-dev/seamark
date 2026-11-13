@@ -80,20 +80,30 @@ your user settings (`~/.claude/settings.json`), settings passed with
 (`managed-settings.json`), so a hook or a `disableAllHooks: true` there is
 not in their reports.
 
-Doctor warns when a seamark hook command names a binary that does not
-exist, or that is not an executable file. The client cannot start such a
-hook, so it blocks nothing and delivers nothing. A committed hook file
-with an absolute path from another machine is one example. For the file
-that setup manages, the fix is a setup run, which rewrites the command
-to the running binary; Codex then asks for a new review in `/hooks`.
+Doctor and status warn when a seamark hook command names a binary that
+does not exist, or that is not an executable file. The warning names the
+cause: the path is missing, is not a regular file, or has no execute
+bit. The client cannot start such a hook, so it blocks nothing and
+delivers nothing. A committed hook file with an absolute path from
+another machine is one example. For the file that setup manages, the
+fix is a setup run, which rewrites the command to the running binary;
+Codex then asks for a new review in `/hooks`.
 
 Setup keeps the matcher of an existing hook, because a narrow matcher can
 be your choice. When the matcher of a seamark hook in the file that setup
-manages never fires for the hook's tools, init and doctor warn and name
-the matcher to set in that file. A setup run does not change it. A Codex
+manages never fires for the hook's tools, init, doctor, and status warn
+and name the matcher to set in that file. A setup run does not change
+it. When another handler of setup in that file already runs the hook for
+each of its tools, these commands name the removal of the idle handler
+instead, because a matcher edit would make the hook run twice. A Codex
 gate handler in the Claude Code form is the exception when `seamark init
 --client codex` removes it, because another gate handler stays: doctor
 names that setup run instead.
+
+Codex runs every matching handler, so two handlers of the seamark gate
+or lessons hook in `.codex/hooks.json` that run for one tool run that
+hook twice. init and doctor warn and ask you to keep one of them. Setup
+removes neither, because it does not choose which keys you keep.
 
 ## What each agent supports
 
@@ -252,9 +262,12 @@ Setup keeps warning-and-install behavior for unknown local capability or
 trust. It refuses known-bad enforce states, such as disabled hooks (Claude
 Code `disableAllHooks: true` in `.claude/settings.json` or
 `.claude/settings.local.json`, Codex `[features] hooks = false`) or a
-report-only wrapper, rather than silently substituting check mode. A
-client without a guard cannot install enforce mode. Codex trust remains
-the user's decision: review new or changed hooks with `/hooks`. Seamark
+report-only wrapper, rather than silently substituting check mode. The
+refusal names each document and the step for each reason; doctor prints
+the same step for a report-only definition, and it lists each removal
+for a client before any step that reruns init for that client. A client
+without a guard cannot install enforce mode. Codex trust remains the
+user's decision: review new or changed hooks with `/hooks`. Seamark
 never grants trust, and cannot read that approval back as proof.
 
 A gate or pre-write hook that runs in the background (`async`, and for
@@ -656,7 +669,12 @@ The rules that hold every adapter to the same behavior:
   `Plan` keeps at most one such handler: none when a Codex-form handler
   runs for Bash, else the first one that runs, rewritten in place to the
   managed command with its matcher and other keys. It removes the
-  others, and an entry left without handlers. Without `--gate-mode`,
+  others, and an entry left without handlers. `Plan` keeps every
+  Codex-form handler, so it reads the merged document and warns when two
+  of them still run for one tool, as `Inspect` does. The merged document
+  also picks the route for a Codex-form handler that never fires, because
+  the merge rewrites a handler whose binary is missing, and that handler
+  then runs. Without `--gate-mode`,
   enforce in either form wins, and each removal or rewrite names the
   `/hooks` review that the new trust hash needs.
 - **A finding names its document once.** `Finding.Path` is the document

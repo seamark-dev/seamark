@@ -380,6 +380,57 @@ func TestOverviewCardsShowIndexNavigateLearnGuard(t *testing.T) {
 	assert.NotEmpty(t, ovScreen(h).tabCount(), "the tab count is known once every source loaded")
 }
 
+func TestOverviewGuardCountsOnlyRunningGates(t *testing.T) {
+	// A gate hook that the client never runs is not "on". The card says
+	// that no gate hook runs, as the hooks line of the client does.
+	inert := func(insp integration.Inspection) integration.Inspection {
+		for i := range insp.Capabilities {
+			if insp.Capabilities[i].Capability == integration.CapabilityCommands {
+				insp.Capabilities[i].State, insp.Capabilities[i].Inert = integration.StatePartial, true
+			}
+		}
+
+		insp.GateMode = ""
+
+		return insp
+	}
+
+	f := ovPopulated()
+	f.integrations = []integration.Inspection{inert(ovClaude()), ovCodex(), ovShared()}
+
+	frame := newHarness(t, f, 120, 40).view()
+	assert.Contains(t, frame, "gate on Codex")
+	assert.NotContains(t, frame, "Claude Code, Codex")
+
+	f = ovPopulated()
+	f.integrations = []integration.Inspection{inert(ovClaude()), inert(ovCodex()), ovShared()}
+
+	frame = newHarness(t, f, 120, 40).view()
+	assert.Contains(t, frame, "no gate hook runs")
+	assert.NotContains(t, frame, "no gate hook installed")
+
+	// Without any gate hook the card keeps "no gate hook installed". Each
+	// client declares commands, so only an inert entry may change it.
+	absent := func(insp integration.Inspection) integration.Inspection {
+		for i := range insp.Capabilities {
+			if insp.Capabilities[i].Capability == integration.CapabilityCommands {
+				insp.Capabilities[i].State = integration.StateAbsent
+			}
+		}
+
+		insp.GateMode = ""
+
+		return insp
+	}
+
+	f = ovPopulated()
+	f.integrations = []integration.Inspection{absent(ovClaude()), absent(ovCodex()), ovShared()}
+
+	frame = newHarness(t, f, 120, 40).view()
+	assert.Contains(t, frame, "no gate hook installed")
+	assert.NotContains(t, frame, "no gate hook runs")
+}
+
 func TestOverviewAbsentIndexOffersBuild(t *testing.T) {
 	f := newFake()
 	f.doctor = &doctor.Report{Checks: []doctor.Check{

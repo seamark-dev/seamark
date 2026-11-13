@@ -274,6 +274,14 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 
 	localState := claudeLocalStateOf(readsLocal, localErr)
 
+	// Without CheckHookSources the run leaves the local gate hooks out,
+	// also when it reads the file for the lesson rule. The plan names the
+	// file without a read, so the gate line does not claim more than the
+	// run checked.
+	if !req.CheckHookSources {
+		plan.UncheckedGateSources = append(plan.UncheckedGateSources, claudeLocalSettings)
+	}
+
 	rules := claudeHookRules.withSelf(narration.binary)
 
 	for i, spec := range specs {
@@ -615,20 +623,16 @@ func runsBesideManaged(spec hooks.Spec, sources []hookSource) []hookSource {
 // claudeHooksDisabled. A pre-write definition in the background keeps
 // the guard inactive too. merging is true for a plan that merges the
 // pre-write hook: that plan removes the key from the owned entry of the
-// shared file, so the key does not count there.
+// shared file, so the key does not count there. The state keeps the
+// file and the action of the disableAllHooks finding and each
+// report-only definition, so the refusal can name them.
 func claudeLessonSources(settings, local map[string]any, localState claudeLocalState, merging bool) lessonSourceState {
-	_, disabled := claudeHooksDisabled(settings, local, localState)
-	state := lessonSourceState{sourceUnreadable: localState == claudeLocalUnreadable, hooksDisabled: disabled}
-
-	if reportOnlyIn(settings, claudeLessonHooks, !merging) {
-		state.reportOnly = append(state.reportOnly, approve.ClaudeSettings)
+	return lessonSourceState{
+		sourceUnreadable: localState == claudeLocalUnreadable,
+		disabled:         claudeHooksDisabledFindings(settings, local, localState),
+		reportOnly: slices.Concat(reportOnlyIn(settings, claudeLessonHooks, approve.ClaudeSettings, true, merging),
+			reportOnlyIn(local, claudeLessonHooks, claudeLocalSettings, false, merging)),
 	}
-
-	if reportOnlyIn(local, claudeLessonHooks, true) {
-		state.reportOnly = append(state.reportOnly, claudeLocalSettings)
-	}
-
-	return state
 }
 
 // readLocalHooks reads the user's local settings file, the second hook
@@ -917,7 +921,7 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence, rules hookRu
 	gate.managed = hooks.InstalledGateMode(settings)
 	lessons = lessonHookReading(claudeLessonSources(settings, local, localState, false).inspection(settings, claudeLessonHooks))
 
-	installed := (lessons != nil && (len(lessons.Entries) > 0 || lessons.ReportOnly)) ||
+	installed := (lessons != nil && (len(lessons.Entries) > 0 || len(lessons.ReportOnly) > 0)) ||
 		slices.ContainsFunc(all, func(c *CapabilityInspection) bool { return c.State != StateAbsent })
 
 	if installed {

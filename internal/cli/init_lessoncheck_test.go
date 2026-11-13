@@ -91,6 +91,7 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 		"pre-write MultiEdit active-unverified; post-edit Edit active-unverified; post-edit Write active-unverified; "+
 		"post-edit MultiEdit active-unverified\n")
 	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks")
+	assert.Contains(t, out, uncheckedLocalNote, "the lesson rule reads the personal file, the gate line still leaves it out")
 	assert.Equal(t, gateModeWarn, installedGateMode(readSettings(t, root)), "a lesson-check flag never changes the gate")
 
 	// An omitted flag keeps the installed choice and prints no line.
@@ -178,7 +179,8 @@ func TestRunInitLessonChecksRefusesUnsupportedEnforce(t *testing.T) {
 	before := snapshot(t, root)
 	_, err = initLessonRun(t, root, binary, initRun{lessonChecks: hooks.LessonChecksEnforce}, integration.CodexID)
 	require.Error(t, err)
-	assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); resolve it, then rerun", err.Error())
+	assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); .codex/config.toml: "+
+		"set [features] hooks = true, or remove the key, to run the hooks; then rerun", err.Error())
 	assert.Equal(t, before, snapshot(t, root))
 
 	// Claude Code disableAllHooks in either project settings file refuses
@@ -190,8 +192,8 @@ func TestRunInitLessonChecksRefusesUnsupportedEnforce(t *testing.T) {
 		before = snapshot(t, root)
 		_, err = initLessonRun(t, root, binary, initRun{lessonChecks: hooks.LessonChecksEnforce}, integration.ClaudeID)
 		require.Error(t, err, rel)
-		assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); resolve it, then rerun",
-			err.Error(), rel)
+		assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); "+rel+
+			": remove disableAllHooks, or set it to false, to run the hooks; then rerun", err.Error(), rel)
 		assert.Equal(t, before, snapshot(t, root), rel)
 	}
 

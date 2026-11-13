@@ -656,6 +656,12 @@ type CapabilityInspection struct {
 	// print it as the corrective action, so the three never disagree on
 	// the fix.
 	Action string `json:"action,omitempty"`
+	// Inert is true when the hook is present and the client never runs
+	// it. Its binary cannot start, its managed matcher never fires, or an
+	// if field sits on an event without a tool. Narration reads this
+	// field, so it never parses Detail. The field has no JSON form, so
+	// the clients list keeps its bytes.
+	Inert bool `json:"-"`
 }
 
 // Validate checks one capability inspection. It rejects incomplete
@@ -758,17 +764,38 @@ type LessonHookInspection struct {
 	// Entries lists every owned lesson-check and exploration command of
 	// the hook document that setup manages, in document order.
 	Entries []LessonHookEntry
-	// ReportOnly is true when a definition that setup does not own runs
-	// the pre-write hook and discards its exit status, or when any
-	// definition of the pre-write hook runs in the background. No deny of
-	// such a definition blocks.
-	ReportOnly bool
+	// ReportOnly lists each definition of the pre-write hook whose deny
+	// cannot block, the managed document first. Such a definition is
+	// one that setup does not own and that discards the exit status, or
+	// any definition that runs in the background. Setup and doctor keep
+	// the document and the command, so their steps name the definition.
+	ReportOnly []ReportOnlyDefinition
 	// HooksDisabled is true when the project configuration turns every
 	// hook of the client off.
 	HooksDisabled bool
 	// SourceUnreadable means a supplemental hook source cannot be read
 	// or parsed. Its effect on installed hooks is unknown.
 	SourceUnreadable bool
+}
+
+// ReportOnlyDefinition is one definition of the pre-write hook whose
+// deny cannot block. ReportOnlySteps turns it into the step that makes
+// the hook block again.
+type ReportOnlyDefinition struct {
+	// Path names the hook source, for example .claude/settings.local.json
+	// or the inline [hooks] of the Codex configuration.
+	Path string
+	// Command is the command of the definition, as the document holds it.
+	Command string
+	// Background is the key that makes the client run the definition in
+	// the background, or "" when the definition discards the exit
+	// status. A definition that does both gets "", because removing the
+	// key alone leaves the status discarded.
+	Background string
+	// Managed is true for an owned command in the document that setup
+	// manages. Setup removes its background key, so a rerun of init is
+	// the step, not a removal.
+	Managed bool
 }
 
 // LessonHookEntry is one owned lesson-check or exploration command.
@@ -1030,6 +1057,10 @@ type GateHook struct {
 	// the client runs it in the background, not because it discards its
 	// exit status. The gate line names that cause.
 	Background bool
+	// Filtered is true when an uncertain hook has a Claude Code if field.
+	// The gate line then names the field as the thing to remove, as
+	// doctor does for the same definition.
+	Filtered bool
 }
 
 // ClientPlan is one client's read guards, composed writes, kept
@@ -1042,7 +1073,10 @@ type ClientPlan struct {
 	Writes    []FileWrite
 	Kept      []FileKeep
 	GateHooks []GateHook
-	Findings  []Finding
+	// UncheckedGateSources lists the hook documents that the client runs
+	// and that the plan did not check for gate hooks.
+	UncheckedGateSources []string
+	Findings             []Finding
 }
 
 // SkillDestination is one skill directory and every selected client
@@ -1078,5 +1112,9 @@ type SetupPlan struct {
 	Destinations []SkillDestination
 	// GateHooks lists the gate hooks the selected clients run after apply.
 	GateHooks []GateHook
-	Findings  []Finding
+	// UncheckedGateSources lists the hook documents that a selected client
+	// runs and that the plan did not check for gate hooks. GateHooks can
+	// then miss a hook, so a gate summary must name these documents.
+	UncheckedGateSources []string
+	Findings             []Finding
 }

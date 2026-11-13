@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"cmp"
 	"slices"
 
 	"github.com/seamark-dev/seamark/internal/hooks"
@@ -32,9 +33,21 @@ type GateSummary struct {
 	// reader cannot tell whether they do. What they do is unknown, not
 	// nothing.
 	Possible []string
+	// FilteredPossible and UnfilteredPossible count the possible hooks of
+	// a setup run with and without a Claude Code if field. One document
+	// can hold both kinds, so the counts are per hook. The init gate line
+	// picks its route from them. Status leaves them at zero.
+	FilteredPossible   int
+	UnfilteredPossible int
 	// Unreadable lists the hook documents that cannot be read. What
 	// their hooks do is unknown, not nothing.
 	Unreadable []string
+	// Inert lists the clients whose gate hook is present and never runs:
+	// its binary cannot start, or its matcher never fires. Such a hook
+	// blocks nothing, so the effect does not count it. Status names it
+	// apart, because "no gate hook installed" would send the reader to a
+	// setup run that does not repair it. Init leaves it empty.
+	Inert []string
 }
 
 // GateEffect is what the gate hooks of a workspace do with a blocking
@@ -110,7 +123,13 @@ func SummarizeGateHooks(gateHooks []GateHook) GateSummary {
 	var g GateSummary
 
 	for _, hook := range gateHooks {
-		g.addHook(hook.Path, hook.Mode, hook.Uncertain)
+		switch {
+		case !g.addHook(hook.Path, hook.Mode, hook.Uncertain):
+		case hook.Filtered:
+			g.FilteredPossible++
+		default:
+			g.UnfilteredPossible++
+		}
 
 		if hook.Mode == GateModeReportOnly && hook.Background {
 			g.Background = appendOnce(g.Background, hook.Path)
@@ -149,22 +168,29 @@ func (g GateSummary) ReportOnlyCause(labels []string) string {
 // report-only hook is report-only, not possible. The shell discards its
 // exit status, or the client does not wait for it, so the reader knows
 // that it never blocks.
-// "Unknown" would say less than is known.
-func (g *GateSummary) addHook(label, mode string, uncertain bool) {
+// "Unknown" would say less than is known. The result is true when the
+// hook is possible.
+func (g *GateSummary) addHook(label, mode string, uncertain bool) bool {
 	if uncertain && mode != GateModeReportOnly {
 		g.AddPossible(label)
 
-		return
+		return true
 	}
 
 	g.Add(label, mode)
+
+	return false
 }
 
 // SummarizeInspections groups the gate hooks of every client that has a
 // command gate by its client ID. A client whose hook document cannot be
-// read is unreadable, with the detail of its commands entry. A client
+// read is unreadable, with the reason of that document. The reason has
+// no "unreadable" word, because the gate line prints that word itself.
+// A client without a recorded reason keeps the detail of its commands
+// entry. A client
 // with a definition that may run a gate is possible, beside the mode of
-// the definitions that certainly run one.
+// the definitions that certainly run one. A client whose gate entry is
+// inert is listed as inert.
 func SummarizeInspections(inspections []Inspection) GateSummary {
 	var g GateSummary
 
@@ -175,12 +201,16 @@ func SummarizeInspections(inspections []Inspection) GateSummary {
 		}
 
 		if commands.State == StateUnreadable {
-			g.AddUnreadable(insp.ClientID + ": " + commands.Detail)
+			g.AddUnreadable(insp.ClientID + ": " + cmp.Or(insp.HookDocumentError, commands.Detail))
 
 			continue
 		}
 
 		g.Add(insp.ClientID, insp.GateMode)
+
+		if commands.Inert {
+			g.Inert = appendOnce(g.Inert, insp.ClientID)
+		}
 
 		if insp.GateMode == GateModeReportOnly && insp.GateBackground {
 			g.Background = appendOnce(g.Background, insp.ClientID)

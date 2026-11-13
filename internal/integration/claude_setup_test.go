@@ -575,6 +575,38 @@ func TestClaudeReadsTheLocalFileForEveryLessonCheckMode(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, reads, slices.Contains(readPaths(plan.Reads), claudeLocalSettings), "mode %q", mode)
+
+		// A read for the lesson rule checks no gate hook. So the plan names
+		// the file in every mode, also when that read fails.
+		assert.Equal(t, []string{claudeLocalSettings}, plan.UncheckedGateSources, "mode %q", mode)
+	}
+}
+
+func TestClaudePlanNamesTheLocalFileItDoesNotCheckForGateHooks(t *testing.T) {
+	// The form without --client never checks the personal file for gate
+	// hooks. The plan names that file, so the gate line can say so. It
+	// names the file without a read, and an explicit run names nothing.
+	root := t.TempDir()
+	writeRel(t, root, claudeLocalSettings, "{ broken")
+
+	legacy, err := LegacySetups(root, "", false, "")
+	require.NoError(t, err)
+
+	plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: legacy})
+	assert.Equal(t, []string{claudeLocalSettings}, plan.UncheckedGateSources)
+	assert.NotContains(t, readPaths(plan.Reads), claudeLocalSettings, "the run does not read the file")
+
+	explicit, err := ExplicitSetups(Builtin(), []string{ClaudeID}, false, false, "")
+	require.NoError(t, err)
+
+	writeRel(t, root, claudeLocalSettings, "{}")
+
+	for name, clients := range map[string][]ClientSetup{
+		"init --client":    explicit,
+		"CheckHookSources": {{ClientID: ClaudeID, Hooks: true, CheckHookSources: true}},
+	} {
+		plan := mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: clients})
+		assert.Empty(t, plan.UncheckedGateSources, name)
 	}
 }
 
@@ -615,7 +647,10 @@ func TestClaudeLessonSourcesNameEveryReportOnlyFile(t *testing.T) {
 
 	t.Run("a wrapper in both files", func(t *testing.T) {
 		state := claudeLessonSources(discarding, discarding, claudeLocalRead, false)
-		assert.Equal(t, []string{approve.ClaudeSettings, claudeLocalSettings}, state.reportOnly)
+		command := testBinary + " lessons --guard --hook || true"
+		assert.Equal(t, []ReportOnlyDefinition{
+			{Path: approve.ClaudeSettings, Command: command}, {Path: claudeLocalSettings, Command: command},
+		}, state.reportOnly)
 		assert.False(t, state.sourceUnreadable)
 	})
 
@@ -828,7 +863,7 @@ func TestClaudeGateThatMayRunIsPossibleNotInstalled(t *testing.T) {
 		{Path: ".claude/settings.json", Mode: "warn", Managed: true},
 		{Path: ".claude/settings.json", Mode: "enforce", Uncertain: true},
 	}, plan.GateHooks)
-	assert.Equal(t, GateSummary{Warn: []string{".claude/settings.json"}, Possible: []string{".claude/settings.json"}},
+	assert.Equal(t, GateSummary{Warn: []string{".claude/settings.json"}, Possible: []string{".claude/settings.json"}, UnfilteredPossible: 1},
 		SummarizeGateHooks(plan.GateHooks))
 
 	warnings := findingReasons(plan, FindingWarning)
@@ -839,6 +874,12 @@ func TestClaudeGateThatMayRunIsPossibleNotInstalled(t *testing.T) {
 	commands, _ := insp.Entry(CapabilityCommands)
 	assert.Equal(t, StatePartial, commands.State)
 	assert.Equal(t, "gate hook (enforce) may run from .claude/settings.json: `"+printed+"`", commands.Detail)
+	assert.False(t, commands.Inert, "a hook that may run is not inert")
+
+	// The definition has no if field, so the route asks for a direct run.
+	// The init gate line prints the same words, so the test pins them here.
+	assert.Equal(t, "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell",
+		commands.Action)
 	assert.Empty(t, insp.GateMode, "no definition certainly runs the gate")
 	assert.Equal(t, "enforce", insp.PossibleGateMode)
 	assert.Equal(t, GateSummary{Possible: []string{ClaudeID}}, SummarizeInspections([]Inspection{insp}))
@@ -961,7 +1002,7 @@ func TestClaudeHooksDisabledFollowsClaudeCodePrecedence(t *testing.T) {
 			assert.Equal(t, tc.path, path)
 			assert.Equal(t, tc.path != "", disabled)
 
-			assert.Equal(t, disabled, claudeLessonSources(settings, local, tc.state, false).hooksDisabled,
+			assert.Equal(t, disabled, claudeLessonSources(settings, local, tc.state, false).hooksDisabled(),
 				"the enforce preconditions use the same reading")
 
 			findings := claudeHooksDisabledFindings(settings, local, tc.state)
@@ -1050,7 +1091,9 @@ func TestClaudeSetupAndInspectionWarnOnceWhenHooksAreDisabled(t *testing.T) {
 
 		require.NotNil(t, insp.LessonHooks)
 		require.Empty(t, insp.LessonHooks.Entries)
-		require.True(t, insp.LessonHooks.ReportOnly)
+		require.Equal(t, []ReportOnlyDefinition{{
+			Path: approve.ClaudeSettings, Command: testBinary + " " + hooks.LessonGuardMarker + " || true",
+		}}, insp.LessonHooks.ReportOnly)
 
 		disabled := findingsWith(insp.Findings, disabledReason)
 		require.Len(t, disabled, 1)

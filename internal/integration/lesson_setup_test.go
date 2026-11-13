@@ -905,12 +905,20 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		// gets the state directly.
 		err := enforceRefusal(CodexID, lessonSourceState{trust: TrustPending})
 		require.Error(t, err)
-		assert.Equal(t, "lesson checks: enforce for codex would stay inactive (untrusted); resolve it, then rerun", err.Error())
+		assert.Equal(t, "lesson checks: enforce for codex would stay inactive (untrusted); "+
+			"review and trust the lesson-check hooks in codex; then rerun", err.Error())
 
-		err = enforceRefusal(ClaudeID, lessonSourceState{trust: TrustPending, hooksDisabled: true, reportOnly: []string{"x"}})
+		err = enforceRefusal(ClaudeID, lessonSourceState{
+			trust:      TrustPending,
+			disabled:   []Finding{{Path: approve.ClaudeSettings, Action: "remove disableAllHooks"}},
+			reportOnly: []ReportOnlyDefinition{{Path: claudeLocalSettings, Command: "x || true"}},
+		})
 		require.Error(t, err)
 		assert.Equal(t, "lesson checks: enforce for claude would stay inactive "+
-			"(hooks-disabled, report-only-wrapper, untrusted); resolve it, then rerun", err.Error(), "sorted reasons")
+			"(hooks-disabled, report-only-wrapper, untrusted); .claude/settings.json: remove disableAllHooks; "+
+			".claude/settings.local.json: remove the definition `x || true`, which discards the exit status of "+
+			"the lesson-check pre-write hook; review and trust the lesson-check hooks in claude; then rerun",
+			err.Error(), "sorted reasons, then one step per reason in the same order")
 
 		assert.NoError(t, enforceRefusal(CodexID, lessonSourceState{}), "unknown trust is no refusal")
 	})
@@ -920,7 +928,8 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		writeRel(t, root, approve.CodexConfig, "[features]\nhooks = false\n")
 
 		err := refuse(t, root, enforce(CodexID))
-		assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); resolve it, then rerun", err.Error())
+		assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); .codex/config.toml: "+
+			"set [features] hooks = true, or remove the key, to run the hooks; then rerun", err.Error())
 	})
 
 	// Claude Code merges the local file after the shared file, so either
@@ -931,8 +940,8 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 			writeRel(t, root, rel, `{"disableAllHooks": true}`)
 
 			err := refuse(t, root, enforce(ClaudeID))
-			assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); resolve it, then rerun",
-				err.Error())
+			assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); "+rel+
+				": remove disableAllHooks, or set it to false, to run the hooks; then rerun", err.Error())
 		})
 	}
 
@@ -945,8 +954,9 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 			writeRel(t, root, rel, wrapped)
 
 			err := refuse(t, root, enforce(ClaudeID))
-			assert.Equal(t, "lesson checks: enforce for claude would stay inactive (report-only-wrapper); resolve it, then rerun",
-				err.Error(), rel)
+			assert.Equal(t, "lesson checks: enforce for claude would stay inactive (report-only-wrapper); "+rel+
+				": remove the definition `/opt/bin/seamark lessons --guard --hook || true`, which discards the exit status "+
+				"of the lesson-check pre-write hook; then rerun", err.Error(), rel)
 		}
 
 		// The inline hooks of the Codex configuration are a source too.
@@ -955,7 +965,9 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 			"[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"/opt/bin/seamark lessons --guard --hook --client codex & \"\n")
 
 		err := refuse(t, root, enforce(CodexID))
-		assert.Contains(t, err.Error(), "(report-only-wrapper)")
+		assert.Equal(t, "lesson checks: enforce for codex would stay inactive (report-only-wrapper); "+
+			".codex/config.toml [hooks]: remove the definition `/opt/bin/seamark lessons --guard --hook --client codex & `, "+
+			"which discards the exit status of the lesson-check pre-write hook; then rerun", err.Error())
 
 		// A wrapper whose exit status passes is no report-only wrapper. It
 		// still runs a second handler, so setup refuses it for that reason.

@@ -551,6 +551,12 @@ func (b *planBuilder) addClient(consumer string, part ClientPlan) error {
 		b.plan.GateHooks = append(b.plan.GateHooks, hook)
 	}
 
+	for _, source := range part.UncheckedGateSources {
+		if !slices.Contains(b.plan.UncheckedGateSources, source) {
+			b.plan.UncheckedGateSources = append(b.plan.UncheckedGateSources, source)
+		}
+	}
+
 	b.plan.Findings = append(b.plan.Findings, part.Findings...)
 
 	return nil

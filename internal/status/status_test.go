@@ -329,6 +329,11 @@ func TestGatherReportsUnreadableHookConfig(t *testing.T) {
 	Print(&b, s)
 	assert.Contains(t, b.String(), "UNREADABLE",
 		"an unreadable hook config is not the same finding as no hook")
+
+	// The gate line names the reason once, as the legacy path does.
+	assert.Contains(t, b.String(), "gate           policy mode warn; hook configuration UNREADABLE (claude: .claude/settings.json: invalid character")
+	assert.NotContains(t, b.String(), "UNREADABLE (claude: unreadable")
+	assert.NotContains(t, b.String(), "unreadable (unreadable")
 }
 
 func TestStatusJSONRoundTrips(t *testing.T) {
@@ -508,6 +513,24 @@ func gatherFixture(t *testing.T, f inspecttest.Fixture) (s *Status, out string) 
 	return s, b.String()
 }
 
+// withoutInert returns a copy of the report with every Inert mark
+// cleared. The mark has no JSON form, so a round trip drops it, and the
+// rest of the report must survive.
+func withoutInert(s *Status) *Status {
+	c := *s
+	c.Clients = slices.Clone(s.Clients)
+
+	for i := range c.Clients {
+		c.Clients[i].Capabilities = slices.Clone(c.Clients[i].Capabilities)
+
+		for j := range c.Clients[i].Capabilities {
+			c.Clients[i].Capabilities[j].Inert = false
+		}
+	}
+
+	return &c
+}
+
 func TestGatherFollowsTheInspectionMatrix(t *testing.T) {
 	// One fixture matrix for init, doctor, and status: the per-client
 	// view carries the typed states, and the text carries the words
@@ -566,7 +589,7 @@ func TestGatherFollowsTheInspectionMatrix(t *testing.T) {
 
 			var back Status
 			require.NoError(t, json.Unmarshal(data, &back))
-			assert.Equal(t, s, &back)
+			assert.Equal(t, withoutInert(s), &back)
 			assert.Contains(t, string(data), `"clients":[`)
 			assert.Contains(t, string(data), `"declared":[`)
 

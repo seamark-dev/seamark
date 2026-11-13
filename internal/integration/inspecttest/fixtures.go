@@ -72,7 +72,7 @@ type Fixture struct {
 	// current"); empty when the fixture says nothing about it.
 	Skills string
 	// Absent are substrings that must appear in no consumer's output:
-	// a credential a hook command carries.
+	// a credential a hook command carries, or a word printed twice.
 	Absent []string
 	// Invoker is the expected name of the resolved inference command;
 	// empty means the default Claude preset.
@@ -256,7 +256,9 @@ func Fixtures() []Fixture {
 				integration.CapabilityToolGrants: integration.StateUnreadable, integration.CapabilityEdits: integration.StateUnreadable,
 				integration.CapabilityCommands: integration.StateUnreadable, integration.CapabilityResets: integration.StateUnreadable,
 			},
-			Words: []string{"hooks unreadable", "unreadable"},
+			Words: []string{"hooks unreadable (.claude/settings.json: invalid character 'n' looking for beginning of object key string)"},
+			// The word "unreadable" appears once per reason.
+			Absent: []string{"unreadable (unreadable"},
 		},
 		{
 			Name: "restricted",

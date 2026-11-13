@@ -146,7 +146,9 @@ func lessonCheckFixes(report lessoncheck.CapabilityReport, guard bool, inspectio
 // clientFixes returns the actions of one client. Setup installs the
 // missing handlers and names the current binary, so most fixes rerun
 // init. A wrapper or trust is the user's own setting, so the fix says
-// what to change instead.
+// what to change instead. Each report-only definition gets the step of
+// the enforce refusal, before the install step, because setup refuses
+// enforce while such a definition exists.
 //
 // Two states need care, because an init that does not repair them
 // would make doctor repeat its advice. Init cannot rewrite a hook
@@ -167,6 +169,8 @@ func clientFixes(report lessoncheck.CapabilityReport, c lessoncheck.ClientCapabi
 		fixes = append(fixes, "fix or remove the unreadable supplemental hook source of "+c.Client)
 	}
 
+	fixes = append(fixes, integration.ReportOnlySteps(c.Client, integration.LessonReportOnly(inspections, c.Client))...)
+
 	has := func(reason lessoncheck.CapReason) bool {
 		return slices.ContainsFunc(c.Paths, func(p lessoncheck.PathCapability) bool { return slices.Contains(p.Reasons, reason) })
 	}
@@ -183,13 +187,8 @@ func clientFixes(report lessoncheck.CapabilityReport, c lessoncheck.ClientCapabi
 		fixes = append(fixes, fmt.Sprintf("run `seamark init --client %s` with the current binary, so the hooks name it", c.Client))
 	}
 
-	if has(lessoncheck.CapReportOnlyWrapper) {
-		fixes = append(fixes, "run the lesson-check hook of "+c.Client+" as the last command of its definition, in the "+
-			"foreground, so its exit status 2 reaches the client")
-	}
-
 	if has(lessoncheck.CapUntrusted) {
-		fixes = append(fixes, "review and trust the lesson-check hooks in "+c.Client)
+		fixes = append(fixes, integration.LessonTrustStep(c.Client))
 	}
 
 	return fixes

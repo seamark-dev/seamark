@@ -234,18 +234,25 @@ type lessonSourceState struct {
 	// trust is the project trust of the hook document. No built-in
 	// adapter reads a trust record, so it stays unknown for both.
 	trust TrustState
-	// hooksDisabled is true when the project configuration turns every
-	// hook of the client off.
-	hooksDisabled bool
-	// reportOnly lists the documents that hold a definition of the
-	// pre-write hook that discards the exit status of the hook, or that
-	// the client runs in the background. No deny of such a definition
-	// blocks.
-	reportOnly []string
+	// disabled holds the finding of a project configuration that turns
+	// every hook of the client off, or nothing. The refusal prints its
+	// file and its action, so the user sees the step without the plan.
+	disabled []Finding
+	// reportOnly lists each definition of the pre-write hook that
+	// discards the exit status of the hook, or that the client runs in
+	// the background, the managed document first. No deny of such a
+	// definition blocks. The refusal names each one with its step.
+	reportOnly []ReportOnlyDefinition
 	// sourceUnreadable is true when a supplemental hook source cannot be
 	// read or parsed, so its effect is unknown. Setup still installs the
 	// hooks, but the capability report cannot establish coverage.
 	sourceUnreadable bool
+}
+
+// hooksDisabled reports whether the project configuration turns every
+// hook of the client off.
+func (s lessonSourceState) hooksDisabled() bool {
+	return len(s.disabled) > 0
 }
 
 // inspection returns the lesson-hook reading of one hook document with
@@ -253,8 +260,8 @@ type lessonSourceState struct {
 // reading here, so they cannot disagree on the source state.
 func (s lessonSourceState) inspection(document map[string]any, client lessonHookClient) LessonHookInspection {
 	return LessonHookInspection{
-		Entries: lessonHookEntries(document, client), ReportOnly: len(s.reportOnly) > 0,
-		HooksDisabled: s.hooksDisabled, SourceUnreadable: s.sourceUnreadable,
+		Entries: lessonHookEntries(document, client), ReportOnly: s.reportOnly,
+		HooksDisabled: s.hooksDisabled(), SourceUnreadable: s.sourceUnreadable,
 	}
 }
 
@@ -268,7 +275,7 @@ func (s lessonSourceState) blockers() []lessoncheck.CapReason {
 		reasons = append(reasons, lessoncheck.CapUntrusted)
 	}
 
-	if s.hooksDisabled {
+	if s.hooksDisabled() {
 		reasons = append(reasons, lessoncheck.CapHooksDisabled)
 	}
 
@@ -282,16 +289,98 @@ func (s lessonSourceState) blockers() []lessoncheck.CapReason {
 }
 
 // enforceRefusal is the refusal of an enforce request for a client in a
-// known-bad state, or nil. The message lists the sorted reasons, joined
-// with commas.
+// known-bad state, or nil. The message lists the sorted reasons, then
+// the step for each reason in the same order. A refused plan prints no
+// finding, so the refusal is the only text the user sees. A step for
+// every reason lets one pass of edits reach a state where enforce runs.
 func enforceRefusal(clientID string, state lessonSourceState) error {
 	blockers := state.blockers()
 	if len(blockers) == 0 {
 		return nil
 	}
 
-	return fmt.Errorf("lesson checks: enforce for %s would stay inactive (%s); resolve it, then rerun",
-		clientID, lessoncheck.JoinCapReasons(blockers))
+	var steps []string
+
+	for _, reason := range blockers {
+		switch reason {
+		case lessoncheck.CapHooksDisabled:
+			for _, finding := range state.disabled {
+				steps = append(steps, finding.Path+": "+finding.Action)
+			}
+		case lessoncheck.CapReportOnlyWrapper:
+			steps = append(steps, ReportOnlySteps(clientID, state.reportOnly)...)
+		case lessoncheck.CapUntrusted:
+			steps = append(steps, LessonTrustStep(clientID))
+		}
+	}
+
+	return fmt.Errorf("lesson checks: enforce for %s would stay inactive (%s); %s; then rerun",
+		clientID, lessoncheck.JoinCapReasons(blockers), strings.Join(steps, "; "))
+}
+
+// LessonTrustStep is the step for a client whose lesson-check hooks
+// wait for the user's trust review. Seamark cannot grant that trust, so
+// the step asks the user. The enforce refusal and doctor print it.
+func LessonTrustStep(clientID string) string {
+	return "review and trust the lesson-check hooks in " + clientID
+}
+
+// ReportOnlySteps returns one step for each report-only definition. The
+// enforce refusal and doctor both print these steps, so one state gets
+// one text. A record equal to an earlier one in each field gives no
+// second step, because one edit removes both copies. The removals keep
+// the record order, and the init step of the managed entry comes last.
+// Init refuses while another definition runs the hook beside the managed
+// handler, so the init step runs only after each removal.
+func ReportOnlySteps(clientID string, defs []ReportOnlyDefinition) []string {
+	var (
+		removals, inits []string
+		seen            []ReportOnlyDefinition
+	)
+
+	for _, def := range defs {
+		if slices.Contains(seen, def) {
+			continue
+		}
+
+		seen = append(seen, def)
+
+		if def.rerunsInit() {
+			inits = append(inits, def.Step(clientID))
+		} else {
+			removals = append(removals, def.Step(clientID))
+		}
+	}
+
+	return slices.Concat(removals, inits)
+}
+
+// rerunsInit reports whether the step of the definition is a run of
+// init. Only the managed entry in the background gets that step, because
+// init removes the background key from the entry that it owns.
+func (d ReportOnlyDefinition) rerunsInit() bool {
+	return d.Managed && d.Background != ""
+}
+
+// Step returns the step that makes the pre-write hook block again. It
+// removes the definition, because a definition that keeps the hook
+// beside a managed handler meets the refusal of a second handler. The
+// managed entry is the exception: a run of init removes its background
+// key. The command passes through describeCommand, so no secret and no
+// control character reaches the terminal.
+func (d ReportOnlyDefinition) Step(clientID string) string {
+	const hook = "the lesson-check pre-write hook"
+
+	switch {
+	case d.rerunsInit():
+		return fmt.Sprintf("%s: run `seamark init --client %s`, which removes %#q from %s", d.Path, clientID, d.Background, hook)
+	case d.Background != "":
+		return fmt.Sprintf("%s: remove the definition %#q, which has `%s: true`, so the client runs %s in the background",
+			d.Path, describeCommand(d.Command), d.Background, hook)
+	default:
+		return fmt.Sprintf("%s: remove the definition %#q, which discards the exit status of %s",
+			d.Path, describeCommand(d.Command), hook)
+	}
 }
 
 // refuseSecondLessonHandler applies the rule of one handler per lesson
@@ -685,44 +774,81 @@ func runsPreWrite(spec hooks.Spec, cmd string) bool {
 	return hooks.OwnedBySeamark(cmd, spec.Markers()) || hooks.ReadHook(cmd, spec.Markers()).Use() != hooks.HookNotRun
 }
 
-// reportOnlyIn reports whether a parsed hook document holds a
-// definition of the client's pre-write hook that discards its exit
-// status, or that the client runs in the background. Only a "command"
+// reportOnlyIn returns each definition of the client's pre-write hook
+// in a parsed hook document that discards its exit status, or that the
+// client runs in the background, in document order. Only a "command"
 // hook under a matcher that fires runs, so only such a definition
-// counts. countOwned is false for the managed document of a plan that
-// merges the pre-write hook, because that plan removes the background
-// key from the owned entry.
-func reportOnlyIn(document map[string]any, client lessonHookClient, countOwned bool) bool {
+// counts. managed is true for the document that setup manages, and an
+// owned command there is a managed record. merging is true for a plan
+// that merges the pre-write hook. That plan removes the background key
+// from the owned entry of the managed document, so the key does not
+// count there.
+func reportOnlyIn(document map[string]any, client lessonHookClient, path string, managed, merging bool,
+) []ReportOnlyDefinition {
 	spec, fires := client.preWrite(), client.fires
 	hookMap, _ := document["hooks"].(map[string]any)
 	eventHooks, _ := hookMap[spec.Event].([]any)
-	found := false
+
+	var defs []ReportOnlyDefinition
 
 	hooks.ForEachCommand(eventHooks, func(matcher string, h map[string]any, cmd string) {
 		if hookType, _ := h["type"].(string); hookType != "command" || !hooks.Fires(spec, matcher, fires) {
 			return
 		}
 
-		background := client.exec(h).Background != "" && runsPreWrite(spec, cmd) &&
-			(countOwned || !hooks.OwnedBySeamark(cmd, spec.Markers()))
-		found = found || discardsPreWriteStatus(spec, cmd) || background
+		owned := managed && hooks.OwnedBySeamark(cmd, spec.Markers())
+		if def, ok := reportOnlyDefinition(spec, path, cmd, client.exec(h).Background, owned); ok &&
+			(!owned || !merging || def.Background == "") {
+			defs = append(defs, def)
+		}
 	})
 
-	return found
+	return defs
 }
 
 // reportOnlyInline is reportOnlyIn for the inline [hooks] of the Codex
 // configuration. An entry in a layout that the reader does not know has
 // no matcher or type to check, so it counts as one that runs. Setup
-// never manages an inline entry, so an owned command there counts too.
-func reportOnlyInline(entries []approve.InlineHook, client lessonHookClient) bool {
+// never manages an inline entry, so an owned command there counts too,
+// and its step is a removal.
+func reportOnlyInline(entries []approve.InlineHook, client lessonHookClient) []ReportOnlyDefinition {
 	spec, fires := client.preWrite(), client.fires
 
-	return slices.ContainsFunc(entries, func(entry approve.InlineHook) bool {
+	var defs []ReportOnlyDefinition
+
+	for _, entry := range entries {
 		if entry.Event != spec.Event || (entry.Known && (entry.Type != "command" || !hooks.Fires(spec, entry.Matcher, fires))) {
-			return false
+			continue
 		}
 
-		return discardsPreWriteStatus(spec, entry.Command) || (entry.Async && runsPreWrite(spec, entry.Command))
-	})
+		background := ""
+		if entry.Async {
+			background = "async"
+		}
+
+		if def, ok := reportOnlyDefinition(spec, codexInlineHooksPath, entry.Command, background, false); ok {
+			defs = append(defs, def)
+		}
+	}
+
+	return defs
+}
+
+// reportOnlyDefinition reads one definition that runs under a firing
+// matcher. It returns the record and true when no deny of the
+// definition blocks. The discard cause wins over the background cause,
+// because removing the key alone leaves the status discarded.
+func reportOnlyDefinition(spec hooks.Spec, path, cmd, background string, managed bool) (ReportOnlyDefinition, bool) {
+	def := ReportOnlyDefinition{Path: path, Command: cmd, Managed: managed}
+
+	switch {
+	case discardsPreWriteStatus(spec, cmd):
+		return def, true
+	case background != "" && runsPreWrite(spec, cmd):
+		def.Background = background
+
+		return def, true
+	default:
+		return ReportOnlyDefinition{}, false
+	}
 }

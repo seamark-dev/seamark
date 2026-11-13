@@ -85,8 +85,10 @@ model-boundary delivery.
 - **Hook binaries that do not exist.** Setup, doctor, and status warn
   about a seamark hook whose binary path names no executable file, and
   no longer report such a hook as installed or count its gate mode. The
-  warning names the setup run that rewrites the command, or the hand
-  edit for `.claude/settings.local.json`.
+  warning says why: the path is missing, is not a regular file, or has
+  no execute bit. It names the setup run that rewrites the command, or
+  the hand edit for `.claude/settings.local.json`. The status gate line
+  says that no gate hook runs, in place of "no gate hook installed".
 - **Codex gate in the Claude Code form.** A `gate --hook` or
   `gate --enforce --hook` handler without `--client codex` in
   `.codex/hooks.json` runs and blocks in Codex. Doctor and status now
@@ -95,11 +97,16 @@ model-boundary delivery.
   one, keeps enforce unless `--gate-mode` asks otherwise, and asks for a
   new review in /hooks.
 - **Hooks under a matcher that never fires.** For a seamark hook in the
-  managed file under such a matcher, doctor and init for both clients
-  now warn and name the matcher to set in that file, in place of a
-  `seamark init` run that changes nothing. Setup still keeps the matcher.
+  managed file under such a matcher, doctor, init, and status for both
+  clients now warn and name the matcher to set in that file, in place of
+  a `seamark init` run that changes nothing. Such a hook no longer reads
+  as installed. Setup still keeps the matcher.
   For a Codex gate handler in the Claude Code form that
-  `init --client codex` removes, doctor names that run instead.
+  `init --client codex` removes, doctor names that run instead. When
+  another handler of setup already runs the hook for its tools, doctor,
+  init, and status name the removal of the idle handler, not a matcher
+  edit, and two Codex handlers of the gate or lessons hook that both run
+  now get a warning that the hook runs twice.
 - **Gate failure wording.** `init` and the docs no longer say that
   every gate failure fails closed under enforce. The gate's own failures
   still exit 2 and block. A hook that the client stops at its timeout,
@@ -109,6 +116,10 @@ model-boundary delivery.
   cannot be read no longer makes doctor and status warn that installed
   seamark hooks never run under `disableAllHooks: true` when no seamark
   hook is installed. The unread-file warning stays.
+- **Plain init and the local settings file.** A `seamark init` without
+  `--client` does not check `.claude/settings.local.json` for gate hooks.
+  Its gate line now says so and names `seamark doctor`, which checks that
+  file.
 - **Multi-line pin notes.** A line break inside a pin note reads as a
   space on one-line surfaces, for example the edit hook and
   `lessons --prepare`, so two lines no longer run together.
@@ -183,8 +194,17 @@ model-boundary delivery.
   `change_set` text part list the first five omitted pins and lessons and
   then a `+N more` line. `--json` and `structuredContent` still list every
   omission.
+- **Status in a copied checkout.** `seamark status` names the root that
+  its index records when that root is not the workspace, and the
+  `seamark index` run that records this workspace. `--json` adds
+  `recorded_root` in that case only.
+- **Report-only lesson guards.** The enforce refusal and the doctor
+  action for a report-only lesson guard name the document, the
+  definition, and the step that removes it, in place of "resolve it".
 - **Unreadable hook documents.** Status and the console read
-  `unreadable`, as doctor does, not `off`.
+  `unreadable`, as doctor does, not `off`. Doctor, status, and the
+  console print the word once: `hooks unreadable (<reason>)`, not
+  `hooks unreadable (unreadable (<reason>))`.
 - **Retarget route.** A linked pin names `w` Retarget only while `w`
   works; otherwise Pins gives the reason and a next action.
 - **`change_set` keeps its report in every client.** A client that shows
@@ -321,6 +341,14 @@ model-boundary delivery.
   lists every lesson that applies. It kept at most 8 and dropped the
   rest without a count, while change_set, check, `lessons --prepare` and
   the edit hooks name it as the command that shows what they leave out.
+- **Every doctor action.** Doctor now prints every corrective action of
+  a client line and of the hooks line, as status does, not only the
+  first. The JSON `fix` field stays one string, with the actions joined
+  by `; `.
+- **Doctor skills route.** The route to install the agent skills names
+  only the clients that a bare `seamark init --skills` installs for:
+  Claude Code, and Codex only when the repository has an `.agents/`
+  directory.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

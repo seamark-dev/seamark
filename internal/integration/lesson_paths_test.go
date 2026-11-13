@@ -467,7 +467,7 @@ func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 			bare := inspectionOf(t, t.TempDir(), ClaudeID)
 			insp := inspectionOf(t, root, ClaudeID)
 			require.NotNil(t, insp.LessonHooks, rel)
-			assert.True(t, insp.LessonHooks.ReportOnly, rel)
+			assert.Equal(t, []ReportOnlyDefinition{{Path: rel, Command: discarding}}, insp.LessonHooks.ReportOnly, rel)
 			assert.Empty(t, insp.LessonHooks.Entries, "a wrapper is not an owned entry")
 			assert.Equal(t, bare.Findings, insp.Findings, "%s: the reading adds no finding", rel)
 
@@ -479,6 +479,20 @@ func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 			c, _ := report.Client(ClaudeID)
 			assert.Contains(t, c.StageText(lessoncheck.StagePreWrite), "inactive (not-installed, report-only-wrapper)", rel)
 		}
+	})
+
+	t.Run("a wrapper in both Claude Code settings files", func(t *testing.T) {
+		// Doctor prints one step for each record, so the reading keeps
+		// every definition, the shared file first.
+		root := t.TempDir()
+		writeRel(t, root, ".claude/settings.json", wrapper(discarding))
+		writeRel(t, root, claudeLocalSettings, wrapper(discarding))
+
+		insp := inspectionOf(t, root, ClaudeID)
+		require.NotNil(t, insp.LessonHooks)
+		assert.Equal(t, []ReportOnlyDefinition{
+			{Path: ".claude/settings.json", Command: discarding}, {Path: claudeLocalSettings, Command: discarding},
+		}, insp.LessonHooks.ReportOnly)
 	})
 
 	t.Run("beside an owned guard every pre-write path is inactive", func(t *testing.T) {
@@ -514,7 +528,7 @@ func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 
 		insp := inspectionOf(t, root, CodexID)
 		require.NotNil(t, insp.LessonHooks)
-		assert.True(t, insp.LessonHooks.ReportOnly)
+		assert.Equal(t, []ReportOnlyDefinition{{Path: codexHooksFile, Command: codexDiscarding}}, insp.LessonHooks.ReportOnly)
 
 		inline := t.TempDir()
 		writeRel(t, inline, ".codex/config.toml", "[[hooks.PreToolUse]]\nmatcher = \"apply_patch\"\n\n"+
@@ -522,7 +536,7 @@ func TestLessonCheckPathsDetectsReportOnlyWrapper(t *testing.T) {
 
 		insp = inspectionOf(t, inline, CodexID)
 		require.NotNil(t, insp.LessonHooks)
-		assert.True(t, insp.LessonHooks.ReportOnly)
+		assert.Equal(t, []ReportOnlyDefinition{{Path: codexInlineHooksPath, Command: codexDiscarding}}, insp.LessonHooks.ReportOnly)
 
 		for _, reasons := range preWriteReasons(t, insp) {
 			assert.Contains(t, reasons, lessoncheck.CapReportOnlyWrapper)
@@ -913,7 +927,7 @@ func TestInspectLessonHooksWithoutNarrowReading(t *testing.T) {
 			{Capability: CapabilityEdits, Trust: TrustPending},
 			{Capability: CapabilityResets, Verification: VerificationEvidence{Level: VerificationPending, Surface: "fake"}},
 		},
-		LessonHooks: &LessonHookInspection{ReportOnly: true},
+		LessonHooks: &LessonHookInspection{ReportOnly: []ReportOnlyDefinition{{Path: "hooks.json", Command: "x || true"}}},
 	}}
 
 	reg, err := NewRegistry(Client{ID: ClaudeID, Name: "Fake", Setup: setup}, Client{ID: "plain", Name: "Plain"})

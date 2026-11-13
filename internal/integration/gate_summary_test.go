@@ -68,14 +68,14 @@ func TestSummarizeGateHooksGroupsByPath(t *testing.T) {
 
 	assert.Equal(t, GateSummary{
 		Enforce: []string{".claude/settings.local.json"}, Warn: []string{".claude/settings.json"},
-		ReportOnly: []string{".codex/hooks.json"}, Possible: []string{".codex/config.toml [hooks]"},
+		ReportOnly: []string{".codex/hooks.json"}, Possible: []string{".codex/config.toml [hooks]"}, UnfilteredPossible: 1,
 	}, g)
 	assert.Equal(t, GateEffectBlocks, g.Effect())
 
 	// An uncertain enforcing hook alone is possible, not enforcing: the
 	// reader cannot tell whether it runs.
 	g = SummarizeGateHooks([]GateHook{{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Uncertain: true}})
-	assert.Equal(t, GateSummary{Possible: []string{".claude/settings.json"}}, g)
+	assert.Equal(t, GateSummary{Possible: []string{".claude/settings.json"}, UnfilteredPossible: 1}, g)
 	assert.Equal(t, GateEffectUnknown, g.Effect())
 
 	// An uncertain hook that discards its exit status never blocks, so it
@@ -83,6 +83,26 @@ func TestSummarizeGateHooksGroupsByPath(t *testing.T) {
 	g = SummarizeGateHooks([]GateHook{{Path: ".claude/settings.json", Mode: GateModeReportOnly, Uncertain: true}})
 	assert.Equal(t, GateSummary{ReportOnly: []string{".claude/settings.json"}}, g)
 	assert.Equal(t, GateEffectReportOnly, g.Effect())
+}
+
+func TestSummarizeGateHooksCountsFilteredPossibleHooks(t *testing.T) {
+	// The init gate line picks its route from the counts. One document
+	// can hold a filtered and an unfiltered definition, so each hook
+	// counts. A certain or a report-only hook is not possible, so its
+	// filter counts for nothing.
+	g := SummarizeGateHooks([]GateHook{
+		{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Managed: true, Uncertain: true, Filtered: true},
+		{Path: ".claude/settings.json", Mode: hooks.ModeWarn, Uncertain: true},
+		{Path: ".claude/settings.local.json", Mode: hooks.ModeEnforce, Uncertain: true, Filtered: true},
+		{Path: ".claude/settings.local.json", Mode: GateModeReportOnly, Uncertain: true, Filtered: true},
+	})
+
+	assert.Equal(t, GateSummary{
+		ReportOnly:       []string{".claude/settings.local.json"},
+		Possible:         []string{".claude/settings.json", ".claude/settings.local.json"},
+		FilteredPossible: 2, UnfilteredPossible: 1,
+	}, g)
+	assert.Equal(t, GateEffectUnknown, g.Effect())
 }
 
 func TestSummarizeInspectionsReadsOnlyClientsWithAGate(t *testing.T) {
@@ -118,4 +138,22 @@ func TestSummarizeInspectionsReadsOnlyClientsWithAGate(t *testing.T) {
 
 	assert.Equal(t, GateSummary{ReportOnly: []string{"claude"}}, g)
 	assert.Equal(t, GateEffectReportOnly, g.Effect())
+}
+
+func TestSummarizeInspectionsListsAnInertGateApart(t *testing.T) {
+	// An inert gate blocks nothing, so the effect does not count it. The
+	// list keeps it, so status can name the hook and its repair.
+	inert := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StatePartial, Inert: true}
+	current := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StateCurrent}
+
+	g := SummarizeInspections([]Inspection{
+		{ClientID: "claude", Capabilities: []CapabilityInspection{inert}},
+		{ClientID: "codex", GateMode: hooks.ModeEnforce, Capabilities: []CapabilityInspection{current}},
+	})
+
+	assert.Equal(t, GateSummary{Enforce: []string{"codex"}, Inert: []string{"claude"}}, g)
+	assert.Equal(t, GateEffectBlocks, g.Effect())
+
+	g = SummarizeInspections([]Inspection{{ClientID: "claude", Capabilities: []CapabilityInspection{inert}}})
+	assert.Equal(t, GateEffectNone, g.Effect())
 }

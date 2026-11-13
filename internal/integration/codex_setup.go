@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/skills"
 )
 
 // codexHooksFile is the one Codex hook document that setup manages.
@@ -157,7 +158,9 @@ func planCodexConfig(plan *ClientPlan, root string, req ClientSetup) (codexConfi
 // second handler therefore doubles the advice, the log records, and the
 // budget, and it evaluates each command twice. When a command that
 // setup does not own already runs the hook, setup installs no handler
-// beside it and says where the hook runs.
+// beside it and says where the hook runs. Setup keeps every handler in
+// the Codex form, because the user can have set its keys. So the plan
+// warns about two such handlers that still run after the merge.
 func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, config *codexConfigRead) error {
 	if binary == "" {
 		return errors.New("setup: the seamark binary path is empty")
@@ -187,10 +190,15 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 
 	rules := codexHookRules.withSelf(binary)
 
-	for _, spec := range specs {
+	// before keeps the sources of each spec as the document holds them
+	// before the merge, so the plan can pair them with the merged ones.
+	before := make([][]hookSource, len(specs))
+
+	for i, spec := range specs {
 		var found []Finding
 
 		read := codexHookSources(&found, rules, document, inline, spec)
+		before[i] = read
 		plan.Findings = append(plan.Findings, withoutManagedRewrites(found, spec, read)...)
 		elsewhere := unmanagedSources(runningSources(read))
 
@@ -235,6 +243,19 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 	}
 
 	plan.Findings = append(plan.Findings, backgroundRemovalFindings(codexHooksFile, merged.Removed, true)...)
+
+	// The plan reads the merged document too, so each handler counts as the
+	// reduction and the merge left it. The findings about idle handlers and
+	// duplicates then equal the ones that inspection gives after the write.
+	// The other findings of this read repeat the earlier ones, so a scratch
+	// list takes them.
+	for i, spec := range specs {
+		var scratch []Finding
+
+		read := documentSources(&scratch, document, rules, codexHooksFile, spec, true)
+		plan.Findings = mergedIdleFindings(plan.Findings, spec, before[i], read)
+		plan.Findings = append(plan.Findings, codexDuplicateFindings(spec, runningSources(read))...)
+	}
 
 	// The plan lists the managed gate hook only when, after the merge,
 	// Codex runs it for the shell tool. An existing entry keeps its
@@ -420,6 +441,78 @@ func removedFormFinding(rules hookRules, s hookSource, spec hooks.Spec) Finding 
 	}
 }
 
+// mergedIdleFindings replaces the warning about each idle handler in the
+// Codex form with the warning that the merged document gives it. The
+// plan reads its sources before the merge, and the merge rewrites each
+// owned command to the running binary. So a handler whose binary is
+// missing runs after the write, and a matcher edit on the idle handler
+// beside it starts a second handler. The merge keeps these handlers in
+// their order and removes none, so the idle ones pair up by position.
+// The reduction adds an idle one only when no handler runs. The counts
+// then differ, and no warning changes. followFormChanges updates the
+// warning of a handler in the Claude Code form.
+func mergedIdleFindings(findings []Finding, spec hooks.Spec, before, after []hookSource) []Finding {
+	idle := func(sources []hookSource) []hookSource {
+		return slices.DeleteFunc(slices.Clone(sources), func(s hookSource) bool { return !s.idle || s.otherForm })
+	}
+
+	was, is := idle(before), idle(after)
+	if len(was) != len(is) {
+		return findings
+	}
+
+	coveredBefore, coveredAfter := managedRunsEveryTool(spec, before), managedRunsEveryTool(spec, after)
+
+	for i := range was {
+		if at := slices.Index(findings, idleFinding(was[i], spec, coveredBefore)); at >= 0 {
+			findings[at] = idleFinding(is[i], spec, coveredAfter)
+		}
+	}
+
+	return findings
+}
+
+// codexDuplicateFindings names two or more handlers of one managed hook
+// in the Codex form that run for a shared tool. Codex runs every
+// matching handler, so the hook runs once for each of them. Setup keeps
+// every such handler, so the action is a hand edit. The reason names no
+// command, so a run that rewrites the binary path keeps it equal. A
+// handler in the Claude Code form has its own finding and does not count.
+func codexDuplicateFindings(spec hooks.Spec, sources []hookSource) []Finding {
+	count, tools := 0, []string(nil)
+
+	for _, tool := range spec.Tools() {
+		n := 0
+
+		for _, s := range sources {
+			if s.managed && !s.otherForm && !s.inert() && slices.Contains(s.tools, tool) {
+				n++
+			}
+		}
+
+		if n > 1 {
+			count, tools = max(count, n), append(tools, tool)
+		}
+	}
+
+	if count == 0 {
+		return nil
+	}
+
+	times := "twice"
+	if count > 2 {
+		times = fmt.Sprintf("%d times", count)
+	}
+
+	return []Finding{{
+		Level: FindingWarning,
+		Path:  codexHooksFile,
+		Reason: fmt.Sprintf("has %d handlers of the managed %s hook that run for %s; Codex runs each of them, so the hook runs %s",
+			count, spec.Name, strings.Join(toolNames(tools), ", "), times),
+		Action: "keep one of those handlers in " + codexHooksFile + " and remove the others",
+	}}
+}
+
 // removesOtherFormEnforce reports whether setup removed or replaced a
 // gate handler in the Claude Code form with --enforce, while the run
 // installs another mode. That handler blocked, so the narrator reports
@@ -478,20 +571,12 @@ const codexInlineHooksPath = approve.CodexConfig + " [hooks]"
 func codexLessonSources(document map[string]any, inline []approve.InlineHook, config *codexConfigRead,
 	merging bool,
 ) lessonSourceState {
-	state := lessonSourceState{}
-
-	if reportOnlyIn(document, codexLessonHooks, !merging) {
-		state.reportOnly = append(state.reportOnly, codexHooksFile)
+	return lessonSourceState{
+		disabled: config.hooksDisabledFindings(),
+		reportOnly: slices.Concat(reportOnlyIn(document, codexLessonHooks, codexHooksFile, true, merging),
+			reportOnlyInline(inline, codexLessonHooks)),
+		sourceUnreadable: config.err != nil,
 	}
-
-	if reportOnlyInline(inline, codexLessonHooks) {
-		state.reportOnly = append(state.reportOnly, codexInlineHooksPath)
-	}
-
-	state.hooksDisabled = len(config.hooksDisabledFindings()) > 0
-	state.sourceUnreadable = config.err != nil
-
-	return state
 }
 
 // codexInstalledGateMode reads the mode of the managed gate hook from a
@@ -774,15 +859,11 @@ func (codexSetup) Inspect(root string) Inspection {
 	// Every Codex setup that installs hooks also plans the registration,
 	// so it stops at a config.toml that the plan cannot read. The fix of
 	// that file then comes first, for a missing hook and for a missing
-	// hook binary. The action of a linked file names the link, so the
-	// route reads the registration after linkActions.
-	linked := []CapabilityInspection{registration}
-	linkActions(root, linked, map[Capability]string{CapabilityMCPRegistration: approve.CodexConfig})
-	registration = linked[0]
-
+	// hook binary.
 	restore, rewrite := "run `seamark init --client codex` to install the missing hook", "run `seamark init --client codex`"
 	if registration.State == StateUnreadable {
-		restore, rewrite = registration.Action, registration.Action
+		route := unreadableCodexConfigRoute(root)
+		restore, rewrite = route, route
 	}
 
 	// One read of each hook source serves every hook inspector below. So
@@ -812,6 +893,21 @@ func (codexSetup) Inspect(root string) Inspection {
 		Findings:          findings,
 		LessonHooks:       inspectCodexLessonHooks(reads),
 	}
+}
+
+// unreadableCodexConfigRoute is the hook route when setup cannot read
+// .codex/config.toml. A hook entry names .codex/hooks.json, so the route
+// names config.toml, because setup stops there. The registration action
+// says "the file", which only its own row explains. Setup never writes
+// through a symbolic link, so a linked file needs the link replaced. A
+// failed link check keeps the plain fix, which still names the file.
+func unreadableCodexConfigRoute(root string) string {
+	fix := "fix " + approve.CodexConfig
+	if link, err := skills.SymlinkIn(root, approve.CodexConfig); err == nil && link != "" {
+		fix = "replace the symlink at " + link + " with the real file or directory"
+	}
+
+	return fix + ", then re-run `seamark init --client codex`"
 }
 
 // InspectLessonHooks reads the hook sources with the reader of Inspect
@@ -937,10 +1033,12 @@ func classifyCodexHooks(reads codexHookReads, rules hookRules) (entries []Capabi
 	classifyHook(&commands, gateSpec, gateRead)
 	sourceFindings(&findings, gateSpec, gateSources)
 	findings = append(findings, otherFormInspectionFindings(rules, gateSources)...)
+	findings = append(findings, codexDuplicateFindings(gateSpec, gateSources)...)
 
 	lessonRead := codexHookSources(&findings, rules, reads.document, reads.inline, lessons)
 	classifyHook(&edits, lessons, lessonRead)
 	sourceFindings(&findings, lessons, runningSources(lessonRead))
+	findings = append(findings, codexDuplicateFindings(lessons, runningSources(lessonRead))...)
 
 	gate.mode, gate.possible = hookMode(gateSources, certainSource), hookMode(gateSources, uncertainSource)
 	gate.background = backgroundReportOnly(gateSources)

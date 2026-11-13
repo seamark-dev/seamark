@@ -347,9 +347,13 @@ type hookSource struct {
 	filter string
 	// missing is the binary path of an owned lifecycle command that the
 	// client cannot start, or "". Such a source has no tools and no mode,
-	// so it counts for nothing. Only classifyHook reads it, to name the
-	// broken definition when no other definition runs the hook.
+	// so it counts for nothing. classifyHook and missingBinaryFinding read
+	// it to name the broken definition. cause says why the client cannot
+	// start that binary: it is missing, is not a regular file, or has no
+	// execute bit. The finding takes it from here and never stats again,
+	// so a setup plan can rebuild the same finding and remove it.
 	missing string
+	cause   string
 	// idle is true for an owned lifecycle command of the managed document
 	// under a matcher that fires for none of the spec's tools. matcher is
 	// that matcher. Such a source has no tools and no mode, and only
@@ -629,9 +633,16 @@ func (s *hookSource) applyExecution(spec hooks.Spec, execution hooks.Execution) 
 // classification can name it, and runningSources drops it for every
 // other consumer. An owned lifecycle command of the managed document
 // under a matcher that never fires is kept in the same way, with a
-// warning that names the matcher.
+// warning that names the matcher. When other managed handlers of the
+// document already run the hook for each tool, that warning names the
+// removal of the idle handler instead.
 func documentSources(findings *[]Finding, document map[string]any, rules hookRules, path string, spec hooks.Spec, managed bool) []hookSource {
 	var sources []hookSource
+
+	// idle maps the index of each idle source to the index of its finding.
+	// The walk reads the handlers one at a time, so the walk adds the
+	// matcher warning, and its end can replace it.
+	idle := map[int]int{}
 
 	hookMap, _ := document["hooks"].(map[string]any)
 	eventHooks, _ := hookMap[spec.Event].([]any)
@@ -674,6 +685,7 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		if len(source.tools) == 0 {
 			if binary != "" && managed && hookType == "command" && lifecycleSpec(spec) {
 				source.idle, source.matcher, source.mode = true, matcher, ""
+				idle[len(sources)] = len(*findings)
 				*findings = append(*findings, idleMatcherFinding(source, spec))
 				sources = append(sources, source)
 
@@ -688,8 +700,14 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		// A binary that the client cannot start blocks nothing and delivers
 		// nothing. The client reads the failure as a non-blocking error. So
 		// the source keeps no tools and no mode, and only its finding counts.
-		if binary != "" && binary != rules.self && lifecycleSpec(spec) && hookBinaryMissing(binary) {
-			source.missing, source.missingAction = binary, missingBinaryAction(rules, path, managed)
+		// The plan runs as rules.self, so it never stats that binary.
+		var cause string
+		if binary != "" && binary != rules.self && lifecycleSpec(spec) {
+			cause = hookBinaryFault(binary)
+		}
+
+		if cause != "" {
+			source.missing, source.cause, source.missingAction = binary, cause, missingBinaryAction(rules, path, managed)
 			gate := source.mode != ""
 			source.tools, source.mode = nil, ""
 
@@ -711,7 +729,40 @@ func documentSources(findings *[]Finding, document map[string]any, rules hookRul
 		sources = append(sources, source)
 	})
 
+	// Only the end of the walk knows the other handlers, so the route of
+	// each idle handler is decided here.
+	covered := managedRunsEveryTool(spec, sources)
+
+	for at, finding := range idle {
+		(*findings)[finding] = idleFinding(sources[at], spec, covered)
+	}
+
 	return sources
+}
+
+// runsManaged keeps the managed sources that certainly run the hook. An
+// inert source has no tools, so coveredTools skips it.
+func runsManaged(s hookSource) bool { return s.managed && certainSource(s) && !s.inert() }
+
+// managedRunsEveryTool reports whether the managed sources that
+// certainly run the hook cover every tool of the spec together. Only
+// then does the removal of an idle handler keep the whole coverage.
+func managedRunsEveryTool(spec hooks.Spec, sources []hookSource) bool {
+	return len(coveredTools(spec, sources, runsManaged)) == len(spec.Tools())
+}
+
+// idleFinding returns the warning about an idle managed source. covered
+// says whether other managed handlers already run the hook for each
+// tool. Then a matcher edit starts a second handler, so the finding
+// names the removal. A handler in another client's form keeps the
+// matcher warning, because the setup reduction of that form finds that
+// warning by value. Setup and inspection share this rule.
+func idleFinding(s hookSource, spec hooks.Spec, covered bool) Finding {
+	if covered && !s.otherForm {
+		return coveredIdleFinding(s, spec)
+	}
+
+	return idleMatcherFinding(s, spec)
 }
 
 // executionFindingsIn appends the execution findings of every definition
@@ -732,7 +783,9 @@ func executionFindingsIn(findings *[]Finding, document map[string]any, rules hoo
 // with its own mode. A definition that only can run the gate, or that
 // runs only for the calls that a filter matches, is uncertain.
 func sourceGateHook(s hookSource) GateHook {
-	return GateHook{Path: s.path, Mode: s.mode, Uncertain: uncertainSource(s), Background: s.background != ""}
+	return GateHook{
+		Path: s.path, Mode: s.mode, Uncertain: uncertainSource(s), Background: s.background != "", Filtered: s.filter != "",
+	}
 }
 
 // managedGateHook lists the managed gate hook of a plan in the mode that
@@ -756,6 +809,10 @@ func managedGateHook(path, mode string, sources []hookSource) GateHook {
 	}
 
 	hook.Uncertain = len(managed) > 0 && !slices.ContainsFunc(managed, certainSource)
+
+	// An owned command is otherwise certain, so a filter on every managed
+	// entry is the only cause of the uncertainty.
+	hook.Filtered = len(managed) > 0 && !slices.ContainsFunc(managed, func(s hookSource) bool { return s.filter == "" })
 
 	return hook
 }
@@ -865,6 +922,18 @@ func hookMode(sources []hookSource, keep func(hookSource) bool) string {
 	return mode
 }
 
+// The routes for a definition that may run a seamark hook, where setup
+// cannot tell whether it does. Doctor and the init gate line print the
+// same words, so the reader gets one route for one definition.
+const (
+	// UncertainHookRoute fits a definition that wraps the hook or hands
+	// it to another program.
+	UncertainHookRoute = "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell"
+	// FilteredHookRoute fits a definition with a Claude Code if field,
+	// which runs the hook only for the calls that the field matches.
+	FilteredHookRoute = "remove the `if` field from that definition, or remove the definition, so setup can tell"
+)
+
 // certainSource keeps the sources that certainly run the hook for each
 // call of their tools. An if filter makes the coverage uncertain,
 // because Claude Code runs the hook only for the calls that match.
@@ -902,6 +971,8 @@ func missingTools(spec hooks.Spec, covered []string) []string {
 // start counts for nothing. When no other definition runs the hook, it
 // makes the hook partial with the repair of its binary. So does a managed
 // definition under a matcher that never fires, with the matcher to set.
+// These three cases mark the entry inert, because the client never runs
+// the hook. Narration then does not call such a hook installed.
 func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource) {
 	broken := slices.IndexFunc(all, hookSource.cannotStart)
 	idle := slices.IndexFunc(all, func(s hookSource) bool { return s.idle })
@@ -941,22 +1012,23 @@ func classifyHook(entry *CapabilityInspection, spec hooks.Spec, all []hookSource
 	case first >= 0:
 		entry.State = StatePartial
 		entry.Detail = fmt.Sprintf("%s may run from %s: %#q", name, sources[first].path, describeCommand(sources[first].command))
-		entry.Action = "run the seamark hook directly in that definition, or remove it and re-run setup, so setup can tell"
+		entry.Action = UncertainHookRoute
 
 		// A filter is a field of the definition, so the action names it.
 		if sources[first].filter != "" {
-			entry.Action = "remove the `if` field from that definition, or remove the definition, so setup can tell"
+			entry.Action = FilteredHookRoute
 		}
 	case never >= 0:
-		entry.State = StatePartial
+		entry.State, entry.Inert = StatePartial, true
 		entry.Detail = fmt.Sprintf("%s never runs from %s: it has an if field on %s", name, sources[never].path, spec.Event)
 		entry.Action = fmt.Sprintf("remove the `if` field from the %s hook in %s", spec.Event, sources[never].path)
 	case broken >= 0:
-		entry.State = StatePartial
-		entry.Detail = fmt.Sprintf("%s cannot start from %s: %s is missing", name, all[broken].path, render.Sanitize(all[broken].missing))
+		entry.State, entry.Inert = StatePartial, true
+		entry.Detail = fmt.Sprintf("%s cannot start from %s: %s %s", name, all[broken].path,
+			render.Sanitize(all[broken].missing), all[broken].cause)
 		entry.Action = all[broken].missingAction
 	case idle >= 0:
-		entry.State = StatePartial
+		entry.State, entry.Inert = StatePartial, true
 		entry.Detail = fmt.Sprintf("%s never runs from %s: its matcher %q does not fire for %s", name, all[idle].path,
 			render.Sanitize(all[idle].matcher), strings.Join(toolNames(spec.Tools()), ", "))
 		entry.Action = idleMatcherAction(all[idle], spec)
@@ -994,7 +1066,9 @@ func sourcePaths(sources []hookSource) string {
 // another key, so Claude Code runs both for that tool. An uncertain
 // definition is also a warning, because setup cannot tell whether the
 // hook runs twice, but the reader can. The reason never starts with the
-// path, because every consumer prefixes it.
+// path, because every consumer prefixes it. Two managed definitions get
+// no finding here. codexDuplicateFindings names them for Codex, and
+// Claude Code runs managed definitions with one handler key once.
 func sourceFindings(findings *[]Finding, spec hooks.Spec, sources []hookSource) {
 	managedTools := coveredTools(spec, sources, managedSource)
 	managedMode := hookMode(sources, managedSource)
@@ -1140,8 +1214,8 @@ func missingBinaryAction(rules hookRules, path string, managed bool) string {
 // so the hook does nothing. A gate hook then blocks no verdict, whatever
 // its mode says. Setup and inspection share it, so both say it alike.
 func missingBinaryFinding(s hookSource, spec hooks.Spec, gate bool) Finding {
-	reason := fmt.Sprintf("has %#q, whose binary %s is missing, so the client cannot start the seamark %s hook",
-		describeCommand(s.command), render.Sanitize(s.missing), spec.Name)
+	reason := fmt.Sprintf("has %#q, whose binary %s %s, so the client cannot start the seamark %s hook",
+		describeCommand(s.command), render.Sanitize(s.missing), s.cause, spec.Name)
 
 	if gate {
 		reason += ", and no verdict blocks"
@@ -1183,6 +1257,23 @@ func idleMatcherFinding(s hookSource, spec hooks.Spec) Finding {
 		Reason: fmt.Sprintf("has %#q under %s %q, which never runs for %s; setup does not change the matcher of an existing hook",
 			describeCommand(s.command), spec.Event, render.Sanitize(s.matcher), strings.Join(toolNames(spec.Tools()), ", ")),
 		Action: idleMatcherAction(s, spec),
+	}
+}
+
+// coveredIdleFinding names a managed command under a matcher that fires
+// for none of the spec's tools, while other managed handlers already run
+// the hook for each tool. A matcher edit would make the hook run twice,
+// so the action removes the idle handler. Setup and inspection share it,
+// so init and doctor say it alike.
+func coveredIdleFinding(s hookSource, spec hooks.Spec) Finding {
+	tools := strings.Join(toolNames(spec.Tools()), ", ")
+
+	return Finding{
+		Level: FindingWarning,
+		Path:  s.path,
+		Reason: fmt.Sprintf("has %#q under %s %q, which never runs for %s; another handler of the managed %s hook already runs for %s",
+			describeCommand(s.command), spec.Event, render.Sanitize(s.matcher), tools, spec.Name, tools),
+		Action: "remove that handler from " + s.path,
 	}
 }
 
@@ -1278,9 +1369,12 @@ func (c CapabilityInspection) Describe() string {
 // DescribeHooks renders the lifecycle hooks of the client in the words
 // doctor always used: "gate (warn) + lessons hooks installed",
 // "lessons hook installed, gate hook missing", "no hooks installed".
-// A hook is missing only when Setup says setup installs it; a
-// capability the client does not declare is never missing. A partial
-// hook carries its detail, because "installed" would overstate it.
+// A hook is missing only when its entry is absent and Setup says setup
+// installs it; a capability the client does not declare is never
+// missing. A partial hook carries its detail, because "installed" would
+// overstate it. An inert hook is not installed: the client never runs
+// it, so only its detail names it. With no running hook and an inert
+// one, the line starts "no hook runs".
 func (i Inspection) DescribeHooks() string {
 	edits, _ := i.Entry(CapabilityEdits)
 	commands, _ := i.Entry(CapabilityCommands)
@@ -1290,34 +1384,48 @@ func (i Inspection) DescribeHooks() string {
 		return "no hook support"
 	}
 
+	// The detail of an unreadable entry already starts with the word
+	// "unreadable", so the line adds only "hooks".
 	for _, entry := range []CapabilityInspection{edits, commands} {
 		if entry.State == StateUnreadable {
-			return "hooks unreadable (" + entry.Detail + ")"
+			return "hooks " + entry.Detail
 		}
 	}
 
-	gate := commands.Supported && commands.State != StateAbsent
-	lessons := edits.Supported && edits.State != StateAbsent
+	gate := runningHook(commands)
+	lessons := runningHook(edits)
+	gateMissing := i.Setup.GateHook && commands.State == StateAbsent
+	lessonsMissing := i.Setup.Hooks && edits.Supported && edits.State == StateAbsent
 
 	var line string
 
 	switch {
-	case !gate && !lessons:
-		return "no hooks installed"
 	case gate && lessons:
 		line = fmt.Sprintf("gate (%s) + lessons hooks installed", i.gateWord(commands))
 	case gate:
 		line = fmt.Sprintf("gate hook installed (%s)", i.gateWord(commands))
 
-		if i.Setup.Hooks && edits.Supported {
+		if lessonsMissing {
 			line += ", lessons hook missing"
 		}
-	default:
+	case lessons:
 		line = "lessons hook installed"
 
-		if i.Setup.GateHook {
+		if gateMissing {
 			line += ", gate hook missing"
 		}
+	case commands.Inert || edits.Inert:
+		line = "no hook runs"
+
+		if lessonsMissing {
+			line += ", lessons hook missing"
+		}
+
+		if gateMissing {
+			line += ", gate hook missing"
+		}
+	default:
+		return "no hooks installed"
 	}
 
 	var qualifiers []string
@@ -1337,6 +1445,12 @@ func (i Inspection) DescribeHooks() string {
 	}
 
 	return line
+}
+
+// runningHook reports whether the client runs the hook of the entry: the
+// client declares it, the entry is present, and the hook is not inert.
+func runningHook(entry CapabilityInspection) bool {
+	return entry.Supported && entry.State != StateAbsent && !entry.Inert
 }
 
 // gateWord is the mode word of the gate line: the installed mode, or

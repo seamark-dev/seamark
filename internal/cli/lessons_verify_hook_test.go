@@ -307,9 +307,6 @@ func TestLessonsVerifyHookFailedAndInterrupted(t *testing.T) {
 			"- violation: pin " + pinRefOf(t, root, "no-todo-docs") + ", check no-todo (no-added-pattern/1): " +
 			"docs/new.md:1 adds a line that matches the pattern\n" +
 			"The apply_patch tool failed, so the checks ran on the files as they are now.\n" +
-			// The Add projection writes no final newline, so the file
-			// that the test writes differs from it.
-			"The observed result differs from the proposed edit, so the change can include a change by another writer.\n" +
 			"The files stay as written; repair the violation in a later edit. " +
 			"Check again: seamark lessons --verify --file " + filepath.Join(root, "docs", "new.md") + "\n"
 		assert.Equal(t, `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"`+
@@ -332,6 +329,7 @@ func TestLessonsVerifyHookFailedAndInterrupted(t *testing.T) {
 		rec := lastRecord(t, root, lessoncheck.AuditPostEdit)
 		assert.Equal(t, integration.CodexID, rec.Client)
 		assert.Equal(t, lessoncheck.SummaryPassed, rec.State)
+		assert.Equal(t, lessoncheck.AttributionProjectionMatch, rec.Attribution)
 		require.NotNil(t, rec.Emitted)
 		assert.False(t, *rec.Emitted, "the hook wrote no reply")
 	})
@@ -594,6 +592,38 @@ func TestLessonsVerifyHookProjectionDiffers(t *testing.T) {
 		assert.NotContains(t, text, "another writer")
 		assert.Equal(t, lessoncheck.AttributionProjectionMatch, lastRecord(t, root, lessoncheck.AuditPostEdit).Attribution)
 	})
+
+	sentinel.requireNoCall(t)
+}
+
+// TestLessonsVerifyHookCodexAddMatchesNativeBytes proves that a Codex
+// Add File projects the bytes that Codex writes, final newline included.
+// A file without that newline differs, so the compare is exact.
+func TestLessonsVerifyHookCodexAddMatchesNativeBytes(t *testing.T) {
+	root, sentinel := guardFixture(t)
+	body := "*** Add File: src/gen.go\n+package gen\n"
+
+	for _, tc := range []struct {
+		written     string
+		attribution lessoncheck.Attribution
+	}{
+		{"package gen\n", lessoncheck.AttributionProjectionMatch},
+		{"package gen", lessoncheck.AttributionProjectionDiffers},
+	} {
+		_, _, err := guardHook(t, root, codexPatchEvent(t, root, body), "--client", "codex")
+		require.NoError(t, err, "the add holds no marker, so the guard allows it")
+
+		verifyWrite(t, root, "src/gen.go", tc.written)
+
+		stdout, stderr := verifyHook(t, root, codexCompletionEvent(t, root, body, 0), "--client", "codex")
+		assert.Empty(t, stdout, "a pass gives no JSON reply")
+		assert.Empty(t, stderr)
+
+		rec := lastRecord(t, root, lessoncheck.AuditPostEdit)
+		assert.Equal(t, integration.CodexID, rec.Client)
+		assert.Equal(t, lessoncheck.SummaryPassed, rec.State)
+		assert.Equal(t, tc.attribution, rec.Attribution, "written %q", tc.written)
+	}
 
 	sentinel.requireNoCall(t)
 }

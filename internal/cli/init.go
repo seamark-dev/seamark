@@ -398,7 +398,7 @@ func applyInit(run initRun, reg *integration.Registry, setups []integration.Clie
 
 		printNoGateHook(w, run.root, gateMode)
 	} else {
-		printGateLine(w, run.root, gateMode, plan.GateHooks)
+		printGateLine(w, run.root, gateMode, plan.GateHooks, plan.UncheckedGateSources)
 
 		// The gate line describes the clients with a gate hook. A selected
 		// client without one must not look covered by it.
@@ -527,7 +527,12 @@ func printFindings(w io.Writer, findings []integration.Finding, showInfo bool) {
 // command in the shared file. Setup leaves that hook as it is, so it
 // still runs: when it enforces, the run blocks whatever the mode of the
 // hook setup manages.
-func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook) {
+//
+// A run can also leave a source unchecked: init without --client never
+// reads the user's local settings file for gate hooks. The line then
+// names that file and the command that checks it, because a hook there
+// can block or stop blocking without this run knowing.
+func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook, unchecked []string) {
 	policyMode, policyErr := policyFileMode(root, gateMode)
 
 	// The summary comes from the hooks the run leaves, never from the
@@ -580,8 +585,7 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		// The plan never holds an unreadable document, so the possible
 		// definitions are the whole reason.
 		fmt.Fprintf(w, "  gate    unknown — %s holds a definition that may run a gate hook, and setup cannot tell what\n"+
-			"          it does; run the seamark gate directly in that definition, or remove it and re-run\n",
-			strings.Join(summary.Possible, ", "))
+			"          it does; %s\n", strings.Join(summary.Possible, ", "), possibleRoute(summary))
 
 		if policyErr != nil {
 			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)
@@ -649,6 +653,14 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n")
 	}
 
+	// The note follows every gate line, also a blocking one: a local copy
+	// of the managed handler in the background makes the managed gate
+	// report-only. The path is an adapter constant, so it needs no scrub.
+	if len(unchecked) > 0 {
+		fmt.Fprintf(w, "          this run does not check %s for gate hooks, so this line leaves\n"+
+			"          them out; `seamark doctor` checks that file\n", strings.Join(unchecked, ", "))
+	}
+
 	// The unknown line above already names the possible definitions.
 	if len(summary.Possible) > 0 && summary.Effect() > integration.GateEffectUnknown {
 		fmt.Fprintf(w, "  note    %s holds a definition that may also run a gate hook; setup cannot tell what it does\n",
@@ -656,6 +668,22 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 	}
 
 	printGateModeNotes(w, gateMode, gateHooks)
+}
+
+// possibleRoute names the route for the definitions that may run a gate
+// hook, in the words that doctor prints for each one. A filtered handler
+// already runs the gate directly, so it gets the route that removes the
+// filter. A run with both kinds names both routes.
+func possibleRoute(summary integration.GateSummary) string {
+	switch {
+	case summary.FilteredPossible == 0:
+		return integration.UncertainHookRoute
+	case summary.UnfilteredPossible == 0:
+		return integration.FilteredHookRoute
+	default:
+		return "for a definition with an `if` field, " + integration.FilteredHookRoute + ";\n" +
+			"          for another, " + integration.UncertainHookRoute
+	}
 }
 
 // printGateModeNotes names each gate hook that runs without --enforce

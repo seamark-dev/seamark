@@ -320,8 +320,85 @@ func TestDescribeHooksNamesWhatIsMissingForTheClientOnly(t *testing.T) {
 	insp = claude()
 	edits, _ := insp.Entry(integration.CapabilityEdits)
 	assert.Equal(t, integration.StatePartial, edits.State)
+	assert.False(t, edits.Inert, "the hook runs for Edit")
 	assert.Contains(t, insp.DescribeHooks(), "lessons hook runs for Edit only, not for Write, MultiEdit")
 	assert.Contains(t, edits.Action, `set the hook's matcher to "Edit|Write|MultiEdit"`)
+}
+
+func TestDescribeHooksCountsOnlyRunningHooksAsInstalled(t *testing.T) {
+	// A hook that the client never runs is not installed. Its detail
+	// names it, and only an absent entry is missing.
+	entry := func(matcher, command string) string {
+		return `{"matcher":"` + matcher + `","hooks":[{"type":"command","command":"` + command + `"}]}`
+	}
+	gate := inspecttest.Binary + " gate --hook"
+	lessons := inspecttest.Binary + " lessons --hook"
+	reset := `"PostCompact":[{"hooks":[{"type":"command","command":"` + inspecttest.Binary + ` lessons --hook-reset"}]}]`
+
+	cases := []struct {
+		name     string
+		document string
+		want     string
+	}{
+		{
+			name:     "idle gate beside a running lessons hook",
+			document: `{"hooks":{"PreToolUse":[` + entry("Shell", gate) + `,` + entry("Edit|Write|MultiEdit", lessons) + `],` + reset + `}}`,
+			want:     `lessons hook installed; gate hook never runs from .claude/settings.json: its matcher "Shell" does not fire for Bash`,
+		},
+		{
+			name:     "running gate beside an idle lessons hook",
+			document: `{"hooks":{"PreToolUse":[` + entry("Bash", gate) + `,` + entry("Read", lessons) + `],` + reset + `}}`,
+			want: `gate hook installed (warn); lessons hook never runs from .claude/settings.json: ` +
+				`its matcher "Read" does not fire for Edit, Write, MultiEdit`,
+		},
+		{
+			name:     "idle gate alone",
+			document: `{"hooks":{"PreToolUse":[` + entry("Shell", gate) + `]}}`,
+			want:     `no hook runs, lessons hook missing; gate hook never runs from .claude/settings.json: its matcher "Shell" does not fire for Bash`,
+		},
+		{
+			// Only the lessons hook is inert here. The line still says that
+			// no hook runs, and the absent gate entry is missing.
+			name:     "idle lessons hook alone",
+			document: `{"hooks":{"PreToolUse":[` + entry("Read", lessons) + `]}}`,
+			want: `no hook runs, gate hook missing; lessons hook never runs from .claude/settings.json: ` +
+				`its matcher "Read" does not fire for Edit, Write, MultiEdit`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", tc.document))
+
+			assert.Equal(t, tc.want, integration.Builtin().Inspect(root)[0].DescribeHooks())
+		})
+	}
+}
+
+func TestDescribeHooksCountsOnlyHooksTheClientDeclares(t *testing.T) {
+	// A hook runs only for a capability that the client declares. A
+	// capability that the client does not declare is never missing. The
+	// built-in clients mark each such entry absent, so these inspections
+	// are built by hand.
+	setup := integration.SetupSupport{Hooks: true, GateHook: true}
+	entry := func(capability integration.Capability, supported bool, state integration.CapabilityState) integration.CapabilityInspection {
+		return integration.CapabilityInspection{Capability: capability, Supported: supported, State: state}
+	}
+
+	undeclaredGate := integration.Inspection{Setup: setup, Capabilities: []integration.CapabilityInspection{
+		entry(integration.CapabilityEdits, true, integration.StateCurrent),
+		entry(integration.CapabilityCommands, false, integration.StateCurrent),
+	}}
+	assert.Equal(t, "lessons hook installed", undeclaredGate.DescribeHooks(),
+		"a present entry that the client does not declare is no running gate hook")
+
+	undeclaredLessons := integration.Inspection{Setup: setup, Capabilities: []integration.CapabilityInspection{
+		entry(integration.CapabilityEdits, false, integration.StateAbsent),
+		entry(integration.CapabilityCommands, true, integration.StateCurrent),
+	}}
+	assert.Equal(t, "gate hook installed (warn)", undeclaredLessons.DescribeHooks(),
+		"an absent entry that the client does not declare is not missing")
 }
 
 func TestHookEvidenceCoversBothClaudeFiles(t *testing.T) {
