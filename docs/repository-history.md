@@ -62,6 +62,15 @@ every partner is in the diff, the index holds no partner, or the read
 failed. On a repo with real history, this section is where the
 surprises live.
 
+In a `usually changed with` line, `6/58  commits` means that 6 commits
+changed both files, out of the 58 commits that co-change counts in the
+mined window. That count is the same on every line, and it is not the
+commit count of either file. The window is the latest 5000 commits by
+default (`--max-commits`). Lockfiles, generated files, and vendored and
+build output do not count as changed files. A commit with no other
+changed file, a commit with more than 30 other changed files
+(`--max-files-per-commit`), and a merge do not count.
+
 ### Languages
 
 | Language                      |  Symbols & calls   | Effect sinks | Notes                                                      |

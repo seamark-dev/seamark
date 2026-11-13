@@ -12,8 +12,9 @@ own (gopls, pyright, ts_ls, …). It serves three things from the index:
   confidence), which files empirically change together, recent commits.
 - **Code lenses** — caller counts per function; a file-level lens for
   empirical coupling.
-- **Diagnostics on save** — co-change omission: "`schema.ts` changes with
-  this file in 38 of 58 commits and is not part of this change."
+- **Diagnostics on save** — co-change omission: "usually changed together,
+  not in this change: `schema.ts` (12/58 commits, lift 3.1)". 12 commits
+  changed both files, out of 58 commits counted in the mined window.
 
 `seamark lsp` speaks LSP over stdio and builds the index on first start.
 All logging goes to stderr; stdout is the protocol channel.

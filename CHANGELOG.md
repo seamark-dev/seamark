@@ -297,6 +297,30 @@ model-boundary delivery.
   A firing does not show that an agent read the pin. The `lessons --help`
   entry of `--stats` now says that it counts the lessons that every
   surface returned or injected, not only those of the edit hook.
+- **CLI orient footer.** `seamark orient` now ends with routes that run
+  in the CLI, `seamark why` and `seamark lessons --region`, and labels
+  `change_set` and `expand` as MCP tools. The MCP orient text does not
+  change.
+- **change_set path check.** MCP `change_set` now rejects a `files`
+  entry that is empty, holds only white space, or holds a NUL byte,
+  with one error that names the entry. Before, an empty path listed
+  package nodes and every pin, while the preparation part rejected it.
+  An entry of `./` now reads as `.` in `change_set` and `why`, and no
+  longer lists every pin.
+- **change_set callers.** The `called from outside` line of
+  `change_set` now counts only callers in other files that are not test
+  code. It counted every caller, also callers in the same file and in
+  tests. The LSP code lens still counts every caller.
+- **Empty region ledger.** `seamark lessons --region` and MCP
+  `expand lessons:<dir>` now say that `seamark index --reviews` needs gh
+  authenticated and a github.com remote, as the repository-wide line does.
+- **why partner counts.** The `why` help, the MCP `why` description and
+  the docs now say that M in `N/M commits` counts the commits in the
+  mined window, the same for every partner.
+- **Full lesson view of a file.** `seamark lessons --file <path>` now
+  lists every lesson that applies. It kept at most 8 and dropped the
+  rest without a count, while change_set, check, `lessons --prepare` and
+  the edit hooks name it as the command that shows what they leave out.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

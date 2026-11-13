@@ -131,7 +131,7 @@ The learning workflow is simple:
 
 **Past fixes and reviews → proposed lessons → your review → reminders during edits.**
 
-Mine pull-request review comments and fix commits, then list the findings:
+Mine pull-request review comments and fix commits, then list the review lessons:
 
 ```bash
 seamark index --reviews
@@ -140,9 +140,10 @@ seamark lessons --list
 
 Review comments come from GitHub through the GitHub CLI (`gh`), authenticated
 for the repository. Without it, the run keeps the fix commits of local Git
-history and reports the reviews as skipped. To stay offline, use
-`seamark index --fixes-only` instead. A new repository or one with little
-relevant feedback may have few findings. You can also
+history and reports the reviews as skipped. Fix findings do not appear in
+`seamark lessons --list`; `seamark lessons --distill` reads them. To stay
+offline, use `seamark index --fixes-only` instead. A new repository or one
+with little relevant feedback may have few findings. You can also
 [write a lesson by hand](docs/lessons.md#tuning-what-surfaces-lessonsyaml).
 
 To turn findings into proposed lessons, Seamark can use your installed AI

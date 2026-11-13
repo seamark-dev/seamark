@@ -352,6 +352,59 @@ func TestOrientCommand(t *testing.T) {
 	assert.Contains(t, out, "most-called")
 }
 
+// Every `seamark ...` route that the CLI orient footer offers runs in
+// the state where orient prints. A route that fails there misleads the
+// user, so the test runs each one with fixture values.
+func TestOrientFooterRoutesRun(t *testing.T) {
+	root := writeFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", "b.go"),
+		[]byte("package pkg\n\n// Helper does the work.\nfunc Helper() {}\n"), 0o644))
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	out, err := run(t, "-C", root, "orient")
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	last := lines[len(lines)-1]
+	require.True(t, strings.HasPrefix(last, "next: "), "orient ends with its footer: %q", last)
+
+	var routes []string
+
+	for _, m := range regexp.MustCompile("`(seamark [^`]+)`").FindAllStringSubmatch(last, -1) {
+		routes = append(routes, m[1])
+	}
+
+	require.NotEmpty(t, routes, "the CLI footer offers at least one seamark route")
+
+	for _, route := range routes {
+		var variants []string
+
+		switch {
+		case strings.Contains(route, "<symbol|file>"):
+			variants = []string{
+				strings.ReplaceAll(route, "<symbol|file>", "Helper"),
+				strings.ReplaceAll(route, "<symbol|file>", "pkg/b.go"),
+			}
+		case strings.Contains(route, "<dir>"):
+			variants = []string{strings.ReplaceAll(route, "<dir>", "pkg")}
+		default:
+			variants = []string{route}
+		}
+
+		for _, v := range variants {
+			args := append([]string{"-C", root}, strings.Fields(strings.TrimPrefix(v, "seamark "))...)
+
+			_, err := run(t, args...)
+			assert.NoError(t, err, "the footer route %q runs", v)
+		}
+	}
+
+	assert.NotContains(t, last, "`change_set` before", "the CLI footer labels change_set as MCP")
+}
+
 func TestStatusReportsHealth(t *testing.T) {
 	root := writeFixture(t)
 	gitify(t, root)
@@ -979,6 +1032,12 @@ func TestLessonsList(t *testing.T) {
 	assert.Contains(t, out, "E702", "lessons inside the region stay")
 	assert.NotContains(t, out, "RUF001", "lessons outside the region are filtered")
 	assert.Contains(t, out, "1 total")
+
+	// An empty region offers review mining with the condition it needs.
+	out, err = run(t, "-C", root, "lessons", "--region", "nowhere")
+	require.NoError(t, err)
+	assert.Contains(t, out, "no review lessons under nowhere — widen the region, or run "+
+		"`seamark index --reviews` (needs gh authenticated and a github.com remote)")
 }
 
 func TestLessonsDistillDryRun(t *testing.T) {
@@ -2465,6 +2524,26 @@ func TestUserDocsCoverEveryCommand(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestDocsSayWhatMCounts keeps the docs explaining M in "N/M commits".
+// The editors page must quote the real LSP diagnostic text.
+func TestDocsSayWhatMCounts(t *testing.T) {
+	read := func(path string) string {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		require.NoError(t, err)
+
+		return strings.Join(strings.Fields(string(data)), " ")
+	}
+
+	history := read("docs/repository-history.md")
+	assert.Contains(t, history, "counts in the mined window")
+	assert.Contains(t, history, "not the commit count of either file")
+	assert.Contains(t, history, "more than 30 other changed files")
+
+	editors := read("docs/editors.md")
+	assert.Contains(t, editors, "usually changed together, not in this change:")
+	assert.NotContains(t, editors, "38 of 58", "a diagnostic needs lift 2.0, which 38/58 cannot reach")
 }
 
 // TestSkillsNameOnlyRealCommands mirrors TestUserDocsCoverEveryCommand

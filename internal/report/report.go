@@ -64,7 +64,16 @@ func Why(w io.Writer, st *store.Store, root, query string) error {
 // form is the name the index would use.
 func asIndexedFile(st *store.Store, root, query string) (string, bool) {
 	slashed := filepath.ToSlash(query)
-	candidates := []string{strings.TrimPrefix(slashed, "./")}
+	first := strings.TrimPrefix(slashed, "./")
+
+	// The cut turns "./" into the empty name. Package nodes have an empty
+	// file, so that name matches them, and lessons read it as the whole
+	// repository. So "./" keeps its clean form ".".
+	if slashed == "./" {
+		first = "."
+	}
+
+	candidates := []string{first}
 
 	if abs, err := filepath.Abs(query); err == nil {
 		if rel, err := filepath.Rel(root, abs); err == nil && !strings.HasPrefix(rel, "..") {
@@ -314,7 +323,8 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 
 // LessonsForScope returns the lessons to surface for a file, after the
 // config's mute/pin/threshold rules — the single path every surface
-// (why, orient, the edit hook) shares, so they never disagree.
+// (why, orient, the edit hook) shares, so they never disagree. A limit
+// of 0 means no cap, so a deliberate view can list every lesson.
 func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
 	out, _, err := LessonsForScopeBudget(st, cfg, file, limit, 0)
 
@@ -322,14 +332,16 @@ func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit in
 }
 
 // LessonsForScopeBudget is LessonsForScope with a pin cap for ambient
-// surfaces (the edit hook); trimmed reports how many applicable pins the
-// budget held back, so the caller can point at them instead of hiding
-// them.
+// surfaces (the edit hook). A limit of 0 means no cap, as in
+// LessonBudget. trimmed counts the applicable pins that the pin budget,
+// the restatement collapse and the limit hold back. The caller can then
+// point at them instead of hiding them. Mined lessons that the limit
+// cuts are not counted, because the pointer names pins only.
 func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) ([]model.Lesson, int, error) {
-	// A pin budget above the surface's own cap would let the cap eat
-	// pins with trimmed=0 — a silent drop, exactly what the budget
-	// contract forbids. Clamp so every held-back pin is counted.
-	if pinBudget > limit {
+	// A pin budget above the surface's own cap selects pins that the cap
+	// then cuts. Clamp it, so the pin budget names the cap that applies.
+	// A limit of 0 is no cap, so it never clamps the pin budget.
+	if limit > 0 && pinBudget > limit {
 		pinBudget = limit
 	}
 
@@ -373,11 +385,31 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 	}
 
 	out, trimmed := cfg.SurfaceBudgetAnnotated(mined, file, pinBudget, annotate)
-	if len(out) > limit {
+	if limit > 0 && len(out) > limit {
+		// The pins come first in out, so the pins above the limit are the
+		// pins that the cut removes. Count them, so no pin goes silently.
+		pins := len(out) - surfacedMined(cfg, mined)
+		trimmed += max(pins-limit, 0)
 		out = out[:limit]
 	}
 
 	return out, trimmed, nil
+}
+
+// surfacedMined counts the mined lessons that SurfaceBudgetAnnotated
+// keeps. It uses the same rule, so the remainder of its result is the
+// pin count. A test of the reviewer name would also count a mined lesson
+// from a reviewer login "pinned".
+func surfacedMined(cfg *reviews.Config, mined []model.Lesson) int {
+	n := 0
+
+	for _, l := range mined {
+		if cfg.SurfacesMined(l) {
+			n++
+		}
+	}
+
+	return n
 }
 
 // confidenceAnnotator ranks pins by evidence strength (RFC-002 §6)
@@ -832,6 +864,12 @@ func LedgerForRegion(st *store.Store, region string) ([]model.Lesson, error) {
 	return scoped, nil
 }
 
+// reviewMiningCondition names what `seamark index --reviews` needs to add review lessons.
+// Review mining reads pull requests through gh from a github.com origin.
+// Without them, the run mines only fix findings, and this ledger does not list fix findings.
+// Both empty-ledger lines use this one text, so their conditions cannot differ.
+const reviewMiningCondition = "(needs gh authenticated and a github.com remote)"
+
 // PrintLessonLedger lists every mined lesson in scope ("" = repo-wide) —
 // the raw material for tuning .seamark/lessons.yaml. Below-threshold
 // one-offs are shown too (they are exactly what a reader might want to
@@ -841,14 +879,13 @@ func LedgerForRegion(st *store.Store, region string) ([]model.Lesson, error) {
 func PrintLessonLedger(w io.Writer, lessons []model.Lesson, cfg *reviews.Config, scope string) {
 	if len(lessons) == 0 {
 		if scope != "" {
-			fmt.Fprintf(w, "no review lessons under %s — widen the region, or run `seamark index --reviews`\n",
-				render.Sanitize(scope))
+			fmt.Fprintf(w, "no review lessons under %s — widen the region, or run `seamark index --reviews` %s\n",
+				render.Sanitize(scope), reviewMiningCondition)
 
 			return
 		}
 
-		fmt.Fprintln(w, "no review lessons yet — run `seamark index --reviews` "+
-			"(needs gh authenticated and a github.com remote)")
+		fmt.Fprintln(w, "no review lessons yet — run `seamark index --reviews` "+reviewMiningCondition)
 
 		return
 	}

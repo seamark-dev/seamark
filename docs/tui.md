@@ -461,7 +461,7 @@ Plain route for pin authoring: edit `.seamark/lessons.yaml` by hand;
 paste. A scope edit of a linked pin has no plain route, because it writes
 the ledger too and a hand edit of the regions unlinks the pin. The sample
 has no plain command. `seamark lessons --file <path>`
-lists up to 8 lessons of one file, with no pin budget.
+lists every lesson of one file, with no pin budget.
 
 #### Check definitions and verification
 

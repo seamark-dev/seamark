@@ -18,7 +18,11 @@ func newWhyCmd(opts *options) *cobra.Command {
 		Long: `Answers, from the index: where is this defined, who calls it, which
 files empirically change together with it, and which commits explain it.
 Accepts a symbol name ("Store.Rebuild"), an FQN ("internal/store.Store.Rebuild"),
-or a repo-relative file path.`,
+or a repo-relative file path.
+
+In a partner line "N/M commits  lift L", N commits changed both files.
+M is the number of commits that co-change counts in the mined window.
+M is the same on every line; it is not the commit count of either file.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, root, err := openIndex(opts)
@@ -48,7 +52,7 @@ func newOrientCmd(opts *options) *cobra.Command {
 
 			staleNote(cmd.ErrOrStderr(), st, root)
 
-			return report.Orient(cmd.OutOrStdout(), st, root)
+			return report.OrientCLI(cmd.OutOrStdout(), st, root)
 		},
 	}
 }
