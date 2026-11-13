@@ -179,7 +179,8 @@ func TestRunInitLessonChecksRefusesUnsupportedEnforce(t *testing.T) {
 	before := snapshot(t, root)
 	_, err = initLessonRun(t, root, binary, initRun{lessonChecks: hooks.LessonChecksEnforce}, integration.CodexID)
 	require.Error(t, err)
-	assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); resolve it, then rerun", err.Error())
+	assert.Equal(t, "lesson checks: enforce for codex would stay inactive (hooks-disabled); .codex/config.toml: "+
+		"set [features] hooks = true, or remove the key, to run the hooks; then rerun", err.Error())
 	assert.Equal(t, before, snapshot(t, root))
 
 	// Claude Code disableAllHooks in either project settings file refuses
@@ -191,8 +192,8 @@ func TestRunInitLessonChecksRefusesUnsupportedEnforce(t *testing.T) {
 		before = snapshot(t, root)
 		_, err = initLessonRun(t, root, binary, initRun{lessonChecks: hooks.LessonChecksEnforce}, integration.ClaudeID)
 		require.Error(t, err, rel)
-		assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); resolve it, then rerun",
-			err.Error(), rel)
+		assert.Equal(t, "lesson checks: enforce for claude would stay inactive (hooks-disabled); "+rel+
+			": remove disableAllHooks, or set it to false, to run the hooks; then rerun", err.Error(), rel)
 		assert.Equal(t, before, snapshot(t, root), rel)
 	}
 

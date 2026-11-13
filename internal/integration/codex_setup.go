@@ -571,20 +571,12 @@ const codexInlineHooksPath = approve.CodexConfig + " [hooks]"
 func codexLessonSources(document map[string]any, inline []approve.InlineHook, config *codexConfigRead,
 	merging bool,
 ) lessonSourceState {
-	state := lessonSourceState{}
-
-	if reportOnlyIn(document, codexLessonHooks, !merging) {
-		state.reportOnly = append(state.reportOnly, codexHooksFile)
+	return lessonSourceState{
+		disabled: config.hooksDisabledFindings(),
+		reportOnly: slices.Concat(reportOnlyIn(document, codexLessonHooks, codexHooksFile, true, merging),
+			reportOnlyInline(inline, codexLessonHooks)),
+		sourceUnreadable: config.err != nil,
 	}
-
-	if reportOnlyInline(inline, codexLessonHooks) {
-		state.reportOnly = append(state.reportOnly, codexInlineHooksPath)
-	}
-
-	state.hooksDisabled = len(config.hooksDisabledFindings()) > 0
-	state.sourceUnreadable = config.err != nil
-
-	return state
 }
 
 // codexInstalledGateMode reads the mode of the managed gate hook from a

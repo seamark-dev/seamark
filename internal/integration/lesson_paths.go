@@ -344,7 +344,7 @@ func lessonHookEntries(document map[string]any, client lessonHookClient) []Lesso
 // hooks-disabled flag of the project configuration alone changes no
 // path, because only an installed path carries that reason.
 func lessonHookReading(reading LessonHookInspection) *LessonHookInspection {
-	if len(reading.Entries) == 0 && !reading.ReportOnly && !reading.SourceUnreadable {
+	if len(reading.Entries) == 0 && len(reading.ReportOnly) == 0 && !reading.SourceUnreadable {
 		return nil
 	}
 
@@ -534,7 +534,7 @@ func (r *pathReader) preWrite(p *lessoncheck.InstalledPath, entries []LessonHook
 	r.install(p, entries)
 	r.shared(p, partial)
 
-	if r.lessons.ReportOnly {
+	if len(r.lessons.ReportOnly) > 0 {
 		p.Reasons = append(p.Reasons, lessoncheck.CapReportOnlyWrapper)
 	}
 
@@ -701,6 +701,19 @@ func LessonDocumentError(insps []Inspection, client string) string {
 	}
 
 	return ""
+}
+
+// LessonReportOnly returns the report-only definitions of the
+// pre-write hook of a client, or nil. Doctor prints a step for each one
+// through ReportOnlySteps, as the enforce refusal does.
+func LessonReportOnly(insps []Inspection, client string) []ReportOnlyDefinition {
+	for _, insp := range insps {
+		if insp.ClientID == client && insp.LessonHooks != nil {
+			return insp.LessonHooks.ReportOnly
+		}
+	}
+
+	return nil
 }
 
 // LessonHooksInstalled reports whether the inspection reads an owned

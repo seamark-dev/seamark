@@ -198,6 +198,9 @@ model-boundary delivery.
   its index records when that root is not the workspace, and the
   `seamark index` run that records this workspace. `--json` adds
   `recorded_root` in that case only.
+- **Report-only lesson guards.** The enforce refusal and the doctor
+  action for a report-only lesson guard name the document, the
+  definition, and the step that removes it, in place of "resolve it".
 - **Unreadable hook documents.** Status and the console read
   `unreadable`, as doctor does, not `off`. Doctor, status, and the
   console print the word once: `hooks unreadable (<reason>)`, not

@@ -262,9 +262,12 @@ Setup keeps warning-and-install behavior for unknown local capability or
 trust. It refuses known-bad enforce states, such as disabled hooks (Claude
 Code `disableAllHooks: true` in `.claude/settings.json` or
 `.claude/settings.local.json`, Codex `[features] hooks = false`) or a
-report-only wrapper, rather than silently substituting check mode. A
-client without a guard cannot install enforce mode. Codex trust remains
-the user's decision: review new or changed hooks with `/hooks`. Seamark
+report-only wrapper, rather than silently substituting check mode. The
+refusal names each document and the step for each reason; doctor prints
+the same step for a report-only definition, and it lists each removal
+for a client before any step that reruns init for that client. A client
+without a guard cannot install enforce mode. Codex trust remains the
+user's decision: review new or changed hooks with `/hooks`. Seamark
 never grants trust, and cannot read that approval back as proof.
 
 A gate or pre-write hook that runs in the background (`async`, and for

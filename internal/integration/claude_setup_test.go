@@ -647,7 +647,10 @@ func TestClaudeLessonSourcesNameEveryReportOnlyFile(t *testing.T) {
 
 	t.Run("a wrapper in both files", func(t *testing.T) {
 		state := claudeLessonSources(discarding, discarding, claudeLocalRead, false)
-		assert.Equal(t, []string{approve.ClaudeSettings, claudeLocalSettings}, state.reportOnly)
+		command := testBinary + " lessons --guard --hook || true"
+		assert.Equal(t, []ReportOnlyDefinition{
+			{Path: approve.ClaudeSettings, Command: command}, {Path: claudeLocalSettings, Command: command},
+		}, state.reportOnly)
 		assert.False(t, state.sourceUnreadable)
 	})
 
@@ -999,7 +1002,7 @@ func TestClaudeHooksDisabledFollowsClaudeCodePrecedence(t *testing.T) {
 			assert.Equal(t, tc.path, path)
 			assert.Equal(t, tc.path != "", disabled)
 
-			assert.Equal(t, disabled, claudeLessonSources(settings, local, tc.state, false).hooksDisabled,
+			assert.Equal(t, disabled, claudeLessonSources(settings, local, tc.state, false).hooksDisabled(),
 				"the enforce preconditions use the same reading")
 
 			findings := claudeHooksDisabledFindings(settings, local, tc.state)
@@ -1088,7 +1091,9 @@ func TestClaudeSetupAndInspectionWarnOnceWhenHooksAreDisabled(t *testing.T) {
 
 		require.NotNil(t, insp.LessonHooks)
 		require.Empty(t, insp.LessonHooks.Entries)
-		require.True(t, insp.LessonHooks.ReportOnly)
+		require.Equal(t, []ReportOnlyDefinition{{
+			Path: approve.ClaudeSettings, Command: testBinary + " " + hooks.LessonGuardMarker + " || true",
+		}}, insp.LessonHooks.ReportOnly)
 
 		disabled := findingsWith(insp.Findings, disabledReason)
 		require.Len(t, disabled, 1)

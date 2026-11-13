@@ -764,17 +764,38 @@ type LessonHookInspection struct {
 	// Entries lists every owned lesson-check and exploration command of
 	// the hook document that setup manages, in document order.
 	Entries []LessonHookEntry
-	// ReportOnly is true when a definition that setup does not own runs
-	// the pre-write hook and discards its exit status, or when any
-	// definition of the pre-write hook runs in the background. No deny of
-	// such a definition blocks.
-	ReportOnly bool
+	// ReportOnly lists each definition of the pre-write hook whose deny
+	// cannot block, the managed document first. Such a definition is
+	// one that setup does not own and that discards the exit status, or
+	// any definition that runs in the background. Setup and doctor keep
+	// the document and the command, so their steps name the definition.
+	ReportOnly []ReportOnlyDefinition
 	// HooksDisabled is true when the project configuration turns every
 	// hook of the client off.
 	HooksDisabled bool
 	// SourceUnreadable means a supplemental hook source cannot be read
 	// or parsed. Its effect on installed hooks is unknown.
 	SourceUnreadable bool
+}
+
+// ReportOnlyDefinition is one definition of the pre-write hook whose
+// deny cannot block. ReportOnlySteps turns it into the step that makes
+// the hook block again.
+type ReportOnlyDefinition struct {
+	// Path names the hook source, for example .claude/settings.local.json
+	// or the inline [hooks] of the Codex configuration.
+	Path string
+	// Command is the command of the definition, as the document holds it.
+	Command string
+	// Background is the key that makes the client run the definition in
+	// the background, or "" when the definition discards the exit
+	// status. A definition that does both gets "", because removing the
+	// key alone leaves the status discarded.
+	Background string
+	// Managed is true for an owned command in the document that setup
+	// manages. Setup removes its background key, so a rerun of init is
+	// the step, not a removal.
+	Managed bool
 }
 
 // LessonHookEntry is one owned lesson-check or exploration command.

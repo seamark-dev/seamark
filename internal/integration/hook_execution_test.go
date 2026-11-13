@@ -563,11 +563,7 @@ func TestEnforceIgnoresAUserHookInTheBackground(t *testing.T) {
 }
 
 func TestEnforceRefusesAPreWriteHookInTheBackground(t *testing.T) {
-	refusal := func(clientID string) string {
-		return "lesson checks: enforce for " + clientID + " would stay inactive (report-only-wrapper); resolve it, then rerun"
-	}
-
-	refuse := func(t *testing.T, root, clientID string) {
+	refuse := func(t *testing.T, root, clientID, step string) {
 		t.Helper()
 
 		before := treeFiles(t, root)
@@ -577,7 +573,8 @@ func TestEnforceRefusesAPreWriteHookInTheBackground(t *testing.T) {
 		}}})
 		require.Error(t, err)
 		assert.Nil(t, plan)
-		assert.Equal(t, refusal(clientID), err.Error())
+		assert.Equal(t, "lesson checks: enforce for "+clientID+" would stay inactive (report-only-wrapper); "+step+"; then rerun",
+			err.Error())
 		assert.Equal(t, before, treeFiles(t, root))
 	}
 
@@ -586,7 +583,8 @@ func TestEnforceRefusesAPreWriteHookInTheBackground(t *testing.T) {
 		writeRel(t, root, claudeLocalSettings, entryWith("PreToolUse", "Edit|Write|MultiEdit",
 			"/opt/bin/seamark "+hooks.LessonGuardMarker, `,"async":true`))
 
-		refuse(t, root, ClaudeID)
+		refuse(t, root, ClaudeID, ".claude/settings.local.json: remove the definition `/opt/bin/seamark lessons --guard --hook`, "+
+			"which has `async: true`, so the client runs the lesson-check pre-write hook in the background")
 	})
 
 	t.Run("a Claude wrapper in the background", func(t *testing.T) {
@@ -594,7 +592,8 @@ func TestEnforceRefusesAPreWriteHookInTheBackground(t *testing.T) {
 		writeRel(t, root, approve.ClaudeSettings, entryWith("PreToolUse", "Edit|Write|MultiEdit",
 			"timeout 5 /opt/bin/seamark "+hooks.LessonGuardMarker, `,"asyncRewake":true`))
 
-		refuse(t, root, ClaudeID)
+		refuse(t, root, ClaudeID, ".claude/settings.json: remove the definition `timeout 5 /opt/bin/seamark lessons --guard --hook`, "+
+			"which has `asyncRewake: true`, so the client runs the lesson-check pre-write hook in the background")
 	})
 
 	t.Run("a Codex inline guard", func(t *testing.T) {
@@ -603,7 +602,9 @@ func TestEnforceRefusesAPreWriteHookInTheBackground(t *testing.T) {
 			"[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"/opt/bin/seamark "+hooks.CodexLessonGuardMarker+
 			"\"\nasync = true\n")
 
-		refuse(t, root, CodexID)
+		refuse(t, root, CodexID, ".codex/config.toml [hooks]: remove the definition "+
+			"`/opt/bin/seamark lessons --guard --hook --client codex`, which has `async: true`, so the client runs "+
+			"the lesson-check pre-write hook in the background")
 	})
 }
 
@@ -617,7 +618,10 @@ func TestAnOwnedGuardInTheBackgroundReadsReportOnly(t *testing.T) {
 
 			insp := inspectionOf(t, root, clientID)
 			require.NotNil(t, insp.LessonHooks)
-			assert.True(t, insp.LessonHooks.ReportOnly)
+			require.Len(t, insp.LessonHooks.ReportOnly, 1)
+			assert.Equal(t, lessonDocumentPath[clientID], insp.LessonHooks.ReportOnly[0].Path)
+			assert.Equal(t, "async", insp.LessonHooks.ReportOnly[0].Background)
+			assert.True(t, insp.LessonHooks.ReportOnly[0].Managed, "setup removes the key of the owned entry")
 
 			for _, p := range LessonCheckPaths(insp, self) {
 				if p.Stage == lessoncheck.StagePreWrite {

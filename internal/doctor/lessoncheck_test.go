@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -475,4 +476,153 @@ func limitClient() lessoncheck.ClientCapability {
 		{Tool: "Write", HookStage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextRoot, State: lessoncheck.PathActive, Verification: v},
 		{Tool: "Write", HookStage: lessoncheck.StagePreWrite, Context: lessoncheck.ContextChild, State: lessoncheck.PathActive, Verification: v},
 	}}
+}
+
+// TestDoctorLessonChecksNamesTheReportOnlyDefinition proves the fix of
+// a report-only lesson guard. The row names the document, the command,
+// and the step before the install step, because setup refuses enforce
+// while the definition exists. Each step of the enforce refusal is part
+// of the fix, and after the step the row holds no report-only step. A
+// removal comes before the init step of the managed entry, because init
+// refuses while the removed definition exists.
+func TestDoctorLessonChecksNamesTheReportOnlyDefinition(t *testing.T) {
+	stubAgent(t)
+
+	seamark := selfSeamark(t)
+	wrapper := seamark + " lessons --guard --hook || true"
+	localPath := filepath.Join(".claude", "settings.local.json")
+	removeStep := ".claude/settings.local.json: remove the definition `" + wrapper +
+		"`, which discards the exit status of the lesson-check pre-write hook"
+	codexInstall := "run `seamark init --client codex --lesson-checks enforce` to install the handlers"
+
+	writeLocalWrapper := func(t *testing.T, root string) {
+		t.Helper()
+
+		require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(root, localPath), []byte(`{"hooks":{"PreToolUse":[{"matcher":"Edit|Write",`+
+			`"hooks":[{"type":"command","command":"`+wrapper+`"}]}]}}`), 0o600))
+	}
+
+	// refusalStep returns the step of the enforce refusal for claude, the
+	// text between the reasons and the closing "then rerun".
+	refusalStep := func(t *testing.T, root string) string {
+		t.Helper()
+
+		_, err := integration.PlanSetup(integration.Builtin(), integration.SetupRequest{
+			Root: root, Binary: seamark, Clients: []integration.ClientSetup{{
+				ClientID: integration.ClaudeID, Hooks: true, CheckHookSources: true, LessonChecks: hooks.LessonChecksEnforce,
+			}},
+		})
+		require.Error(t, err)
+
+		_, rest, ok := strings.Cut(err.Error(), "(report-only-wrapper); ")
+		require.True(t, ok, err.Error())
+
+		step, ok := strings.CutSuffix(rest, "; then rerun")
+		require.True(t, ok, err.Error())
+
+		return step
+	}
+
+	t.Run("a wrapped guard in the local file", func(t *testing.T) {
+		root, dbPath := fixtureRoot(t)
+		writeLessons(t, root, lessonEnforceYAML)
+		writeLocalWrapper(t, root)
+
+		row, ok := checksRow(t, root, dbPath)
+		require.True(t, ok)
+		assert.Equal(t, removeStep+"; run `seamark init --client claude --lesson-checks enforce` to install the handlers; "+
+			codexInstall, row.Fix)
+		assert.Contains(t, row.Fix, refusalStep(t, root), "the refusal and doctor print one step")
+
+		require.NoError(t, os.Remove(filepath.Join(root, localPath)))
+
+		row, _ = checksRow(t, root, dbPath)
+		assert.NotContains(t, row.Fix, "remove the definition")
+	})
+
+	t.Run("an installed guard beside a wrapped local guard", func(t *testing.T) {
+		root, dbPath := fixtureRoot(t)
+		writeLessons(t, root, lessonEnforceYAML)
+		installLessonChecks(t, root, seamark, integration.ClientSetup{
+			ClientID: integration.ClaudeID, LessonChecks: hooks.LessonChecksEnforce,
+		})
+		writeLocalWrapper(t, root)
+
+		row, ok := checksRow(t, root, dbPath)
+		require.True(t, ok)
+		assert.Equal(t, removeStep+"; "+codexInstall, row.Fix)
+		assert.Contains(t, row.Fix, refusalStep(t, root), "the refusal and doctor print one step")
+
+		require.NoError(t, os.Remove(filepath.Join(root, localPath)))
+
+		row, _ = checksRow(t, root, dbPath)
+		assert.Equal(t, codexInstall, row.Fix)
+	})
+
+	managedStep := ".claude/settings.json: run `seamark init --client claude`, which removes `async` from the " +
+		"lesson-check pre-write hook"
+
+	// installBackgroundGuard installs the enforce handlers of claude and
+	// puts the owned guard in the background.
+	installBackgroundGuard := func(t *testing.T, root string) {
+		t.Helper()
+
+		installLessonChecks(t, root, seamark, integration.ClientSetup{
+			ClientID: integration.ClaudeID, LessonChecks: hooks.LessonChecksEnforce,
+		})
+
+		path := filepath.Join(root, ".claude", "settings.json")
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"command": "`+seamark+` lessons --guard --hook"`)
+
+		data = []byte(strings.Replace(string(data), `"command": "`+seamark+` lessons --guard --hook"`,
+			`"async": true, "command": "`+seamark+` lessons --guard --hook"`, 1))
+		require.NoError(t, os.WriteFile(path, data, 0o600))
+	}
+
+	t.Run("the managed guard in the background", func(t *testing.T) {
+		root, dbPath := fixtureRoot(t)
+		writeLessons(t, root, lessonEnforceYAML)
+		installBackgroundGuard(t, root)
+
+		row, ok := checksRow(t, root, dbPath)
+		require.True(t, ok)
+		assert.Equal(t, managedStep+"; "+codexInstall, row.Fix)
+
+		installLessonChecks(t, root, seamark, integration.ClientSetup{ClientID: integration.ClaudeID})
+
+		row, _ = checksRow(t, root, dbPath)
+		assert.Equal(t, codexInstall, row.Fix, "the init step removes the key")
+	})
+
+	t.Run("the managed guard in the background beside a wrapped local guard", func(t *testing.T) {
+		// Init refuses while the local wrapper runs beside the managed
+		// handler. So the removal comes first, and the test runs each step
+		// of claude in the printed order.
+		root, dbPath := fixtureRoot(t)
+		writeLessons(t, root, lessonEnforceYAML)
+		installBackgroundGuard(t, root)
+		writeLocalWrapper(t, root)
+
+		row, ok := checksRow(t, root, dbPath)
+		require.True(t, ok)
+		assert.Equal(t, removeStep+"; "+managedStep+"; "+codexInstall, row.Fix)
+		assert.Contains(t, row.Fix, refusalStep(t, root), "the refusal and doctor print one step")
+
+		for _, step := range strings.Split(row.Fix, "; ") {
+			switch step {
+			case removeStep:
+				require.NoError(t, os.Remove(filepath.Join(root, localPath)))
+			case managedStep:
+				installLessonChecks(t, root, seamark, integration.ClientSetup{
+					ClientID: integration.ClaudeID, CheckHookSources: true,
+				})
+			}
+		}
+
+		row, _ = checksRow(t, root, dbPath)
+		assert.Equal(t, codexInstall, row.Fix, "the steps of claude leave no step of claude")
+	})
 }
