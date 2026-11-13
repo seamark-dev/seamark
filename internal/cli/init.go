@@ -526,7 +526,9 @@ func printFindings(w io.Writer, findings []integration.Finding, showInfo bool) {
 // another source, such as the user's local settings file, or a wrapped
 // command in the shared file. Setup leaves that hook as it is, so it
 // still runs: when it enforces, the run blocks whatever the mode of the
-// hook setup manages.
+// hook setup manages. A definition that may run a gate can block too,
+// so a warn line beside one claims only that the gate hooks that
+// certainly run block nothing.
 //
 // A run can also leave a source unchecked: init without --client never
 // reads the user's local settings file for gate hooks. The line then
@@ -645,10 +647,20 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		fmt.Fprintf(w, "  gate    enforce — the kept .seamark/policy.yaml sets mode: enforce and the hook\n"+
 			"          follows it: deny/require_approval verdicts exit 2 and block; edit policy.yaml\n"+
 			"          to stop blocking\n")
+	case gateMode == gateModeEnforce && len(summary.Possible) > 0:
+		// A definition that may run a gate can block, for example a
+		// filtered one that enforces. So the line limits its claim to the
+		// gate hooks that certainly run. The note below names the
+		// definition.
+		fmt.Fprintf(w, "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing;\n"+
+			"          --gate-mode enforce reached no gate hook of this run\n")
 	case gateMode == gateModeEnforce:
 		// The run asked for enforce and no hook of the run carries it. The
 		// notes below name each hook and why.
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook of this run\n")
+	case len(summary.Possible) > 0:
+		fmt.Fprintf(w, "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing"+
+			" (opt in: --gate-mode enforce)\n")
 	default:
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n")
 	}

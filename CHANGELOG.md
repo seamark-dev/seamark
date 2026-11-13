@@ -107,6 +107,11 @@ model-boundary delivery.
   init, and status name the removal of the idle handler, not a matcher
   edit, and two Codex handlers of the gate or lessons hook that both run
   now get a warning that the hook runs twice.
+- **No "nothing blocks" beside a gate that may block.** When a
+  definition that may run a gate, such as a filtered `gate --enforce
+  --hook` in `.claude/settings.local.json`, sits beside a warn gate hook,
+  the init `gate` line now says that the gate hooks that certainly run
+  block nothing, not that nothing blocks.
 - **Gate failure wording.** `init` and the docs no longer say that
   every gate failure fails closed under enforce. The gate's own failures
   still exit 2 and block. A hook that the client stops at its timeout,

@@ -404,11 +404,31 @@ func TestInitClientGateLineNamesAGateThatMayRunAsPossible(t *testing.T) {
 		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+printed+`"}]}]}}`), 0o644))
 
 	out := initClients(t, root, false, false, false, "", "claude")
-	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)")
+	assert.Contains(t, out, "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing (opt in: --gate-mode enforce)")
 	assert.Contains(t, out, "  note    .claude/settings.json holds a definition that may also run a gate hook; setup cannot tell what it does")
 	assert.Contains(t, out, "  note    .claude/settings.json: has `"+printed+"`, which can run the seamark gate hook; setup cannot tell")
 	assert.NotContains(t, out, "runs its own gate hook with --enforce")
 	assert.NotContains(t, out, "gate    enforce")
+	assert.NotContains(t, out, "nothing blocks", "the wrapper may block")
+}
+
+func TestInitClientGateLineDoesNotSayNothingBlocksBesideAFilteredGate(t *testing.T) {
+	// A filtered enforcing gate in the personal file blocks each call that
+	// its filter matches, such as a force push. Setup cannot tell which
+	// calls those are, so the gate line limits its claim to the gate hooks
+	// that certainly run, and the note names the filtered definition.
+	root := t.TempDir()
+	initClients(t, root, false, false, false, "", "claude")
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"), []byte(
+		`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
+			`{"type":"command","command":"/opt/bin/seamark gate --enforce --hook","if":"Bash(git push*)"}]}]}}`), 0o644))
+
+	out := initClients(t, root, false, false, false, "", "claude")
+	assert.NotContains(t, out, "nothing blocks")
+	assert.Contains(t, out, "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing"+
+		" (opt in: --gate-mode enforce)\n"+
+		"  note    .claude/settings.local.json holds a definition that may also run a gate hook; setup cannot tell what it does\n")
 }
 
 // policyModeOf reads the mode of the policy file in root.
@@ -680,6 +700,11 @@ func TestPrintGateLineNamesTheUncheckedFileUnderEveryGateLine(t *testing.T) {
 			gateModeWarn, []integration.GateHook{managedWarn, possible}, "", "(opt in: --gate-mode enforce)",
 			"  note    .claude/settings.json holds a definition that may also run a gate hook",
 		},
+		"enforce that reaches no gate hook, beside a possible definition": {
+			gateModeEnforce, []integration.GateHook{managedWarn, possible}, "mode: warn\n",
+			"--gate-mode enforce reached no gate hook of this run",
+			"  note    .claude/settings.json holds a definition that may also run a gate hook",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
@@ -692,6 +717,13 @@ func TestPrintGateLineNamesTheUncheckedFileUnderEveryGateLine(t *testing.T) {
 			printGateLine(&explicit, root, tc.gateMode, tc.hooks, nil)
 
 			out := plain.String()
+
+			// A definition that may run a gate can block, so no line beside
+			// one says that nothing blocks.
+			if slices.Contains(tc.hooks, possible) {
+				assert.NotContains(t, out, "nothing blocks")
+			}
+
 			at := strings.Index(out, uncheckedLocalNote)
 			require.GreaterOrEqual(t, at, 0, "the gate line has the note:\n%s", out)
 
