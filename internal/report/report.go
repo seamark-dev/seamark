@@ -323,7 +323,8 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 
 // LessonsForScope returns the lessons to surface for a file, after the
 // config's mute/pin/threshold rules — the single path every surface
-// (why, orient, the edit hook) shares, so they never disagree.
+// (why, orient, the edit hook) shares, so they never disagree. A limit
+// of 0 means no cap, so a deliberate view can list every lesson.
 func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
 	out, _, err := LessonsForScopeBudget(st, cfg, file, limit, 0)
 
@@ -331,14 +332,16 @@ func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit in
 }
 
 // LessonsForScopeBudget is LessonsForScope with a pin cap for ambient
-// surfaces (the edit hook); trimmed reports how many applicable pins the
-// budget held back, so the caller can point at them instead of hiding
-// them.
+// surfaces (the edit hook). A limit of 0 means no cap, as in
+// LessonBudget. trimmed counts the applicable pins that the pin budget,
+// the restatement collapse and the limit hold back. The caller can then
+// point at them instead of hiding them. Mined lessons that the limit
+// cuts are not counted, because the pointer names pins only.
 func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) ([]model.Lesson, int, error) {
-	// A pin budget above the surface's own cap would let the cap eat
-	// pins with trimmed=0 — a silent drop, exactly what the budget
-	// contract forbids. Clamp so every held-back pin is counted.
-	if pinBudget > limit {
+	// A pin budget above the surface's own cap selects pins that the cap
+	// then cuts. Clamp it, so the pin budget names the cap that applies.
+	// A limit of 0 is no cap, so it never clamps the pin budget.
+	if limit > 0 && pinBudget > limit {
 		pinBudget = limit
 	}
 
@@ -382,11 +385,31 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 	}
 
 	out, trimmed := cfg.SurfaceBudgetAnnotated(mined, file, pinBudget, annotate)
-	if len(out) > limit {
+	if limit > 0 && len(out) > limit {
+		// The pins come first in out, so the pins above the limit are the
+		// pins that the cut removes. Count them, so no pin goes silently.
+		pins := len(out) - surfacedMined(cfg, mined)
+		trimmed += max(pins-limit, 0)
 		out = out[:limit]
 	}
 
 	return out, trimmed, nil
+}
+
+// surfacedMined counts the mined lessons that SurfaceBudgetAnnotated
+// keeps. It uses the same rule, so the remainder of its result is the
+// pin count. A test of the reviewer name would also count a mined lesson
+// from a reviewer login "pinned".
+func surfacedMined(cfg *reviews.Config, mined []model.Lesson) int {
+	n := 0
+
+	for _, l := range mined {
+		if cfg.SurfacesMined(l) {
+			n++
+		}
+	}
+
+	return n
 }
 
 // confidenceAnnotator ranks pins by evidence strength (RFC-002 §6)

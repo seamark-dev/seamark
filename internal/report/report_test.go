@@ -253,6 +253,62 @@ func TestPinBudgetAboveSurfaceCapStaysAccounted(t *testing.T) {
 	assert.Equal(t, 2, trimmed, "pins beyond the surface cap are counted, not silently dropped")
 }
 
+// TestLessonsForScopeWithoutLimitKeepsEveryLesson holds the two rules of
+// the limit. A limit of 0 is no cap, so the --file view lists every
+// lesson. A positive limit counts each pin that it cuts.
+func TestLessonsForScopeWithoutLimitKeepsEveryLesson(t *testing.T) {
+	st, _ := seedStore(t)
+
+	// Two mined lessons pass the threshold, and one stays below it.
+	require.NoError(t, st.ReplaceLessons([]model.Lesson{
+		{
+			ClusterKey: "scripts\x00RUF001", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "RUF001", Occurrences: 6, LastTS: 100,
+		},
+		{
+			ClusterKey: "scripts\x00E501", Region: "scripts", Reviewer: "coderabbit",
+			Symptom: "E501", Occurrences: 4, LastTS: 90,
+		},
+		{
+			ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "person",
+			Symptom: "solitary finding", Occurrences: 1, LastTS: 50,
+		},
+	}, nil))
+
+	cfg := reviews.DefaultConfig()
+	cfg.Pin = distinctPins("scripts", 10)
+
+	const file = "scripts/task.py"
+
+	all, err := LessonsForScope(st, cfg, file, 0)
+	require.NoError(t, err)
+	require.Len(t, all, 12, "every pin, then every mined lesson that surfaces")
+
+	for i, p := range cfg.Pin {
+		assert.Contains(t, all[i].Symptom, p.Rule, "pin %d keeps its rank", i)
+	}
+
+	assert.Equal(t, "RUF001", all[10].Symptom)
+	assert.Equal(t, "E501", all[11].Symptom)
+
+	capped, err := LessonsForScope(st, cfg, file, 8)
+	require.NoError(t, err)
+	assert.Equal(t, capped, all[:8], "no cap keeps the rank order of the capped list")
+
+	// A limit of 0 is not a pin cap, so the pin budget alone cuts pins.
+	budgeted, trimmed, err := LessonsForScopeBudget(st, cfg, file, 0, 3)
+	require.NoError(t, err)
+	require.Len(t, budgeted, 5, "3 pins and both mined lessons")
+	assert.Equal(t, 7, trimmed)
+
+	// A positive limit counts the pins that it cuts. The mined lessons
+	// that it cuts are not counted, because the pointer names pins only.
+	cut, trimmed, err := LessonsForScopeBudget(st, cfg, file, 8, 0)
+	require.NoError(t, err)
+	assert.Len(t, cut, 8)
+	assert.Equal(t, 2, trimmed, "the 2 pins above the limit are counted")
+}
+
 func TestReminderPointsAtBudgetedPins(t *testing.T) {
 	lessons := []model.Lesson{
 		{Region: "a", Reviewer: "pinned", Symptom: "r — most specific wins", Occurrences: 1 << 30},

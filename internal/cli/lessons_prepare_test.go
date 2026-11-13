@@ -727,3 +727,128 @@ func TestLessonsPrepareMatchesChangeSet(t *testing.T) {
 	assert.Equal(t, before[0].Pins[0].PinIdentity, after[0].Pins[0].PinIdentity, "the pin keeps its identity")
 	assert.NotEqual(t, before[0].Pins[0].PinVersion, after[0].Pins[0].PinVersion, "the pin gets a new version")
 }
+
+// manyPins holds pins on distinct themes. Similar rule names or notes
+// would collapse as restatements in the hook and the preparation.
+var manyPins = []struct{ rule, note string }{
+	{"close-bodies", "Close response bodies on every path."},
+	{"outbound-deadlines", "Wrap context deadlines around outbound calls."},
+	{"bounded-retries", "Bound retries with jittered backoff."},
+	{"unicode-compare", "Normalize user text to NFC before compare."},
+	{"page-size", "Cap page size at the API edge."},
+	{"token-scope", "Check token scope before the handler body."},
+	{"idempotent-posts", "Make POST handlers idempotent with request keys."},
+	{"metric-names", "Name metrics with the service prefix."},
+	{"lock-order", "Take locks in table order to avoid deadlocks."},
+	{"early-rollback", "Roll back the transaction on any early return."},
+	{"down-migrations", "Ship each schema migration with a down step."},
+	{"cache-expiry", "Expire cache entries; never cache forever."},
+	{"trace-headers", "Propagate trace headers to downstream calls."},
+	{"tenant-quotas", "Enforce per-tenant quotas in middleware."},
+}
+
+// manyPinsRepo builds an indexed repository with n distinct pins in
+// region api, at most len(manyPins). header goes above the pin
+// list, so a test can set the budget keys. It returns the root and the
+// pin rules in file order.
+func manyPinsRepo(t *testing.T, n int, header string) (root string, rules []string) {
+	t.Helper()
+
+	root = writeFixture(t)
+	verifyWrite(t, root, "api/handler.go", "package api\n\nfunc Handle() {}\n")
+
+	var b strings.Builder
+
+	b.WriteString(header)
+	b.WriteString("pin:\n")
+
+	for _, p := range manyPins[:n] {
+		rules = append(rules, p.rule)
+		b.WriteString("  - {rule: " + p.rule + ", region: api, note: \"" + p.note + "\"}\n")
+	}
+
+	verifyWrite(t, root, ".seamark/lessons.yaml", b.String())
+	gitify(t, root)
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	return root, rules
+}
+
+// pinLines returns the rules of the "- [pin] <rule> — ..." lines of a
+// lessons --file view, in print order.
+func pinLines(view string) []string {
+	var rules []string
+
+	for _, line := range strings.Split(view, "\n") {
+		rest, ok := strings.CutPrefix(line, "- [pin] ")
+		if !ok {
+			continue
+		}
+
+		rule, _, _ := strings.Cut(rest, " ")
+		rules = append(rules, rule)
+	}
+
+	return rules
+}
+
+// TestLessonsFileListsEveryLesson holds that the --file view applies no
+// lesson cap. The other routes name it as the view that shows what they
+// leave out, so it must list every pin in scope.
+func TestLessonsFileListsEveryLesson(t *testing.T) {
+	root, rules := manyPinsRepo(t, 14, "")
+
+	view, err := run(t, "-C", root, "lessons", "--file", "api/handler.go")
+	require.NoError(t, err)
+
+	assert.Equal(t, rules, pinLines(view), "each pin once, in rank order")
+	assert.NotContains(t, view, "more", "the view lists everything, so it needs no pointer line")
+	assert.Contains(t, view, "review lessons for api/handler.go")
+	assert.Contains(t, view, "seamark lessons --region api")
+}
+
+// TestLessonsFileShowsWhatTheRoutesLeaveOut follows the routes of the
+// preparation and the edit hook. Each pin that they leave out must
+// appear in the --file view that they name.
+func TestLessonsFileShowsWhatTheRoutesLeaveOut(t *testing.T) {
+	root, rules := manyPinsRepo(t, 12, "change_budget: 1\npin_budget: 3\n")
+
+	// A relative --prepare path starts at the current directory, so the
+	// test passes an absolute one.
+	p := prepareJSON(t, root, filepath.Join(root, "api", "handler.go"))
+	require.NotEmpty(t, p.Omitted)
+
+	for _, o := range p.Omitted {
+		path, ok := strings.CutPrefix(o.Inspect, "seamark lessons --file ")
+		require.True(t, ok, "inspect route: %s", o.Inspect)
+
+		view, err := run(t, "-C", root, "lessons", "--file", path)
+		require.NoError(t, err)
+		assert.Contains(t, pinLines(view), o.Rule, "%s names a view that shows %s", o.Inspect, o.Rule)
+	}
+
+	payload := `{"tool_name":"Edit","tool_input":{"file_path":"` +
+		filepath.Join(root, "api", "handler.go") + `"}}`
+
+	out, _, err := runIn(t, payload, "-C", root, "lessons", "--hook")
+	require.NoError(t, err)
+
+	var hook struct {
+		HookSpecificOutput struct {
+			AdditionalContext string `json:"additionalContext"`
+		} `json:"hookSpecificOutput"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &hook))
+	assert.Contains(t, hook.HookSpecificOutput.AdditionalContext, "(+9 more pins for this area: ")
+
+	view, err := run(t, "-C", root, "lessons", "--file", "api/handler.go")
+	require.NoError(t, err)
+
+	shown := pinLines(view)
+	for _, rule := range rules[3:] {
+		assert.NotContains(t, hook.HookSpecificOutput.AdditionalContext, rule+" ", "the hook holds %s back", rule)
+		assert.Contains(t, shown, rule, "the view that the hook names shows %s", rule)
+	}
+}

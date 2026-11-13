@@ -123,6 +123,7 @@ func TestLessonsForFilesBudgetMatchesSingleFileSelector(t *testing.T) {
 		{"pin cap above the total cap", aboveTotal, "scripts/task.py", aboveTotal.HookPinBudget()},
 		{"muted mined lesson", muted, "scripts/task.py", 3},
 		{"deliberate view", restated, "scripts/task.py", 0},
+		{"deliberate view above the total cap", aboveTotal, "scripts/task.py", 0},
 		{"repeated pin identity", repeated, "scripts/task.py", 3},
 		{"repeated pin identity above the pin cap", repeated, "scripts/task.py", 1},
 		{"repeated pin identity in the deliberate view", repeated, "scripts/task.py", 0},
@@ -138,6 +139,65 @@ func TestLessonsForFilesBudgetMatchesSingleFileSelector(t *testing.T) {
 
 			got, gotHeld, err := LessonsForFilesBudget(st, tc.cfg, []string{tc.file},
 				LessonBudget{Total: HookLessonTotal, Pins: tc.pins})
+			require.NoError(t, err)
+
+			assert.Equal(t, want, got)
+			assert.Equal(t, wantHeld, gotHeld)
+		})
+	}
+}
+
+// TestSelectorsCountOnlyThePinsTheLimitCuts holds the held-back count
+// when the total cap cuts a list with mined lessons. The count holds
+// only the pins that the cut removes, so mined lessons never make it
+// negative. A muted mined lesson is not in the list, so it does not
+// change the pin count. Both selectors must give the same lessons and
+// the same count, as in the parity test above.
+func TestSelectorsCountOnlyThePinsTheLimitCuts(t *testing.T) {
+	// minedLessons returns n mined lessons on region scripts that pass
+	// the default threshold, strongest first.
+	minedLessons := func(n int) []model.Lesson {
+		out := make([]model.Lesson, n)
+		for i := range out {
+			out[i] = model.Lesson{
+				ClusterKey: fmt.Sprintf("scripts\x00M%d", i), Region: "scripts", Reviewer: "coderabbit",
+				Symptom: fmt.Sprintf("M%d", i), Occurrences: 20 - i, LastTS: int64(100 - i),
+			}
+		}
+
+		return out
+	}
+
+	cases := []struct {
+		name   string
+		pins   int
+		mined  int
+		mute   []reviews.MuteRule
+		budget int
+		held   int
+	}{
+		{"few pins, mined lessons above the total cap", 3, 10, nil, 0, 0},
+		{"few pins under a pin cap, mined lessons above the total cap", 3, 10, nil, 3, 0},
+		{"muted mined lesson, pins above the total cap", 10, 2, []reviews.MuteRule{{Rule: "M0"}}, 0, 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, _ := seedStore(t)
+			require.NoError(t, st.ReplaceLessons(minedLessons(tc.mined), nil))
+
+			cfg := reviews.DefaultConfig()
+			cfg.Pin = distinctPins("scripts", tc.pins)
+			cfg.Mute = tc.mute
+
+			want, wantHeld, err := LessonsForScopeBudget(st, cfg, "scripts/task.py", HookLessonTotal, tc.budget)
+			require.NoError(t, err)
+
+			assert.Len(t, want, HookLessonTotal)
+			assert.Equal(t, tc.held, wantHeld)
+
+			got, gotHeld, err := LessonsForFilesBudget(st, cfg, []string{"scripts/task.py"},
+				LessonBudget{Total: HookLessonTotal, Pins: tc.budget})
 			require.NoError(t, err)
 
 			assert.Equal(t, want, got)

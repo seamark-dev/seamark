@@ -317,6 +317,10 @@ model-boundary delivery.
 - **why partner counts.** The `why` help, the MCP `why` description and
   the docs now say that M in `N/M commits` counts the commits in the
   mined window, the same for every partner.
+- **Full lesson view of a file.** `seamark lessons --file <path>` now
+  lists every lesson that applies. It kept at most 8 and dropped the
+  rest without a count, while change_set, check, `lessons --prepare` and
+  the edit hooks name it as the command that shows what they leave out.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

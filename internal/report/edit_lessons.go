@@ -58,10 +58,6 @@ func (b LessonBudget) Clamped() LessonBudget {
 // above the pin cap, and pins above the total cap. The reminder points
 // at pins only, so heldBack ignores mined lessons above the total cap.
 //
-// One count differs from the single-file selector on purpose. With no
-// pin cap, the single-file selector drops pins above the total cap
-// without a count. This selector counts them, so no pin is hidden.
-//
 // A pin cap of zero selects the deliberate-view rules of the
 // single-file selector: no restatement collapse, and every pin carries
 // its confidence tier.
