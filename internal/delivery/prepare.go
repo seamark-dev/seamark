@@ -350,7 +350,6 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 		return nil, fmt.Errorf("select lessons: %w", err)
 	}
 
-	root := inspectRoot(req.Root)
 	refs := cfg.ShortPinRefs()
 	pinPaths, pinCounts := pinScopes(cfg, files)
 	checks, checkCounts := checkSummaries(cfg, refs, pinPaths)
@@ -373,7 +372,7 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 	}
 
 	p.Checks = checks
-	p.Omitted = omissions(cfg, refs, sel, root, files, pinPaths)
+	p.Omitted = omissions(cfg, refs, sel, req.Root, files, pinPaths)
 
 	// A cancelled call returns no preparation, so it records none either.
 	if err := ctx.Err(); err != nil {
@@ -700,7 +699,7 @@ func omissions(cfg *reviews.Config, refs map[reviews.PinKey]string, sel report.S
 		return Omission{
 			Kind: omittedPin, PinRef: refs[key], PinVersion: cfg.PinVersion(sp.Pin),
 			Rule: render.Sanitize(sp.Pin.Rule), Reason: reason,
-			Inspect: inspectCommand(root, firstPathOf(pinPaths[key], files)),
+			Inspect: report.InspectCommand(root, firstPathOf(pinPaths[key], files)),
 		}
 	}
 
@@ -716,7 +715,7 @@ func omissions(cfg *reviews.Config, refs map[reviews.PinKey]string, sel report.S
 		out = append(out, Omission{
 			Kind: omittedLesson, ClusterKey: l.ClusterKey,
 			Rule: render.Sanitize(l.Symptom), Reason: reviews.CauseOverTotal,
-			Inspect: inspectCommand(root, firstPathOf(minedPaths(l, files), files)),
+			Inspect: report.InspectCommand(root, firstPathOf(minedPaths(l, files), files)),
 		})
 	}
 
@@ -747,24 +746,6 @@ func firstPathOf(paths, files []string) string {
 	}
 
 	return files[0]
-}
-
-// inspectCommand is the command that shows every lesson of one path.
-// The path is absolute, because another process runs the command, maybe
-// from another directory. The lessoncheck rerun command quotes its
-// paths with the same function, so the two commands agree.
-func inspectCommand(root, rel string) string {
-	return "seamark lessons --file " + lessoncheck.QuoteArg(filepath.Join(root, filepath.FromSlash(rel)))
-}
-
-// inspectRoot returns root as an absolute path for the inspect command.
-// A relative root stays as it is when the working directory is unknown.
-func inspectRoot(root string) string {
-	if abs, err := filepath.Abs(root); err == nil {
-		return abs
-	}
-
-	return root
 }
 
 // preparationRecord builds the one firing record of a preparation call

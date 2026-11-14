@@ -131,24 +131,71 @@ func orient(w io.Writer, st *store.Store, root, footer string) error {
 
 	cfg := loadLessonConfig(w, root)
 
-	mined, err := st.TopLessons(1, 200)
+	mined, err := st.TopLessons(1, orientMinedRead)
 	if err != nil {
 		return err
 	}
 
-	lessons := cfg.Surface(mined, "") // repo-wide scope: every pin applies
-	if len(lessons) > 6 {
-		lessons = lessons[:6]
-	}
+	// Every pin applies to the repository-wide scope, and the pins come
+	// first. The pin count uses the rule of the surfaced mined count, so
+	// a reviewer login "pinned" does not count as a pin.
+	all := cfg.Surface(mined, "")
+	pins := len(all) - surfacedMined(cfg, mined)
+	lessons := all[:min(len(all), orientLessonLimit)]
+	shownPins := min(pins, len(lessons))
 
 	if len(lessons) > 0 {
-		fmt.Fprintf(w, "\nreviewers keep flagging  (recurring feedback — avoid the repeat)\n")
+		fmt.Fprintf(w, "\n%s\n", lessonHeader(shownPins, len(lessons)-shownPins))
 		printLessons(w, lessons)
+
+		hiddenPins := pins - shownPins
+		hiddenMined := len(all) - len(lessons) - hiddenPins
+
+		if line := orientMoreLine(hiddenPins, hiddenMined, len(mined) == orientMinedRead); line != "" {
+			fmt.Fprintf(w, "  %s\n", line)
+		}
 	}
 
 	fmt.Fprintf(w, "\n%s\n", footer)
 
 	return nil
+}
+
+// orientLessonLimit is the number of lessons that orient shows. A count
+// line names the rest, so the cap hides no lesson silently.
+const orientLessonLimit = 6
+
+// orientMinedRead is the most mined lessons that orient reads. A read
+// that returns this many can leave more out, so the count says "or more".
+const orientMinedRead = 200
+
+// orientMoreLine names the lessons that orient leaves out, per kind, and
+// where each kind is listed. No command lists every pin with its note,
+// so the pin route is the file. The line quotes no repository text, so
+// it needs no scrub. It returns "" when orient leaves nothing out.
+func orientMoreLine(pins, mined int, minedCapped bool) string {
+	// A full read can leave more mined lessons out, so the counts that
+	// hold them say "or more".
+	more, minedMore := " more", ""
+	minedNoun := plural(mined, "mined lesson", "mined lessons")
+
+	if minedCapped {
+		more, minedMore, minedNoun = " or more", " or more", "mined lessons"
+	}
+
+	pinNoun := plural(pins, "pin", "pins")
+
+	switch {
+	case pins > 0 && mined > 0:
+		return fmt.Sprintf("+%d%s: %d %s (.seamark/lessons.yaml lists every pin), %d%s %s (`seamark lessons --list`)",
+			pins+mined, more, pins, pinNoun, mined, minedMore, minedNoun)
+	case pins > 0:
+		return fmt.Sprintf("+%d more %s: .seamark/lessons.yaml lists every pin", pins, pinNoun)
+	case mined > 0:
+		return fmt.Sprintf("+%d%s %s: `seamark lessons --list` shows every mined lesson", mined, more, minedNoun)
+	default:
+		return ""
+	}
 }
 
 // moduleSection aggregates per-file symbol counts into top-level modules

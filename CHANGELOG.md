@@ -76,6 +76,9 @@ model-boundary delivery.
   client whose hooks are off, Claude Code or Codex, and init says what
   the managed gate hook there does once the hooks run. Without a typed
   `--gate-mode`, the init gate line no longer names that flag.
+- **why and orient count hidden lessons.** Both keep 6 lessons, now say
+  how many more apply and where they are, and orient's header names pins
+  apart from mined review feedback.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if
