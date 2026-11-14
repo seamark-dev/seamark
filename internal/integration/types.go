@@ -724,6 +724,11 @@ type Inspection struct {
 	// form, so clients[] keeps its bytes. A view read back from JSON says
 	// "discards its exit status", as status always did.
 	GateBackground bool `json:"-"`
+	// HooksOff is true when a client setting turns every project hook
+	// off. The gate hook of the client then runs for no command, so the
+	// gate summary counts a client with a gate hook as inert. It has no
+	// JSON form, because the findings already report the setting.
+	HooksOff bool `json:"-"`
 	// PossibleGateMode is the mode of the definitions that can run a
 	// gate hook, by the rule of GateMode. The reader cannot tell whether
 	// they do. It is empty without such a definition. A reader must not
@@ -1061,6 +1066,23 @@ type GateHook struct {
 	// The gate line then names the field as the thing to remove, as
 	// doctor does for the same definition.
 	Filtered bool
+	// HooksOff is true when a client setting turns every project hook
+	// off, so the client does not run this hook. The finding that names
+	// the setting sets it, so the gate line can point at that finding.
+	HooksOff bool
+}
+
+// markHooksOff sets HooksOff on each gate hook when the hooks-off
+// findings of the client are not empty. One finding gives the note and
+// the mark, so a gate line that points at the note always has one.
+func markHooksOff(gateHooks []GateHook, off []Finding) {
+	if len(off) == 0 {
+		return
+	}
+
+	for i := range gateHooks {
+		gateHooks[i].HooksOff = true
+	}
 }
 
 // ClientPlan is one client's read guards, composed writes, kept

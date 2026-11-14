@@ -74,7 +74,12 @@ pre-write lesson hook). No Codex recording shows what Codex does in
 either case. Re-running `init` without `--gate-mode` keeps whatever mode
 each selected client has installed, and every run ends with a `gate`
 line stating the effective behavior; a selected client whose hook still
-runs without the flag is named under that line. A run without `--client`
+runs without the flag is named under that line. When a client's settings
+turn its hooks off (Claude Code `disableAllHooks: true`, Codex
+`[features] hooks = false`), the `gate` line of init and status leaves
+that client's gate hook out and says that it does not run. Init also
+says what the managed gate hook there does once the hooks run, for
+example that it carries `--enforce`. A run without `--client`
 does not check `.claude/settings.local.json` for gate hooks. Its `gate`
 line says so and names `seamark doctor`, which checks that file. A verdict blocks only by
 exit status 2, so a gate hook that you wrap yourself must pass that

@@ -71,7 +71,11 @@ model-boundary delivery.
   it and names the console. No command makes this edit.
 - **Claude Code hooks turned off.** With `disableAllHooks: true` in a
   project settings file, Claude setup refuses lesson-check enforce, and
-  setup, doctor, and status warn that the seamark hooks never run.
+  setup, doctor, and status warn that the seamark hooks never run. The
+  init and status gate lines no longer claim verdicts or blocking for a
+  client whose hooks are off, Claude Code or Codex, and init says what
+  the managed gate hook there does once the hooks run. Without a typed
+  `--gate-mode`, the init gate line no longer names that flag.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if
