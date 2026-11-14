@@ -241,15 +241,16 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 	// fourth repeat. The config decides what surfaces (mute/pin/threshold).
 	// The section reads the full list and shows a prefix of it, so it can
 	// count the lessons that it leaves out.
-	lessons, err := LessonsForScope(st, cfg, file, 0)
+	lessons, _, pins, err := scopeLessons(st, cfg, file, 0, 0)
 	if err != nil {
 		return err
 	}
 
 	shown := lessons[:min(len(lessons), whyLessonLimit)]
+	shownPins := min(pins, len(shown))
 
 	if len(shown) > 0 {
-		fmt.Fprintf(w, "\nreviewers keep flagging  (recurring across pull requests)\n")
+		fmt.Fprintf(w, "\n%s\n", lessonHeader(shownPins, len(shown)-shownPins))
 		printLessons(w, shown)
 
 		// The command lists the full view of this file. Its path is
@@ -259,11 +260,33 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 			fmt.Fprintf(w, "  +%d more: `%s` shows this file's full view\n", hidden, render.Sanitize(InspectCommand(root, file)))
 		}
 
-		fmt.Fprintf(w, "  raw findings incl. one-offs: expand lessons:%s (MCP) or `seamark lessons --region %s`\n",
-			LessonScope(file), LessonScope(file))
+		// The pointer names a view, so it prints only when that view has a
+		// lesson. A pin is no ledger row, so a pins-only list can sit
+		// beside an empty view.
+		ledger, err := regionLedger(st, LessonScope(file))
+		if err != nil {
+			return err
+		}
+
+		if len(ledger) > 0 {
+			fmt.Fprintf(w, "  raw findings incl. one-offs: expand lessons:%s (MCP) or `seamark lessons --region %s`\n",
+				LessonScope(file), LessonScope(file))
+		}
 	}
 
 	return nil
+}
+
+// regionLedger is the ledger that the raw-findings pointer of why names:
+// the read of `expand lessons:` and `lessons --list --region`. An empty
+// region reads as the whole repository there, which is no area, so it
+// gives no lesson here.
+func regionLedger(st *store.Store, region string) ([]model.Lesson, error) {
+	if region == "" {
+		return nil, nil
+	}
+
+	return LedgerForRegion(st, region)
 }
 
 // MinFixDensityHistory is the least history a fix-density figure needs
@@ -394,6 +417,17 @@ func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit in
 // point at them instead of hiding them. Mined lessons that the limit
 // cuts are not counted, because the pointer names pins only.
 func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) ([]model.Lesson, int, error) {
+	out, trimmed, _, err := scopeLessons(st, cfg, file, limit, pinBudget)
+
+	return out, trimmed, err
+}
+
+// scopeLessons is LessonsForScopeBudget that also returns the number of
+// pins in out. The pins come first in out. The count uses the rule of
+// surfacedMined, so a list header can name pins apart from mined lessons.
+func scopeLessons(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) (
+	out []model.Lesson, trimmed, pins int, err error,
+) {
 	// A pin budget above the surface's own cap selects pins that the cap
 	// then cuts. Clamp it, so the pin budget names the cap that applies.
 	// A limit of 0 is no cap, so it never clamps the pin budget.
@@ -405,12 +439,12 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 	// Surface applies the real threshold, mute, and pins.
 	mined, err := st.LessonsForFile(file, 1, 100)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	applied, err := st.Proposals(model.ProposalApplied)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	// Drop mined lessons an applied pin already captures — without
@@ -420,7 +454,7 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 	// --region) never filters.
 	covered, err := coveredClusters(st, cfg, applied)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	if len(covered) > 0 {
@@ -437,19 +471,21 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 
 	annotate, err := confidenceAnnotator(st, applied, pinBudget > 0)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
-	out, trimmed := cfg.SurfaceBudgetAnnotated(mined, file, pinBudget, annotate)
+	out, trimmed = cfg.SurfaceBudgetAnnotated(mined, file, pinBudget, annotate)
+	pins = len(out) - surfacedMined(cfg, mined)
+
 	if limit > 0 && len(out) > limit {
 		// The pins come first in out, so the pins above the limit are the
 		// pins that the cut removes. Count them, so no pin goes silently.
-		pins := len(out) - surfacedMined(cfg, mined)
 		trimmed += max(pins-limit, 0)
+		pins = min(pins, limit)
 		out = out[:limit]
 	}
 
-	return out, trimmed, nil
+	return out, trimmed, pins, nil
 }
 
 // surfacedMined counts the mined lessons that SurfaceBudgetAnnotated

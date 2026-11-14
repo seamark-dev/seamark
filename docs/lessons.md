@@ -254,8 +254,8 @@ review lessons (all mined, strongest first) — 436 total
 
 `--region <dir>` narrows the ledger to one area — its lessons and its
 ancestors', one-offs included; agents on MCP reach the same view as
-`expand lessons:<dir>`, and `why` advertises the ref whenever it shows
-lessons. Reading a package's raw findings side by side is how a pattern
+`expand lessons:<dir>`, and `why` advertises the ref when it shows
+lessons and that view holds a lesson. Reading a package's raw findings side by side is how a pattern
 too varied for exact clustering gets spotted (ten differently-worded
 "reset pooled state" findings are one lesson to a reader), whether the
 reader is you or an agent you point at it — and the ledger's footer

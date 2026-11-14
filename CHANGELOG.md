@@ -79,6 +79,9 @@ model-boundary delivery.
 - **why and orient count hidden lessons.** Both keep 6 lessons, now say
   how many more apply and where they are, and orient's header names pins
   apart from mined review feedback.
+- **why lesson pointer.** `why` names `expand lessons:<dir>` only when
+  that view has lessons, and its header names pins apart from mined
+  review feedback.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if

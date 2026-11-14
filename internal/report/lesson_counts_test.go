@@ -87,7 +87,7 @@ func TestWhyCountsTheLessonsItLeavesOut(t *testing.T) {
 	want := strings.Split(strings.TrimSuffix(shown.String(), "\n"), "\n")
 	want = append(want, "  +3 more: `seamark lessons --file "+filepath.Join(root, "scripts", "task.py")+"` shows this file's full view")
 
-	lines := lessonSection(t, b.String(), "reviewers keep flagging  (recurring across pull requests)")
+	lines := lessonSection(t, b.String(), "pinned lessons  (from .seamark/lessons.yaml)")
 	require.Len(t, lines, 8)
 	assert.Equal(t, want, lines[:7])
 }
@@ -196,4 +196,78 @@ func TestOrientMoreLineTakesTheSingularNoun(t *testing.T) {
 	assert.Equal(t, "+3 or more: 2 pins (.seamark/lessons.yaml lists every pin), 1 or more mined lessons (`seamark lessons --list`)",
 		orientMoreLine(2, 1, true))
 	assert.Empty(t, orientMoreLine(0, 0, true))
+}
+
+func TestWhyNamesTheRawViewOnlyWhenItHasLessons(t *testing.T) {
+	const pointer = "  raw findings incl. one-offs: expand lessons:scripts (MCP) or `seamark lessons --region scripts`"
+
+	t.Run("pins only and an empty ledger", func(t *testing.T) {
+		st, root := seedStore(t)
+		require.NoError(t, st.ReplaceLessons(nil, nil))
+		writePins(t, root, "scripts")
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, root, "scripts/task.py"))
+
+		lines := lessonSection(t, b.String(), "pinned lessons  (from .seamark/lessons.yaml)")
+		assert.Len(t, lines, 1)
+		assert.NotContains(t, b.String(), "raw findings")
+	})
+
+	t.Run("pins and a one-off below the threshold", func(t *testing.T) {
+		st, root := seedStore(t)
+		require.NoError(t, st.ReplaceLessons([]model.Lesson{{
+			ClusterKey: "scripts\x00once", Region: "scripts", Reviewer: "person",
+			Symptom: "solitary finding", Occurrences: 1, LastTS: 50,
+		}}, nil))
+		writePins(t, root, "scripts")
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, root, "scripts/task.py"))
+
+		lines := lessonSection(t, b.String(), "pinned lessons  (from .seamark/lessons.yaml)")
+		assert.Equal(t, pointer, lines[len(lines)-1], "the view holds the one-off")
+	})
+
+	t.Run("pins and a lesson in a subdirectory", func(t *testing.T) {
+		// The view of the directory lists the lessons of its
+		// subdirectories too. A view of the file alone would not.
+		st, root := seedStore(t)
+		require.NoError(t, st.ReplaceLessons([]model.Lesson{{
+			ClusterKey: "scripts/sub\x00once", Region: "scripts/sub", Reviewer: "person",
+			Symptom: "nested finding", Occurrences: 1, LastTS: 50,
+		}}, nil))
+		writePins(t, root, "scripts")
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, root, "scripts/task.py"))
+
+		lines := lessonSection(t, b.String(), "pinned lessons  (from .seamark/lessons.yaml)")
+		assert.Equal(t, pointer, lines[len(lines)-1], "the view holds the nested lesson")
+	})
+}
+
+func TestWhyHeaderNamesWhatItLists(t *testing.T) {
+	t.Run("mined only", func(t *testing.T) {
+		st, root := seedStore(t)
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, root, "scripts/task.py"))
+
+		assert.Contains(t, b.String(), "\nreviewers keep flagging  (recurring feedback — avoid the repeat)\n")
+		assert.NotContains(t, b.String(), "across pull requests")
+	})
+
+	t.Run("pins and mined lessons", func(t *testing.T) {
+		st, root := seedStore(t)
+		writePins(t, root, "scripts")
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, root, "scripts/task.py"))
+
+		lines := lessonSection(t, b.String(),
+			"pinned lessons, then what reviewers keep flagging  (pins from .seamark/lessons.yaml first)")
+		assert.Len(t, lines, 3, "the pin, the mined lesson, and the pointer")
+		assert.NotContains(t, b.String(), "across pull requests")
+	})
 }
