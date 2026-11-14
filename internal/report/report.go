@@ -401,9 +401,12 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 }
 
 // LessonsForScope returns the lessons to surface for a file, after the
-// config's mute/pin/threshold rules — the single path every surface
-// (why, orient, the edit hook) shares, so they never disagree. A limit
-// of 0 means no cap, so a deliberate view can list every lesson.
+// config's mute, pin, and threshold rules. why and `lessons --file` call
+// it. The edit hook selects with LessonsForFilesBudget, and tests hold
+// the two equal for one file. orient applies the same config rules over
+// the whole repository through Config.Surface, without the covered-cluster
+// filter. A limit of 0 means no cap, so a deliberate view can list every
+// lesson.
 func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
 	out, _, err := LessonsForScopeBudget(st, cfg, file, limit, 0)
 

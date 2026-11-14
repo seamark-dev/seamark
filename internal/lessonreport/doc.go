@@ -1,8 +1,9 @@
 // Package lessonreport is the shared, read-only engine of the delivery/1
 // reading: what the audit logs say about each pin version, with units,
-// limits, and reason codes. The CLI, the console, and the outcome
-// displays all call this one package, so no surface builds a second
-// reading.
+// limits, and reason codes. `seamark lessons --delivery` renders this
+// reading. The console service returns it through a Delivery method,
+// and no console screen calls that method yet. `lessons --stats` and the
+// outcome views read the same audit records for another reading.
 //
 // Build is pure. It reads only its Inputs value. It never writes, never
 // caches, never reads the clock (Inputs.Now is the one time), and never

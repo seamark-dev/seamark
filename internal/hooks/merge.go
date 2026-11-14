@@ -122,13 +122,13 @@ func ClaudeSpecs(gateMode string) []Spec {
 // that Codex uses to read a matcher, with the aliases Edit and Write of
 // apply_patch. The timeout is seconds, as in Claude Code.
 //
-// The list holds no context-reset hook. The Codex edit decoder reads
-// no receiver yet: the event names one, but the reset of a subagent is
-// unverified, so suppression stays off by policy and a reset has
+// The list holds no context-reset hook. The Codex edit decoder names
+// the receiver, but no reset of a Codex context is verified. So the
+// receiver is never resettable, suppression stays off, and a reset has
 // nothing to clear. A hook without an effect still costs the user a
 // trust review and one process for each compaction. The reset command
-// and its decoder exist, and the hook joins the list when the edit
-// decoder names a receiver with a verified reset.
+// and its decoder exist. The hook joins the list when a native check
+// verifies that reset.
 func CodexSpecs(gateMode string) []Spec {
 	other := ModeEnforce
 	if gateMode == ModeEnforce {
