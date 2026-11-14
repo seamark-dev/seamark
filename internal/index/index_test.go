@@ -2284,6 +2284,216 @@ func TestPythonTestCallerKeepsTestMethodsOfOtherDirectories(t *testing.T) {
 	assert.Empty(t, calleeFQNs(t, st, "tests/a/test_x.test_ping"), "two ping methods give no edge")
 }
 
+// effectTags lists the effect tags of the symbol found by query.
+func effectTags(t *testing.T, st *store.Store, query string) []string {
+	t.Helper()
+
+	effs, err := st.EffectsForSymbol(mustFind(t, st, query).ID)
+	require.NoError(t, err)
+
+	tags := make([]string, 0, len(effs))
+	for _, e := range effs {
+		tags = append(tags, e.Tag)
+	}
+
+	return tags
+}
+
+// TestGoCommonMethodNeedsPackageEvidence proves the evidence rule of the
+// name-match tier. A common standard-library method name keeps its guess
+// only when the calling file shares the method's directory or imports its
+// package. A false guess would give the target's effects to the caller.
+func TestGoCommonMethodNeedsPackageEvidence(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"pin/pin.go": `package pin
+
+import "os"
+
+type writer struct{}
+
+func (writer) Replace(s string) { _ = os.WriteFile(s, nil, 0o600) }
+
+func (writer) SetStatus() { _ = os.WriteFile("status", nil, 0o600) }
+
+func files() writer { return writer{} }
+
+func Commit() { files().Replace("x") }
+`,
+		"ui/ui.go": `package ui
+
+import "strings"
+
+func OneLine(s string) string {
+	r := strings.NewReplacer("\n", " ")
+	return r.Replace(s)
+}
+`,
+		"cli/cli.go": `package cli
+
+import "example.com/m/pin"
+
+var _ = pin.Commit
+
+func Write(w interface{ Replace(string) }) { w.Replace("x") }
+`,
+		"blank/b.go": `package blank
+
+import _ "example.com/m/pin"
+
+func Write(w interface{ Replace(string) }) { w.Replace("x") }
+`,
+		"led/led.go": `package led
+
+type Ledger interface{ SetStatus() }
+
+func Move(ls Ledger) { ls.SetStatus() }
+`,
+		"snap.go": `package m
+
+type Snapshot struct{}
+
+func (s *Snapshot) Err() error { return nil }
+`,
+		"sub/a.go": `package sub
+
+import "context"
+
+func A(ctx context.Context) error { return ctx.Err() }
+`,
+		"sub/b.go": `package sub
+
+import "example.com/m"
+
+func B(s *m.Snapshot) error { return s.Err() }
+`,
+		// An empty import path maps to the root key "" too. It is no
+		// import of the module root, so it is no evidence.
+		"sub/c.go": `package sub
+
+import ""
+
+func C(e interface{ Err() error }) error { return e.Err() }
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Empty(t, calleeFQNs(t, st, "ui.OneLine"), "a strings.Replacer call is no call into pin")
+	assert.Empty(t, effectTags(t, st, "ui.OneLine"), "no false effect flows into the text helper")
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "pin.Commit")["pin.writer.Replace"],
+		"the method's own directory is evidence")
+	assert.Equal(t, []string{"fs:write"}, effectTags(t, st, "pin.Commit"))
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "cli.Write")["pin.writer.Replace"],
+		"an import of the method's package is evidence")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "blank.Write")["pin.writer.Replace"],
+		"a blank import is evidence too")
+
+	// A name outside the common table keeps today's guess without evidence:
+	// interface dispatch into another package is a real call.
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "led.Move")["pin.writer.SetStatus"])
+	assert.Equal(t, []string{"fs:write"}, effectTags(t, st, "led.Move"))
+
+	// The root package key is "". Only an import of the module root counts.
+	assert.Empty(t, calleeFQNs(t, st, "sub.A"), "a context call is no call into the root package")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "sub.B")["Snapshot.Err"],
+		"an import of the module root is evidence")
+	assert.Empty(t, calleeFQNs(t, st, "sub.C"), "an empty import path is no evidence")
+}
+
+// TestGoCommonMethodEvidenceIsPerFile proves that the package evidence of a
+// common method name comes from the imports of the calling file. The
+// receiver tier passes them on, so a promoted method keeps its guess. An
+// import in another file of the same directory is no evidence. That rule
+// loses some real calls on purpose, because a directory-wide rule restores
+// many more false guesses.
+func TestGoCommonMethodEvidenceIsPerFile(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"buf/buf.go": `package buf
+
+import "os"
+
+type Buffer struct{}
+
+func (*Buffer) WriteString(s string) { _ = os.WriteFile(s, nil, 0o600) }
+
+type Base struct{}
+
+func (Base) Flush() { _ = os.WriteFile("flush", nil, 0o600) }
+`,
+		"emb/emb.go": `package emb
+
+import "example.com/m/buf"
+
+type T struct{ buf.Base }
+
+func (t T) Done() { t.Flush() }
+`,
+		"pair/pair.go": `package pair
+
+import "example.com/m/buf"
+
+type Pair struct {
+	buf.Base
+	Data *buf.Buffer
+}
+`,
+		// use.go imports nothing, so its calls have no package evidence.
+		"pair/use.go": `package pair
+
+func Fill(p *Pair) { p.Data.WriteString("x") }
+
+func (p Pair) Stop() { p.Flush() }
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "emb.T.Done")["buf.Base.Flush"],
+		"a promoted method keeps its guess through the imports of the calling file")
+	assert.Equal(t, []string{"fs:write"}, effectTags(t, st, "emb.T.Done"))
+
+	assert.Empty(t, calleeFQNs(t, st, "pair.Fill"), "the import of pair.go is no evidence for a field call in use.go")
+	assert.Empty(t, calleeFQNs(t, st, "pair.Pair.Stop"), "the import of pair.go is no evidence for a promoted call in use.go")
+}
+
+// TestCommonMethodNameNeedsNoEvidenceOutsideGo proves that the evidence rule
+// for common Go method names stays Go only. A Python or ECMA method with
+// such a name keeps its guess from another directory without an import,
+// because an import is weak evidence in those languages.
+func TestCommonMethodNameNeedsNoEvidenceOutsideGo(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"lib/conn.py": `class Conn:
+    def Close(self):
+        return 1
+`,
+		"app/stop.py": `def stop(c):
+    c.Close()
+`,
+		"web/sink.ts": `export class Sink {
+	Flush(): number { return 1; }
+}
+`,
+		"app/drain.ts": `export function drain(s: any) {
+	s.Flush();
+}
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "app/stop.stop")["lib/conn.Conn.Close"],
+		"a Python method named Close keeps its guess")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "app/drain.drain")["web/sink.Sink.Flush"],
+		"an ECMA method named Flush keeps its guess")
+}
+
 // partnerFiles lists the co-change partners of file in the database at
 // dbPath, keyed by path, at any lift.
 func partnerFiles(t *testing.T, dbPath, file string) map[string]store.CoChangePartner {

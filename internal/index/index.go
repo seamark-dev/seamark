@@ -1794,6 +1794,7 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	named := map[string]string{}      // bare imported name -> scoped package key
 	rawImports := map[string]string{} // qualifier local name -> import path as written
 	rawNamed := map[string]string{}   // bare imported name -> import path as written
+	imported := map[string]bool{}     // scoped package key of every import, blank and dot included
 
 	for _, imp := range res.Imports {
 		if imp.LocalName != "" {
@@ -1810,6 +1811,13 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 		}
 
 		key := scopedKey(fam, rawKey)
+
+		// An empty import path maps to the root package key "". Only a real
+		// import of the module root may count as evidence for a root method.
+		if imp.Path != "" {
+			imported[key] = true
+		}
+
 		if imp.LocalName != "" {
 			imports[imp.LocalName] = key
 		}
@@ -1863,7 +1871,7 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 
 			// Miss (e.g. an inherited method): the guess tier may catch it.
 			if dst == nil {
-				dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
+				dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 			}
 		case call.Qualifier != "":
 			if pkgKey, ok := imports[call.Qualifier]; ok {
@@ -1872,11 +1880,11 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 				dst = pickUnique(g.decls[pkgKey][call.Name], model.KindFunction)
 				origin = model.OriginQualified
 			} else {
-				dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
+				dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 			}
 		default:
 			// Complex operand (x.db.Close()): only the guess tier applies.
-			dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
+			dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 		}
 
 		if dst == nil || dst.ID == decl.Symbol.ID {
@@ -2013,6 +2021,47 @@ func originRank(origin string) int {
 	return 2
 }
 
+// commonGoMethodNames lists Go method names that standard-library types
+// implement and that Go code often calls on values whose type the parser
+// cannot see. The sources are error, fmt.Stringer and fmt.Formatter,
+// context.Context, the io interfaces, bufio, sync, sort.Interface,
+// strings and bytes, bufio.Scanner, database/sql, http.Header, url.Values,
+// os/exec, os, time and testing.TB. A repository method with such a name is
+// often the only one, so a call such as ctx.Err() or
+// strings.NewReplacer(…).Replace(s) looks unique although its target is a
+// standard-library value. uniqueMethod therefore asks for package evidence
+// before it keeps a guess with one of these names.
+var commonGoMethodNames = map[string]bool{
+	// error, fmt.Stringer, fmt.Formatter.
+	"Error": true, "String": true, "Format": true,
+	// context.Context.
+	"Deadline": true, "Done": true, "Err": true, "Value": true,
+	// The io interfaces and bufio.
+	"Read": true, "Write": true, "Close": true, "Seek": true,
+	"ReadAt": true, "WriteAt": true, "ReadFrom": true, "WriteTo": true,
+	"ReadByte": true, "WriteByte": true, "ReadRune": true, "WriteString": true,
+	"Flush": true,
+	// sync.Mutex, sync.RWMutex, sync.WaitGroup, sync.Once, sync.Map.
+	"Lock": true, "Unlock": true, "RLock": true, "RUnlock": true,
+	"Wait": true, "Do": true, "Load": true, "Store": true,
+	"Delete": true, "Range": true,
+	// sort.Interface.
+	"Len": true, "Less": true, "Swap": true,
+	// strings.Replacer, strings.Builder, bytes.Buffer.
+	"Replace": true, "Reset": true, "Bytes": true, "Grow": true,
+	// bufio.Scanner, database/sql rows.
+	"Scan": true, "Next": true, "Text": true,
+	// http.Header, url.Values.
+	"Get": true, "Set": true, "Add": true, "Del": true,
+	// os/exec.Cmd, os.File, os.Process, time.Timer, time.Ticker.
+	"Run": true, "Start": true, "Kill": true, "Stop": true,
+	"Name": true, "Stat": true, "Size": true, "Sync": true,
+	// testing.TB.
+	"Helper": true, "Cleanup": true, "Fatal": true, "Fatalf": true,
+	"Errorf": true, "Log": true, "Logf": true, "Skip": true,
+	"TempDir": true, "Setenv": true,
+}
+
 // uniqueMethod is the lowest-confidence tier: the single method in the
 // language family carrying the called name, if exactly one exists.
 // Production callers never resolve into test files — test doubles (fake
@@ -2023,7 +2072,25 @@ func originRank(origin string) int {
 // of its own directory, so such a method can never be the target. The rule
 // is Go only: Python and ECMA test files can import helpers from any
 // directory.
-func (g *graph) uniqueMethod(fam, name, callerFile string) (dst *model.Symbol, origin string) {
+//
+// A Go call with a name from commonGoMethodNames keeps its sole candidate
+// only with package evidence. The calling file is in the candidate's
+// directory, or it imports the candidate's package. imported holds the
+// scoped package keys of every import of the calling file. Without evidence
+// the call gets no edge, so false effects do not flow to the caller.
+//
+// The trade-off: a real call loses its guess when the calling file does not
+// import the package that declares the type of the value. An interface call
+// is one case. A call on a field is another case: pair.Data.WriteString(…),
+// where another file of the caller's directory declares the field. A method
+// promoted from an embedded field that another file declares is a third
+// case. The evidence stays per file on purpose. A test on a large Go
+// repository found that imports from every file of the directory restore
+// one real call and about fifty false guesses.
+//
+// The rule is Go only. Python and ECMA code often calls a value of a module
+// that the file never imports, so an import there is weak evidence.
+func (g *graph) uniqueMethod(fam, name, callerFile string, imported map[string]bool) (dst *model.Symbol, origin string) {
 	var candidates []*model.Symbol
 
 	for _, c := range g.methodsByName[fam][name] {
@@ -2038,11 +2105,35 @@ func (g *graph) uniqueMethod(fam, name, callerFile string) (dst *model.Symbol, o
 		candidates = append(candidates, c)
 	}
 
-	if len(candidates) == 1 {
-		return candidates[0], model.OriginUniqueName
+	if len(candidates) != 1 {
+		return nil, ""
 	}
 
-	return nil, ""
+	c := candidates[0]
+
+	if fam == "go" && commonGoMethodNames[name] && !goPackageEvidence(callerFile, c.File, imported) {
+		return nil, ""
+	}
+
+	return c, model.OriginUniqueName
+}
+
+// goPackageEvidence reports whether Go code in callerFile has a reason to
+// call a method declared in candidateFile. The reason is a shared directory
+// or an import of the candidate's package. A Go package key is the file's
+// directory, "" at the repository root, so the root key matches only an
+// import of the module root.
+func goPackageEvidence(callerFile, candidateFile string, imported map[string]bool) bool {
+	dir := path.Dir(candidateFile)
+	if path.Dir(callerFile) == dir {
+		return true
+	}
+
+	if dir == "." {
+		dir = ""
+	}
+
+	return imported[scopedKey("go", dir)]
 }
 
 // goTestVisible reports whether Go code in callerFile can call a method

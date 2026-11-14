@@ -136,8 +136,11 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string
 		// Silence reads as "nothing calls this", but the index skips
 		// ambiguous calls. Only functions and methods get CALLS edges in,
 		// so other kinds stay silent. The text is fixed and needs no sanitizing.
+		// Each line names one group of skip rules, so a reader can match
+		// a real call site against them.
 		fmt.Fprintf(w, "\ncallers (0)  — none resolved\n")
 		fmt.Fprintf(w, "  a call by a method name that several methods share, or through a function value, gets no edge\n")
+		fmt.Fprintf(w, "  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares nor imports its package\n")
 	}
 
 	if len(callees) > 0 {
