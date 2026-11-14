@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
@@ -434,7 +435,11 @@ func Run(opts Options) (*Summary, error) {
 // extractors or the FileResult layout change in a way that makes old
 // cached blobs wrong (a decode failure already forces a reparse; this
 // skips loading a large stale cache in the first place).
-const parseCacheVersion = "1"
+//
+// Version "2": the Go extractor records the operand root of a call. gob
+// decodes an old blob with an empty root, so an old cache would skip the
+// rule that drops calls on values of packages outside the repository.
+const parseCacheVersion = "2"
 
 // loadParseCache returns the stored per-file parse cache, or an empty map
 // when forced, version-stale, or unreadable — every one of which just
@@ -1769,7 +1774,7 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 }
 
 // writeCallEdges resolves the call references of one declaration, in
-// descending confidence order (RFC §3: every edge declares its derivation):
+// descending confidence order. Every edge declares its derivation:
 //
 //  1. bare identifier    → named import target module,     (qualified)
 //     that is a named      else function in the same       (same-package)
@@ -1783,10 +1788,15 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 //  4. any other          → the single same-family repo     (unique-name)
 //     selector call        symbol with that method name
 //
-// Known limitation, accepted for M1: resolution is purely syntactic, so a
-// local variable shadowing an import alias (or sharing a method name) can
-// produce a wrong edge. The origin column declares the derivation exactly
-// so consumers can weigh it; proper scope tracking is future work.
+// In Go, tier 4 skips two kinds of call. A call whose operand chain starts
+// at an import outside the repository gets no edge, because such a value
+// has no repository method. An unexported method of another directory
+// gets no edge, because Go allows no such call.
+//
+// Known limitation: resolution is purely syntactic, so a local variable
+// shadowing an import alias (or sharing a method name) can produce a wrong
+// edge. The origin column declares the derivation exactly so consumers can
+// weigh it; proper scope tracking is future work.
 func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.SymbolDecl) error {
 	fam := parse.LanguageFamily(res.Language)
 
@@ -1882,6 +1892,10 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 			} else {
 				dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 			}
+		case g.externalRoot(imports, call.Root):
+			// The operand chain starts at a package outside the repository,
+			// as strings.NewReplacer(…).Replace(s) does. Its value has no
+			// repository method, so the call gets no edge.
 		default:
 			// Complex operand (x.db.Close()): only the guess tier applies.
 			dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
@@ -2071,7 +2085,8 @@ var commonGoMethodNames = map[string]bool{
 // another directory. Go compiles a _test.go file only into the test binary
 // of its own directory, so such a method can never be the target. The rule
 // is Go only: Python and ECMA test files can import helpers from any
-// directory.
+// directory. A Go caller also never resolves into an unexported method of
+// another directory, because Go allows no such call.
 //
 // A Go call with a name from commonGoMethodNames keeps its sole candidate
 // only with package evidence. The calling file is in the candidate's
@@ -2115,7 +2130,28 @@ func (g *graph) uniqueMethod(fam, name, callerFile string, imported map[string]b
 		return nil, ""
 	}
 
+	// Go allows no call to an unexported method of another package. The
+	// check runs after the count, so a call that two methods share stays
+	// without an edge.
+	if fam == "go" && !token.IsExported(name) && path.Dir(callerFile) != path.Dir(c.File) {
+		return nil, ""
+	}
+
 	return c, model.OriginUniqueName
+}
+
+// externalRoot reports whether an operand root names an import whose
+// package declares nothing in the graph, that is, a package outside the
+// repository. An empty root never matches, because blank and dot imports
+// have no local name in imports. Only the Go extractor sets a root.
+func (g *graph) externalRoot(imports map[string]string, root string) bool {
+	if root == "" {
+		return false
+	}
+
+	key, ok := imports[root]
+
+	return ok && len(g.decls[key]) == 0
 }
 
 // goPackageEvidence reports whether Go code in callerFile has a reason to

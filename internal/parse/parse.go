@@ -51,6 +51,13 @@ type CallRef struct {
 	// `this`. Set by the extractor from the declaration, never inferred
 	// from spelling: a local variable named "self" must not qualify.
 	Receiver bool
+	// Root is the identifier at the start of a selector operand that is not
+	// a plain identifier: "strings" in strings.NewReplacer(…).Replace(s),
+	// "w" in w.db.Close(). The walk goes down through call functions and
+	// selector operands only, and any other node gives "". The resolver
+	// uses it to see a value that comes from a package outside the
+	// repository. Only the Go extractor sets it.
+	Root string
 }
 
 // SymbolDecl is a declared symbol plus the call references inside its body.

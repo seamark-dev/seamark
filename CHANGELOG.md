@@ -335,12 +335,15 @@ model-boundary delivery.
   `[unique-name]` edge. `status` shares and the effects of test symbols
   change at the next index run that rebuilds; `seamark index --force`
   applies the change at once.
-- **Fewer false call edges.** A Go method call with a common
-  standard-library name (`Err`, `Replace`, `Close`, `Lock`, …) no longer
-  guesses a `[unique-name]` edge when the calling file neither shares
-  the method's directory nor imports its package. Before, a text helper
-  that called `strings.NewReplacer(…).Replace` got `fs:write` from an
-  unrelated `Replace` method. Effects, `check` effect lists and the
+- **Fewer false call edges.** A Go method call no longer guesses a
+  `[unique-name]` edge in three cases: its name is a common
+  standard-library name (`Err`, `Replace`, `Close`, `Lock`, …) and the
+  calling file neither shares the method's directory nor imports its
+  package; its operand starts at a package outside the repository
+  (`strings.NewReplacer(…).Replace`); or it calls an unexported method
+  of another directory. Before, a text helper that called
+  `strings.NewReplacer(…).Replace` got `fs:write` from an unrelated
+  `Replace` method. Effects, `check` effect lists and the
   policy matches on them, `why` callers and `status` shares shrink, and
   `why` names the skipped cases under `callers (0)  — none resolved`.
   The change applies at the next index run that rebuilds, because each

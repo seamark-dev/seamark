@@ -2494,6 +2494,188 @@ func TestCommonMethodNameNeedsNoEvidenceOutsideGo(t *testing.T) {
 		"an ECMA method named Flush keeps its guess")
 }
 
+// TestGoGuessSkipsChainsFromExternalImports proves that a Go call whose
+// operand chain starts at a package outside the repository gets no
+// name-match edge. Such a value has no repository method, so the guess
+// would give the caller false effects.
+func TestGoGuessSkipsChainsFromExternalImports(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"pin/pin.go": `package pin
+
+import "os"
+
+type writer struct{}
+
+func (writer) Replace(s string) { _ = os.WriteFile(s, nil, 0o600) }
+
+func Open() writer { return writer{} }
+
+type Doc struct{}
+
+func (Doc) Render() {}
+`,
+		"parser/parser.go": `package parser
+
+type Parser struct{}
+
+func (Parser) Parse(s string) {}
+`,
+		// The file imports pin, so the package evidence rule cannot be the
+		// reason for a missing edge.
+		"ui/ui.go": `package ui
+
+import (
+	"strings"
+
+	"example.com/m/pin"
+)
+
+var _ = pin.Open
+
+func OneLine(s string) string { return strings.NewReplacer("\n", " ").Replace(s) }
+`,
+		"tpl/t.go": `package tpl
+
+import (
+	"text/template"
+
+	"example.com/m/parser"
+)
+
+var _ parser.Parser
+
+func Load(s string) { _, _ = template.New("x").Parse(s) }
+`,
+		"cli/c.go": `package cli
+
+import "example.com/m/pin"
+
+func Save() { pin.Open().Replace("x") }
+`,
+		"ta/ta.go": `package ta
+
+import (
+	"context"
+
+	"example.com/m/pin"
+)
+
+func Show(k any) { context.Background().Value(k).(pin.Doc).Render() }
+`,
+		"paren/p.go": `package paren
+
+import (
+	_ "strings"
+
+	"example.com/m/pin"
+)
+
+func Show() { (&pin.Doc{}).Render() }
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Empty(t, calleeFQNs(t, st, "ui.OneLine"), "a strings.Replacer value has no repository method")
+	assert.Empty(t, effectTags(t, st, "ui.OneLine"), "no false effect flows into the text helper")
+	assert.Empty(t, calleeFQNs(t, st, "tpl.Load"), "a text/template value has no repository method")
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "cli.Save")["pin.writer.Replace"],
+		"a chain from a repository package keeps its guess")
+	assert.Equal(t, []string{"fs:write"}, effectTags(t, st, "cli.Save"))
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "ta.Show")["pin.Doc.Render"],
+		"a type assertion ends the walk, so the guess stays")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "paren.Show")["pin.Doc.Render"],
+		"a parenthesized operand has no root, and a blank import has no name")
+}
+
+// TestGoUnexportedMethodStaysInItsDirectory proves that a Go call to an
+// unexported method resolves only into the caller's directory. Go allows
+// no call to an unexported method of another package.
+func TestGoUnexportedMethodStaysInItsDirectory(t *testing.T) {
+	files := map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"b/b.go": `package b
+
+type analysis struct{}
+
+func (analysis) change() {}
+`,
+		"a/a.go": `package a
+
+func A(x interface{ change() }) { x.change() }
+`,
+		"b/b2.go": `package b
+
+func B(y analysis) { y.change() }
+`,
+	}
+
+	t.Run("sole candidate", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, files)
+
+		_, st := runIndex(t, root)
+
+		assert.Empty(t, calleeFQNs(t, st, "a.A"), "an unexported method of another directory is never the target")
+		assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "b.B")["b.analysis.change"],
+			"the caller's own directory keeps the guess")
+	})
+
+	t.Run("two candidates", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, files)
+		writeTree(t, root, map[string]string{
+			"c/c.go": `package c
+
+type own struct{}
+
+func (own) change() {}
+
+func C(z own) { z.change() }
+`,
+		})
+
+		_, st := runIndex(t, root)
+
+		assert.Empty(t, calleeFQNs(t, st, "c.C"), "two change methods give no edge, as before")
+		assert.Empty(t, calleeFQNs(t, st, "b.B"), "two change methods give no edge, as before")
+	})
+}
+
+// TestUnexportedMethodRuleIsGoOnly proves that the unexported-method rule
+// stays Go only. A lowercase method name is the normal case in Python and
+// ECMA code, and another directory can call it there.
+func TestUnexportedMethodRuleIsGoOnly(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"api/svc.py": `class Service:
+    def ping(self):
+        return 1
+`,
+		"cli/run.py": `def run(svc):
+    svc.ping()
+`,
+		"web/store.ts": `export class Store {
+	save(): number { return 1; }
+}
+`,
+		"app/load.ts": `export function load(s: any) {
+	s.save();
+}
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "cli/run.run")["api/svc.Service.ping"],
+		"a lowercase Python method of another directory keeps its guess")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "app/load.load")["web/store.Store.save"],
+		"a lowercase ECMA method of another directory keeps its guess")
+}
+
 // partnerFiles lists the co-change partners of file in the database at
 // dbPath, keyed by path, at any lift.
 func partnerFiles(t *testing.T, dbPath, file string) map[string]store.CoChangePartner {

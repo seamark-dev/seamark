@@ -174,7 +174,58 @@ func (w *W) Run() {
 	// The operand w.db is a selector, not an identifier: the call must be
 	// marked Selector with no qualifier, so the resolver never treats it
 	// as a bare same-package function reference.
-	assert.Equal(t, CallRef{Name: "Close", Line: 6, Selector: true}, run.Calls[0])
+	// Root keeps the start of the operand chain for the resolver, and the
+	// qualifier stays empty.
+	assert.Equal(t, CallRef{Name: "Close", Line: 6, Selector: true, Root: "w"}, run.Calls[0])
+}
+
+// TestGoSelectorOperandRoot proves which operand shapes give a root. The
+// walk follows call functions and selector operands only. Every other node
+// ends it with "", because its value can have any type.
+func TestGoSelectorOperandRoot(t *testing.T) {
+	src := `package p
+
+func F() {
+	strings.NewReplacer("a", "b").Replace("s")
+	os.Stdout.Close()
+	w.db.Flush()
+	mcp.New(1).Serve()
+	x.(T).Assert()
+	xs[0].Index()
+	pkg.G[int]().Inst()
+	pkg.H[map[string]int]().TypeArgs()
+	(&T{}).Paren()
+	T{}.Lit()
+	func() T { return T{} }().FuncLit()
+	plain.Ident()
+}
+`
+	ex, err := NewGoExtractor()
+	require.NoError(t, err)
+	defer ex.Close()
+
+	res, err := ex.Extract("p.go", []byte(src))
+	require.NoError(t, err)
+
+	type got struct{ qualifier, root string }
+
+	roots := map[string]got{}
+	for _, c := range symbolByFQN(t, res, "F").Calls {
+		roots[c.Name] = got{c.Qualifier, c.Root}
+	}
+
+	assert.Equal(t, got{"", "strings"}, roots["Replace"], "a chain from a package call")
+	assert.Equal(t, got{"", "os"}, roots["Close"], "a chain from a package variable")
+	assert.Equal(t, got{"", "w"}, roots["Flush"], "a chain from a local value")
+	assert.Equal(t, got{"", "mcp"}, roots["Serve"], "a chain from a constructor call")
+	assert.Equal(t, got{"", ""}, roots["Assert"], "a type assertion ends the walk")
+	assert.Equal(t, got{"", ""}, roots["Index"], "an index ends the walk")
+	assert.Equal(t, got{"", ""}, roots["Inst"], "an index or an instantiation ends the walk")
+	assert.Equal(t, got{"", ""}, roots["TypeArgs"], "a type argument list ends the walk")
+	assert.Equal(t, got{"", ""}, roots["Paren"], "a parenthesized operand ends the walk")
+	assert.Equal(t, got{"", ""}, roots["Lit"], "a composite literal ends the walk")
+	assert.Equal(t, got{"", ""}, roots["FuncLit"], "a function literal ends the walk")
+	assert.Equal(t, got{"plain", ""}, roots["Ident"], "a plain identifier is the qualifier, not a root")
 }
 
 func TestImportLocalNamePrediction(t *testing.T) {

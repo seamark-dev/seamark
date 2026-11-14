@@ -231,9 +231,13 @@ func (g *GoExtractor) callsIn(decl *tree_sitter.Node, src []byte, selfName strin
 					Line:     uint32(node.StartPosition().Row) + 1,
 					Selector: true,
 				}
-				if op := node.ChildByFieldName("operand"); op != nil && op.Kind() == "identifier" {
-					ref.Qualifier = op.Utf8Text(src)
-					ref.Receiver = selfName != "" && ref.Qualifier == selfName
+				if op := node.ChildByFieldName("operand"); op != nil {
+					if op.Kind() == "identifier" {
+						ref.Qualifier = op.Utf8Text(src)
+						ref.Receiver = selfName != "" && ref.Qualifier == selfName
+					} else {
+						ref.Root = goOperandRoot(op, src)
+					}
 				}
 				out = append(out, ref)
 			}
@@ -241,6 +245,35 @@ func (g *GoExtractor) callsIn(decl *tree_sitter.Node, src []byte, selfName strin
 	}
 
 	return out
+}
+
+// goOperandRoot returns the identifier at the start of a selector operand:
+// "strings" in strings.NewReplacer(…), "os" in os.Stdout. It follows call
+// functions and selector operands only. Any other node, such as a type
+// assertion, an index, a type instantiation, or a parenthesized operand,
+// gives "". The value of such a node can have any type, so its start
+// says nothing about the package of the method.
+func goOperandRoot(n *tree_sitter.Node, src []byte) string {
+	for n != nil {
+		switch n.Kind() {
+		case "identifier":
+			return n.Utf8Text(src)
+		case "call_expression":
+			// pkg.F[T]() instantiates a generic function, so its result
+			// type depends on T and not only on pkg.
+			if n.ChildByFieldName("type_arguments") != nil {
+				return ""
+			}
+
+			n = n.ChildByFieldName("function")
+		case "selector_expression":
+			n = n.ChildByFieldName("operand")
+		default:
+			return ""
+		}
+	}
+
+	return ""
 }
 
 // goReceiverName extracts the receiver's identifier: "s" in (s *Store).
