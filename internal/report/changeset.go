@@ -195,13 +195,19 @@ func exposureLines(w io.Writer, st *store.Store, file string) error {
 		return err
 	}
 
-	// Always state what the file defines: when the caller/effect lines
-	// below are absent (type-only files have references, not call
-	// edges), silence must read as "indexed, nothing to report" — an
-	// agent that suspects missing data burns probe calls re-asking.
-	if len(syms) > 0 {
-		fmt.Fprintf(w, "  defines                %d symbols\n", len(syms))
+	// Always state what the file defines. When the caller and effect
+	// lines below are absent, a type-only file has references, not call
+	// edges, so silence reads as "indexed, nothing to report". A file
+	// with no indexed symbol has no such evidence at all. Missing
+	// evidence is not "nothing to report", so the line says that the
+	// reach is unknown. The text is fixed, so it needs no scrub.
+	if len(syms) == 0 {
+		fmt.Fprintf(w, "  defines                no indexed symbols — its callers and effect reach are unknown, not none\n")
+
+		return nil
 	}
+
+	fmt.Fprintf(w, "  defines                %d symbols\n", len(syms))
 
 	type exposed struct {
 		fqn string

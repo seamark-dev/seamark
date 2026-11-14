@@ -82,6 +82,9 @@ model-boundary delivery.
 - **why lesson pointer.** `why` names `expand lessons:<dir>` only when
   that view has lessons, and its header names pins apart from mined
   review feedback.
+- **change_set for a file without symbols.** The file's entry now says
+  that seamark indexes no symbols there, so its callers and effect reach
+  are unknown.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if
