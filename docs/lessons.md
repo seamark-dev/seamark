@@ -871,6 +871,57 @@ checks separately with `seamark init --client claude --lesson-checks check`
 or the selected client's `enforce` mode. The advisory edit hook remains
 fail-open and never becomes a guard.
 
+### The lesson-check hooks
+
+`seamark init --lesson-checks check` installs two handlers beside the
+advisory edit hook: a baseline handler before each covered edit and a
+post-edit handler after it. `--lesson-checks enforce` installs the guard
+in place of the baseline handler. For Claude Code the handlers run on
+`Edit`, `Write`, and `MultiEdit`, and the post-edit handler also runs on
+`PostToolUseFailure`. For Codex they run on `apply_patch` with
+`--client codex`. Each handler reads one native event from stdin, makes
+no agent call, and uses no network.
+
+| Command | When it runs | What it does | Exit status |
+| --- | --- | --- | --- |
+| `seamark lessons --baseline --hook` | before an edit, in `check` mode | stores the state of the edited paths before the edit in `.seamark/checks/pending/`; it never denies the edit | always 0 |
+| `seamark lessons --guard --hook` | before an edit, in `enforce` mode | checks the proposed edit against the enforce pins, and stores the baseline when it allows the edit | 0 allows; 2 denies on a violation, on an edit that the check cannot evaluate, or on an invalid `lessons.yaml` |
+| `seamark lessons --verify --hook` | after an edit | reads the baseline of the same tool call, checks the result on disk against every `check` and `enforce` pin in scope, reports the findings to the agent, and deletes the baseline; it never undoes the edit | always 0 |
+
+A valid configuration without an enforce pin never makes the guard deny.
+A tool outside the covered list passes the guard, and its record names
+the cause. `--guard` and `--baseline` need `--hook` and combine with no
+other `lessons` mode. `--verify --hook` takes no `--file` and no
+`--json`, because it reads its paths from the event. Setup gives the
+baseline handler and the guard a 10 s hook timeout, and the post-edit
+handler 15 s.
+
+A deny prints the reason on stderr, as the gate does. This is a guard run
+on a Claude Code `Write` event that adds a forbidden marker:
+
+```text
+$ seamark lessons --guard --hook < write-event.json
+seamark: blocked by policy: lesson check no-debug (no-added-pattern/1) of pin e16bd32b164e "keep-debug-markers-out": Write adds a line matching the pattern at api/a.go:3: // DEBUG_ONLY
+$ echo $?
+2
+```
+
+The post-edit handler gives its findings to the agent as
+`additionalContext` in the hook reply on stdout. For the same edit, after
+the write, the text reads:
+
+```text
+seamark post-edit lesson checks after this Write call: violation (1 evaluated pin: 1 violation, 0 unknown; snapshot eab4d48e46b5)
+- violation: pin e16bd32b164e, check no-debug (no-added-pattern/1): api/a.go:3 adds a line that matches the pattern
+The files stay as written; repair the violation in a later edit. Check again: seamark lessons --verify --file <root>/api/a.go
+```
+
+Each run appends one record to `.seamark/lesson-check-audit.jsonl`: a
+`baseline`, `guard`, or `post-edit` record. The next handler run removes
+a pending baseline that is older than one hour, and writes a
+`baseline-discarded` record for it. The records hold digests of the session and
+tool-call IDs, never the raw IDs.
+
 The guard requests denial. A reviewed recording of Claude Code 2.1.319
 verifies native denial of `Write` and `Edit` in the root and child
 contexts, with one limit: the client lets the write run after its 10 s
