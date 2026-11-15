@@ -92,6 +92,8 @@ model-boundary delivery.
   as in `defines (40; showing 20)`, and names an `expand` ref for the
   source of the first symbol it leaves out. A file with no indexed
   symbol says so.
+- **Signature redaction in why.** `why <symbol>` now redacts
+  secret-shaped text in its `sig` line, as the file outline does.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if

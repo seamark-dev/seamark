@@ -433,3 +433,30 @@ func TestWhyFileOutlineScrubsNamesAndPaths(t *testing.T) {
 	assert.Contains(t, section, "pkg.f]0;x")
 	assert.Contains(t, section, "pkg/]0;x.go:1-1")
 }
+
+func TestWhySymbolSigIsRedacted(t *testing.T) {
+	file := "pkg/s.go"
+	long := "var longValue = " + strings.Repeat("x", 300)
+
+	st, root := seedOutline(t, []model.Symbol{
+		{FQN: "pkg.apiToken", Name: "apiToken", Kind: model.KindVar, File: file,
+			Span: model.Span{StartLine: 1, EndLine: 1, EndCol: 1}, Sig: `apiToken = "hunter2"`},
+		{FQN: "pkg.longValue", Name: "longValue", Kind: model.KindVar, File: file,
+			Span: model.Span{StartLine: 2, EndLine: 2, EndCol: 1}, Sig: long},
+		{FQN: "pkg.multiLine", Name: "multiLine", Kind: model.KindFunction, File: file,
+			Span: model.Span{StartLine: 3, EndLine: 6, EndCol: 1}, Sig: "func multiLine(\n\ta int,\n\tb int,\n)"},
+	}, nil)
+
+	out := whyFile(t, st, root, "pkg.apiToken")
+	assert.Contains(t, out, "  sig      apiToken = [REDACTED]\n")
+	assert.NotContains(t, out, "hunter2")
+
+	// Sanitize keeps tabs, so only the whitespace fold puts a signature
+	// that spans lines on one line with single spaces.
+	out = whyFile(t, st, root, "pkg.multiLine")
+	assert.Contains(t, out, "  sig      func multiLine( a int, b int, )\n")
+
+	// The symbol report is the full view, so it does not cut the signature.
+	out = whyFile(t, st, root, "pkg.longValue")
+	assert.Contains(t, out, "  sig      "+long+"\n")
+}

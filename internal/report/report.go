@@ -104,9 +104,10 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string
 	fmt.Fprintf(w, "  defined  %s\n", location(sym))
 
 	if sym.Sig != "" {
-		// Signatures come from source text; a raw string literal in a var
-		// initializer can carry control bytes, so they get the same wash.
-		fmt.Fprintf(w, "  sig      %s\n", render.Sanitize(sym.Sig))
+		// Signatures come from source text. A var initializer can carry
+		// control bytes or a secret, so the line gets the scrub of the file
+		// outline. It is not cut, because this report is the full view.
+		fmt.Fprintf(w, "  sig      %s\n", scrubSource(sym.Sig))
 	}
 
 	effects, err := st.EffectsForSymbol(sym.ID)
