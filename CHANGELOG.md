@@ -98,6 +98,9 @@ model-boundary delivery.
   at most 30 per outline. It names `why <symbol>` for the rest. A
   function without an indexed caller says `none indexed`: the index has
   no edge, which does not prove that nothing calls it.
+- **change_set caller unit.** The `called from outside` line now ends
+  with `— callers in other non-test files`, the count that `why <file>`
+  also shows.
 - **Signature redaction in why.** `why <symbol>` now redacts
   secret-shaped text in its `sig` line, as the file outline does.
 - **Expand by symbol.** `expand <symbol>` no longer shows the line after

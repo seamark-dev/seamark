@@ -1820,7 +1820,7 @@ func TestChangeSetCountsOnlyCallersInOtherNonTestFiles(t *testing.T) {
 
 	t.Run("same-file, test and package callers do not count", func(t *testing.T) {
 		out := changeSet("store/store.go")
-		assert.Contains(t, out, "\n  called from outside    store.Save (1)\n")
+		assert.Contains(t, out, "\n  called from outside    store.Save (1) — callers in other non-test files\n")
 		assert.NotContains(t, out, "Snapshot.Err")
 		assert.NotContains(t, out, "roundCents")
 	})
@@ -1834,14 +1834,14 @@ func TestChangeSetCountsOnlyCallersInOtherNonTestFiles(t *testing.T) {
 	t.Run("rank and cut use the outside count", func(t *testing.T) {
 		out := changeSet("rank/rank.go")
 		assert.Contains(t, out,
-			"\n  called from outside    rank.A (5) · rank.B (4) · rank.C (2) · rank.D (2)\n")
+			"\n  called from outside    rank.A (5) · rank.B (4) · rank.C (2) · rank.D (2) — callers in other non-test files\n")
 	})
 
 	// n counts callers, not caller files. A file with two callers can feel
 	// the edit in two places.
 	t.Run("two callers in one file count as two", func(t *testing.T) {
 		out := changeSet("pair/pair.go")
-		assert.Contains(t, out, "\n  called from outside    pair.Save (2)\n")
+		assert.Contains(t, out, "\n  called from outside    pair.Save (2) — callers in other non-test files\n")
 	})
 }
 

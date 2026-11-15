@@ -214,16 +214,18 @@ func exposureLines(w io.Writer, st *store.Store, file string) error {
 		n   int
 	}
 
+	// One query counts the callers of every symbol in the file. why
+	// <file> reads the same counts, so both reports use one rule.
+	stats, err := st.CallerStats(file)
+	if err != nil {
+		return err
+	}
+
 	var ranked []exposed
 	tagSet := map[string]bool{}
 
 	for i := range syms {
-		n, err := outsideCallers(st, syms[i].ID, file)
-		if err != nil {
-			return err
-		}
-
-		if n > 0 {
+		if n := stats[syms[i].ID].OtherFiles; n > 0 {
 			ranked = append(ranked, exposed{syms[i].FQN, n})
 		}
 
@@ -255,7 +257,9 @@ func exposureLines(w io.Writer, st *store.Store, file string) error {
 			parts = append(parts, fmt.Sprintf("%s (%d)", e.fqn, e.n))
 		}
 
-		fmt.Fprintf(w, "  called from outside    %s\n", strings.Join(parts, " · "))
+		// The suffix names the count unit, so a reader does not take n
+		// for all callers or for caller files.
+		fmt.Fprintf(w, "  called from outside    %s — callers in other non-test files\n", strings.Join(parts, " · "))
 	}
 
 	if len(tagSet) > 0 {
@@ -269,24 +273,4 @@ func exposureLines(w io.Writer, st *store.Store, file string) error {
 	}
 
 	return nil
-}
-
-// outsideCallers counts the CALLS callers of the symbol id that are in
-// another file and are not test code. exposureLines says why. The LSP
-// code lens keeps the full count of store.CallerCounts.
-func outsideCallers(st *store.Store, id int64, file string) (int, error) {
-	callers, err := st.Callers(id)
-	if err != nil {
-		return 0, err
-	}
-
-	n := 0
-
-	for _, c := range callers {
-		if c.File != "" && c.File != file && !model.IsTestPath(c.File) {
-			n++
-		}
-	}
-
-	return n, nil
 }

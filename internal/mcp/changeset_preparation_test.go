@@ -127,7 +127,7 @@ func changeSetPrepFixture(t *testing.T) string {
 const prepIndexedText = `store.go
   usually changes with  load.go                                         3/5 commits, lift 1.7
   defines                1 symbols
-  called from outside    save (1)
+  called from outside    save (1) — callers in other non-test files
   effects reachable      fs:write
 
 history suggests also reviewing
@@ -259,7 +259,7 @@ lessons for this change  (regions map to the files above; avoid repeating these)
 			"docs/new.md: not in the index (new file, or run `seamark index`)\n\n" + `store.go
   usually changes with  load.go                                         3/5 commits, lift 1.7
   defines                1 symbols
-  called from outside    save (1)
+  called from outside    save (1) — callers in other non-test files
   effects reachable      fs:write
 
 history suggests also reviewing
