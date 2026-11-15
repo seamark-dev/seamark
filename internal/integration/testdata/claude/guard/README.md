@@ -16,8 +16,10 @@ same client version.
 
 `make native-record CLIENT=claude NATIVE_RECORD_SCENARIO=guard` ran
 `scripts/native-record.sh` and the sanitizer
-`scripts/native-record-sanitize.py` at commit `0cebfa8` of the release
-branch, with the Seamark binary of that commit (`v0.8.0-143-g0cebfa8`).
+`scripts/native-record-sanitize.py` at commit `b799ccb` of the release
+branch, with the Seamark binary of that commit. The binary reports
+`v0.8.0-143-g0cebfa8`, the commit's ID before the branch dates were
+rewritten; the tree is the same.
 The script made a new scratch Git repository with enforce pins on
 `sentinel/` and `notes/`, and ran each prompt with `claude -p` on the
 model `haiku` (`claude-haiku-5-5` in every result). It turned off the
