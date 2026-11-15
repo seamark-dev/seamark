@@ -435,6 +435,11 @@ model-boundary delivery.
   only the clients that a bare `seamark init --skills` installs for:
   Claude Code, and Codex only when the repository has an `.agents/`
   directory.
+- **Starter file headers.** The `policy.yaml` and `lessons.yaml` that
+  `init` writes, and the embedded default policy, no longer cite an
+  internal document. They point to `docs/policies.md` and
+  `docs/lessons.md`, and both policy headers name `unindexed_files`, a
+  count, in the `diff` input.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

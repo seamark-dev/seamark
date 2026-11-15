@@ -19,9 +19,10 @@ const (
 	policyModeLineEnforce = `mode: enforce   # deny/require_approval verdicts exit 2; "warn" only reports`
 )
 
-const starterPolicy = `# Seamark gate policy (RFC-001 §5.5). Evaluated before an agent runs a
-# command and over a diff's blast radius. Mode "warn" reports verdicts
-# without blocking; "enforce" makes deny/require_approval verdicts exit 2.
+const starterPolicy = `# Seamark gate policy. Evaluated before an agent runs a command and
+# over a diff's blast radius. Mode "warn" reports verdicts without
+# blocking; "enforce" makes deny/require_approval verdicts exit 2.
+# docs/policies.md in the Seamark repository describes the rules.
 #
 # Rules are CEL expressions over:
 #   effect   list of tags the command classifies to ("infra:mutate" …)
@@ -110,10 +111,12 @@ index:
 #   write: true
 `
 
-const starterLessons = `# Tune how mined review lessons surface (RFC-001 §5.4). Committed and
-# reviewed like policy.yaml — applied at surface time, so edits take
-# effect immediately without re-mining. An absent file means "defaults":
-# nothing muted, nothing pinned, threshold 2.
+const starterLessons = `# Tune how mined review lessons surface. Committed and reviewed like
+# policy.yaml — applied at surface time, so edits take effect
+# immediately without re-mining. An absent file means "defaults":
+# nothing muted, nothing pinned, threshold 2. In the Seamark repository,
+# docs/lessons.md describes the lesson keys and docs/configuration.md
+# describes the executable-check keys.
 #
 # Lessons come from ` + "`seamark index --reviews`" + ` (reviews + fix commits) or
 # ` + "`seamark index --fixes-only`" + ` (local fix commits only), and
