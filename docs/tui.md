@@ -111,7 +111,8 @@ The state of the workspace at a glance.
   with `enter`. A link only opens a view, and the Overview never suggests
   paid work that ran before or runs now.
 - **Index build** (`b`): a local parse plus git history mining that writes
-  the index database; `enter` or `y` confirms. It never fetches reviews or
+  the index database; `enter` or `y` confirms, and `f` rebuilds from
+  scratch. It never fetches reviews or
   runs a distillation, and it cannot be cancelled, so `q` offers to exit
   after it finishes. `b` refuses a database that records another
   repository and names the console of that root. A newer schema asks for
@@ -572,12 +573,13 @@ Exact rules: `internal/settings`.
 | Context | Keys |
 | --- | --- |
 | Global | `1`–`5` destinations, `r` refresh the view, `?` help, `q` quit |
+| Overview | `↑↓` attention items, `enter` open the selected item, `b` index build; in the build confirmation `enter` or `y` builds, `f` rebuilds from scratch, `esc` cancels; `s` opens the setup of Integrations while no agent is set up |
 | Lessons sub-views | `p` Proposals, `m` Pins, `s` Stats, `e` Evidence, `u` Run |
 | Proposals | `space` select pending rows, `x` clear the selection, `f` state (pending, applied, dismissed, superseded), `/` region, `a` apply, `d` dismiss, `c` record as applied, `o` open the PR, `t` trigger extraction; `?` lists every key, and `n/a` marks a key that the cursor row, the selection, or the filters cannot use; the footer lists only the keys that work |
 | Pins | `↑↓` pins, `tab` detail, `space` mark, `x` clear the marks, `f` list (installed, not present, superseded), `/` region, `z` text search, `v` compare with a similar pin, `w` retarget preview, `-` prune preview, `t` trigger extraction, `n` new pin, `i` edit, `d` remove (unlinked; `i` and `d` act on the cursor pin only); `?` always lists `n`, `i`, `d`, `-`, `w`, `t`, and `v`. While one of them reads `n/a`, the footer lists all seven from 60×20. A narrow footer then shows some keys by their letter alone, and at 60×20 the pane, list, and switch keys give way without a marker. When all seven work, a narrow footer cuts keys from the end and shows `…`, as other footers do. At 120 columns `t` and `v` then give way, and at 60×20 only `space select` stays. `n/a` marks a key that the targets cannot use (its press names the reason) |
 | Pins, lesson checks | `M` check definition, `V` verify default working-tree selection; shown when lesson-check UI is available |
 | Check definition | `enter` edit a row, `space` choose kind, `s` review; review `y` writes, `esc` back |
-| Verification | `V` verify again, scroll keys, `esc` close |
+| Verification | `V` verify again, `r` check freshness (reads the working tree and `lessons.yaml` again and runs no checker), scroll keys, `esc` close |
 | Pins region or search field | `enter` apply, `esc` keep the previous value |
 | Pins comparison | `tab` next similar pin, `↑↓` scroll, `esc`/`enter` close |
 | Retarget or prune preview | `↑↓` scroll, `y` confirm (every pin ready, `distill.write` on, and no other operation running), `o` open Settings › Pin writing (gate off), `esc` cancel |
@@ -601,7 +603,7 @@ Exact rules: `internal/settings`.
 | Extraction result | `↑↓` rows, `tab` pane, `enter` show the cursor proposal in Pins or Proposals, `n` prepare a new review of the open questions |
 | Run, earlier records | `[` earlier run, `]` later run; read-only: `↑↓` rows, `tab` pane, `enter` review the proposals of a distillation |
 | Stats | `tab` pane, `f` period, `↑↓` scroll, `o` open Settings › Lesson mutes (while mined lessons are hidden) |
-| Settings list | `↑↓` move, `enter` edit, `d` return to default, `s` review and save the group under the cursor, `x` discard the draft of that group, `tab` detail |
+| Settings list | `↑↓` move, `enter` edit, `d` return to default, `s` review and save the group under the cursor, `x` discard the draft of that group, `tab` detail, `o` open the Overview build while the index of another repository blocks the selected lessons group |
 | Settings editor | `↑↓` choose, `space` select, `enter`/`esc` done; list editor `a` add, `x` remove, `K`/`J` move |
 | Settings mute editor | `a` add, `enter` change, `x` remove, `s` review and save, `esc` done |
 | Mute record form | `tab` next field, `enter` keep, `esc` cancel |

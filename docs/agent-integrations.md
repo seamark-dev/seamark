@@ -101,6 +101,15 @@ gate handler in the Claude Code form is the exception when `seamark init
 --client codex` removes it, because another gate handler stays: doctor
 names that setup run instead.
 
+Seamark reads a Codex matcher as the source of codex-cli 0.164.0 does.
+An empty matcher and `*` select every tool. A matcher of only ASCII
+letters, digits, `_`, and `|` is a list of exact tool names. Any other
+matcher is a regular expression that selects a tool when it matches a
+part of the name. Each rule tests the tool name and its aliases, so
+`Edit` and `Write` also select `apply_patch`, and `Agent` selects
+`spawn_agent`. Seamark uses Go regular expressions, and Codex uses Rust
+ones, so a rare pattern can compile or match differently in the two.
+
 Codex runs every matching handler, so two handlers of the seamark gate
 or lessons hook in `.codex/hooks.json` that run for one tool run that
 hook twice. init and doctor warn and ask you to keep one of them. Setup

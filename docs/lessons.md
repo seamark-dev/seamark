@@ -573,6 +573,33 @@ file, without a diff. Their last line then names the refusal that the
 gate cannot lift, also for a link or a read-only file. They write only
 a result that still loads with every other pin intact.
 
+In a copied or moved checkout, the index still records the original
+root until an index run in the new checkout. `--apply`, `--retarget`,
+and `--prune` then refuse before they open the index. In a copy, the
+pin file lies under the recorded root and the ledger lies in this
+database, so one decision would change two repositories. After a move,
+the recorded root no longer exists, and a write would create it again.
+The refusal writes nothing, prints no change to make by hand, also
+with `distill.write` off, and exits 1. Run `seamark index` in the new
+checkout, then the command again.
+
+A copy:
+
+```text
+$ seamark lessons --apply p1
+seamark: the index of this checkout records another repository (<original>), so this command would change the pin file there and the ledger in this database; nothing changed; run `seamark index` in <copy> first
+```
+
+A move:
+
+```text
+$ seamark lessons --apply p1
+seamark: the index of this checkout records a directory that no longer exists (<original>), and a write would recreate it; nothing changed; run `seamark index` in <moved> first
+```
+
+A `--db` of another repository follows the rule that the
+[console guide](tui.md#versions-and-limits) gives for the same commands.
+
 ### Pins that a person writes
 
 You can write a pin by hand in `.seamark/lessons.yaml` or in the
@@ -804,6 +831,11 @@ seamark lessons --set-mode check --pin <pin-ref> --check <check-id>
 seamark lessons --set-mode enforce --pin <pin-ref> --check <check-id>
 seamark lessons --set-mode advisory --pin <pin-ref>
 ```
+
+In the console, Lessons › Pins edits the mode and the check of the
+cursor pin with `i`, opens a check definition with `M`, and runs the
+default verification with `V`
+([console guide](tui.md#check-definitions-and-verification)).
 
 A mode change validates the configuration and follows `distill.write`.
 With writing off it refuses the write and prints the change to make by
