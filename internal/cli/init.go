@@ -398,7 +398,7 @@ func applyInit(run initRun, reg *integration.Registry, setups []integration.Clie
 
 		printNoGateHook(w, run.root, gateMode)
 	} else {
-		printGateLine(w, run.root, gateMode, plan.GateHooks, plan.UncheckedGateSources, writesPolicy(plan))
+		printGateLine(w, run.root, gateMode, run.gateMode != "", plan.GateHooks, plan.UncheckedGateSources, writesPolicy(plan))
 
 		// The gate line describes the clients with a gate hook. A selected
 		// client without one must not look covered by it.
@@ -535,10 +535,14 @@ func printFindings(w io.Writer, findings []integration.Finding, showInfo bool) {
 // names that file and the command that checks it, because a hook there
 // can block or stop blocking without this run knowing.
 //
+// requested is true when the user typed --gate-mode. Without the flag,
+// the mode of the run comes from the installed hooks. A line that says
+// where the flag went would then name a flag that the user never gave.
+//
 // policyNew is true when this run writes .seamark/policy.yaml. The line
 // then calls the file new, not kept: the file carries the mode of this
 // run, not an earlier choice of the user.
-func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook, unchecked []string,
+func printGateLine(w io.Writer, root, gateMode string, requested bool, gateHooks []integration.GateHook, unchecked []string,
 	policyNew bool,
 ) {
 	policyMode, policyErr := policyFileMode(root, gateMode)
@@ -555,12 +559,30 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 	summary := integration.SummarizeGateHooks(gateHooks)
 
 	var (
-		managed        *integration.GateHook
+		managed        *integration.GateHook // the first managed hook that runs
 		managedEnforce bool
+		managedOff     bool     // a managed hook sits in a client whose hooks are off
+		offEnforce     bool     // a managed hook that is off carries --enforce
 		enforcing      []string // the unmanaged hooks that enforce
 	)
 
 	for i, hook := range gateHooks {
+		// A hook that the client does not run describes nothing that
+		// happens now. When another hook runs, the note below names each
+		// such hook by its path. When no other hook runs, the off line
+		// names no path, so an unmanaged hook that is off gets no line.
+		// Only a managed hook gets its mode, because setup knows what it
+		// does once the hooks run. The sentences about the run still must
+		// not deny that hook.
+		if hook.HooksOff {
+			if hook.Managed {
+				managedOff = true
+				offEnforce = offEnforce || hook.Mode == gateModeEnforce
+			}
+
+			continue
+		}
+
 		if hook.Managed && managed == nil {
 			managed = &gateHooks[i]
 		}
@@ -576,13 +598,35 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		}
 	}
 
-	// What the managed hook does beside an unmanaged enforcing one.
+	// What the managed hook does beside an unmanaged enforcing one. Setup
+	// can install a managed hook in a client whose hooks are off. That hook
+	// exists, so the line says that it does not run, not that it is absent.
 	beside, besideSentence := "; setup installed no gate hook of its own beside it", "Setup installed no gate hook of its own beside it"
-	if managed != nil {
+
+	switch {
+	case managed != nil:
 		beside, besideSentence = ", although the hook setup manages is in warn mode", "The hook setup manages is in warn mode"
+	case managedOff:
+		beside, besideSentence = "; the hook setup manages does not run while the hooks are off",
+			"The hook setup manages does not run while the hooks are off"
 	}
 
+	reach := enforceReach(requested, offEnforce)
+
 	switch effect := summary.Effect(); {
+	case effect == integration.GateEffectNone && len(summary.HooksOff) > 0:
+		// Every gate hook of the run sits in a client whose hooks are off.
+		// A mode line would claim verdicts that never come, so the line
+		// says what is true now and what each managed hook does later.
+		fmt.Fprintf(w, "  gate    off — no gate hook runs while the hooks are off (see the note above), so no shell command gets a verdict\n")
+
+		for _, line := range offManagedLines(gateHooks, false) {
+			fmt.Fprintf(w, "          %s\n", line)
+		}
+
+		if policyErr != nil {
+			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)
+		}
 	case effect == integration.GateEffectNone:
 		// A gated client whose gate hook never fires: an owned entry under
 		// another matcher, which setup does not rewrite. The coverage
@@ -663,12 +707,21 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		// filtered one that enforces. So the line limits its claim to the
 		// gate hooks that certainly run. The note below names the
 		// definition.
-		fmt.Fprintf(w, "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing;\n"+
-			"          --gate-mode enforce reached no gate hook of this run\n")
+		line := "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing"
+		if reach != "" {
+			line += ";\n          " + reach
+		}
+
+		fmt.Fprintln(w, line)
 	case gateMode == gateModeEnforce:
-		// The run asked for enforce and no hook of the run carries it. The
-		// notes below name each hook and why.
-		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook of this run\n")
+		// The mode of the run is enforce, and no gate hook that runs
+		// carries it. The notes below name each hook and why.
+		line := "  gate    warn — verdicts are reported, nothing blocks"
+		if reach != "" {
+			line += "; " + reach
+		}
+
+		fmt.Fprintln(w, line)
 	case len(summary.Possible) > 0:
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing"+
 			" (opt in: --gate-mode enforce)\n")
@@ -684,6 +737,21 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 			"          them out; `seamark doctor` checks that file\n", strings.Join(unchecked, ", "))
 	}
 
+	// The gate line above describes the hooks that run. A hook that the
+	// client does not run must not look covered by it. The paths are
+	// adapter constants, so they need no scrub.
+	if len(summary.HooksOff) > 0 && summary.Effect() > integration.GateEffectNone {
+		fmt.Fprintf(w, "  note    the gate hook in %s does not run while the hooks are off (see the note above);"+
+			" the gate line covers the other hooks\n", strings.Join(summary.HooksOff, ", "))
+
+		// The gate line leaves out the managed hook that is off, so the
+		// note states its mode. Another hook runs, so each line names the
+		// path of the hook that is off.
+		for _, line := range offManagedLines(gateHooks, true) {
+			fmt.Fprintf(w, "          %s\n", line)
+		}
+	}
+
 	// The unknown line above already names the possible definitions.
 	if len(summary.Possible) > 0 && summary.Effect() > integration.GateEffectUnknown {
 		fmt.Fprintf(w, "  note    %s holds a definition that may also run a gate hook; setup cannot tell what it does\n",
@@ -691,6 +759,66 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 	}
 
 	printGateModeNotes(w, gateMode, gateHooks)
+}
+
+// offManagedLines say what each managed gate hook that is off does once
+// its client runs the hooks again. One such hook gets one line without
+// its path, unless named is true. Several get one line each with the
+// path, because the modes of the clients can differ. One sentence would
+// give the mode of one hook to all of them. The note beside a gate line
+// sets named, because another hook runs there. "The gate hook setup
+// manages" could then read as a hook that runs. The result is empty when
+// no managed hook is off. The paths are adapter constants, so they need
+// no scrub.
+func offManagedLines(gateHooks []integration.GateHook, named bool) []string {
+	var off []integration.GateHook
+
+	for _, hook := range gateHooks {
+		if hook.HooksOff && hook.Managed {
+			off = append(off, hook)
+		}
+	}
+
+	if len(off) == 1 && !named {
+		return []string{"the gate hook setup manages " + offManagedEffect(off[0].Mode)}
+	}
+
+	lines := make([]string, 0, len(off))
+	for _, hook := range off {
+		lines = append(lines, "the managed gate hook in "+hook.Path+" "+offManagedEffect(hook.Mode))
+	}
+
+	return lines
+}
+
+// offManagedEffect says what a managed gate hook in this mode does once
+// its client runs the hooks again.
+func offManagedEffect(mode string) string {
+	switch mode {
+	case gateModeEnforce:
+		return "carries --enforce: its deny/require_approval verdicts block once the hooks run"
+	case integration.GateModeReportOnly:
+		return "stays report-only once the hooks run"
+	default:
+		return "follows .seamark/policy.yaml once the hooks run"
+	}
+}
+
+// enforceReach says where a typed --gate-mode enforce went, for a run
+// whose gate hooks that run carry no --enforce. It is empty when the
+// user typed no --gate-mode, because the line must not name a flag that
+// the user never gave. A managed hook that is off can carry the flag.
+// The sentence then limits its claim to the hooks that run, and a note
+// names the hook that is off.
+func enforceReach(requested, offEnforce bool) string {
+	switch {
+	case !requested:
+		return ""
+	case offEnforce:
+		return "--gate-mode enforce reached no gate hook that runs"
+	default:
+		return "--gate-mode enforce reached no gate hook of this run"
+	}
 }
 
 // possibleRoute names the route for the definitions that may run a gate
@@ -723,9 +851,9 @@ func printGateModeNotes(w io.Writer, gateMode string, gateHooks []integration.Ga
 
 	for _, hook := range gateHooks {
 		// The note above names a hook that may run; its mode is not known
-		// to apply.
+		// to apply. A hook that the client does not run has its own note.
 		switch {
-		case hook.Mode != gateModeWarn || hook.Uncertain:
+		case hook.Mode != gateModeWarn || hook.Uncertain || hook.HooksOff:
 		case hook.Managed:
 			fmt.Fprintf(w, "  note    %s runs its gate hook without --enforce: that hook follows .seamark/policy.yaml\n"+
 				"          instead; re-run with --gate-mode enforce to bake the flag into every selected client's gate hook\n",

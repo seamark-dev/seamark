@@ -15,6 +15,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -28,7 +29,7 @@ func Why(w io.Writer, st *store.Store, root, query string) error {
 	cfg := loadLessonConfig(w, root)
 
 	if file, ok := asIndexedFile(st, root, query); ok {
-		return fileReport(w, st, cfg, file)
+		return fileReport(w, st, cfg, root, file)
 	}
 
 	syms, err := st.FindSymbols(query, 5)
@@ -40,7 +41,7 @@ func Why(w io.Writer, st *store.Store, root, query string) error {
 		return fmt.Errorf("nothing in the index matches %q", query)
 	}
 
-	if err := symbolReport(w, st, cfg, syms[0]); err != nil {
+	if err := symbolReport(w, st, cfg, root, syms[0]); err != nil {
 		return err
 	}
 
@@ -98,7 +99,7 @@ func asIndexedFile(st *store.Store, root, query string) (string, bool) {
 	return candidates[0], false
 }
 
-func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, sym model.Symbol) error {
+func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string, sym model.Symbol) error {
 	fmt.Fprintf(w, "%s  (%s)\n", sym.FQN, sym.Kind)
 	fmt.Fprintf(w, "  defined  %s\n", location(sym))
 
@@ -135,8 +136,12 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, sym model.S
 		// Silence reads as "nothing calls this", but the index skips
 		// ambiguous calls. Only functions and methods get CALLS edges in,
 		// so other kinds stay silent. The text is fixed and needs no sanitizing.
+		// Each line names one group of skip rules, so a reader can match
+		// a real call site against them.
 		fmt.Fprintf(w, "\ncallers (0)  — none resolved\n")
 		fmt.Fprintf(w, "  a call by a method name that several methods share, or through a function value, gets no edge\n")
+		fmt.Fprintf(w, "  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares nor imports its package\n")
+		fmt.Fprintf(w, "  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
 	}
 
 	if len(callees) > 0 {
@@ -145,7 +150,7 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, sym model.S
 	}
 
 	if sym.File != "" {
-		if err := historySections(w, st, cfg, sym.File); err != nil {
+		if err := historySections(w, st, cfg, root, sym.File); err != nil {
 			return err
 		}
 	}
@@ -153,7 +158,7 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, sym model.S
 	return nil
 }
 
-func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, file string) error {
+func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, root, file string) error {
 	fmt.Fprintf(w, "%s\n", file)
 
 	syms, err := st.SymbolsInFile(file)
@@ -168,12 +173,13 @@ func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, file string) 
 		}
 	}
 
-	return historySections(w, st, cfg, file)
+	return historySections(w, st, cfg, root, file)
 }
 
 // historySections prints the co-change and decision layers for a file —
-// the part of the report no structural tool can produce.
-func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file string) error {
+// the part of the report no structural tool can produce. root builds the
+// command that lists the lessons the section leaves out.
+func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, file string) error {
 	partners, err := st.CoChangePartners(file, 1.0, 10)
 	if err != nil {
 		return err
@@ -237,19 +243,54 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, file str
 	// Recurring review feedback for this file/area (RFC-001 §5.4): the
 	// mistakes reviewers keep flagging here, so an agent avoids the
 	// fourth repeat. The config decides what surfaces (mute/pin/threshold).
-	lessons, err := LessonsForScope(st, cfg, file, 6)
+	// The section reads the full list and shows a prefix of it, so it can
+	// count the lessons that it leaves out.
+	lessons, _, pins, err := scopeLessons(st, cfg, file, 0, 0)
 	if err != nil {
 		return err
 	}
 
-	if len(lessons) > 0 {
-		fmt.Fprintf(w, "\nreviewers keep flagging  (recurring across pull requests)\n")
-		printLessons(w, lessons)
-		fmt.Fprintf(w, "  raw findings incl. one-offs: expand lessons:%s (MCP) or `seamark lessons --region %s`\n",
-			LessonScope(file), LessonScope(file))
+	shown := lessons[:min(len(lessons), whyLessonLimit)]
+	shownPins := min(pins, len(shown))
+
+	if len(shown) > 0 {
+		fmt.Fprintf(w, "\n%s\n", lessonHeader(shownPins, len(shown)-shownPins))
+		printLessons(w, shown)
+
+		// The command lists the full view of this file. Its path is
+		// absolute, so the command runs from any directory. The path is
+		// repository text, so it is sanitized.
+		if hidden := len(lessons) - len(shown); hidden > 0 {
+			fmt.Fprintf(w, "  +%d more: `%s` shows this file's full view\n", hidden, render.Sanitize(InspectCommand(root, file)))
+		}
+
+		// The pointer names a view, so it prints only when that view has a
+		// lesson. A pin is no ledger row, so a pins-only list can sit
+		// beside an empty view.
+		ledger, err := regionLedger(st, LessonScope(file))
+		if err != nil {
+			return err
+		}
+
+		if len(ledger) > 0 {
+			fmt.Fprintf(w, "  raw findings incl. one-offs: expand lessons:%s (MCP) or `seamark lessons --region %s`\n",
+				LessonScope(file), LessonScope(file))
+		}
 	}
 
 	return nil
+}
+
+// regionLedger is the ledger that the raw-findings pointer of why names:
+// the read of `expand lessons:` and `lessons --list --region`. An empty
+// region reads as the whole repository there, which is no area, so it
+// gives no lesson here.
+func regionLedger(st *store.Store, region string) ([]model.Lesson, error) {
+	if region == "" {
+		return nil, nil
+	}
+
+	return LedgerForRegion(st, region)
 }
 
 // MinFixDensityHistory is the least history a fix-density figure needs
@@ -294,6 +335,48 @@ func annotationSuffix(l model.Lesson) string {
 	return " (" + render.Sanitize(l.Annotation) + ")"
 }
 
+// lessonHeader is the header of a lesson list, from the pin and mined
+// counts of the listed lines. Pins come from .seamark/lessons.yaml, not
+// from review feedback, so a list that holds pins names them apart. why
+// and orient share it, so the two headers cannot drift.
+func lessonHeader(pins, mined int) string {
+	switch {
+	case pins > 0 && mined > 0:
+		return "pinned lessons, then what reviewers keep flagging  (pins from .seamark/lessons.yaml first)"
+	case pins > 0:
+		return "pinned lessons  (from .seamark/lessons.yaml)"
+	default:
+		return "reviewers keep flagging  (recurring feedback — avoid the repeat)"
+	}
+}
+
+// plural returns one when n is 1, and many otherwise.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+
+	return many
+}
+
+// whyLessonLimit is the number of lessons that why shows for a file. A
+// count line names the rest, so the cap hides no lesson silently.
+const whyLessonLimit = 6
+
+// InspectCommand is the command that shows every lesson of one path.
+// The path is absolute, because another process runs the command, maybe
+// from another directory. A relative root stays as it is when the
+// working directory is unknown. The lessoncheck rerun command quotes its
+// paths with the same function, so the two commands agree. why and the
+// change preparation both call it, so their commands have equal bytes.
+func InspectCommand(root, rel string) string {
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+
+	return "seamark lessons --file " + lessoncheck.QuoteArg(filepath.Join(root, filepath.FromSlash(rel)))
+}
+
 // LessonScope is the area a file's raw-lesson hint points at: its
 // directory, or the file itself at the repo root (root files stay
 // file-scoped everywhere in the lessons layer). Exported because the
@@ -322,9 +405,13 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 }
 
 // LessonsForScope returns the lessons to surface for a file, after the
-// config's mute/pin/threshold rules — the single path every surface
-// (why, orient, the edit hook) shares, so they never disagree. A limit
-// of 0 means no cap, so a deliberate view can list every lesson.
+// config's mute, pin, and threshold rules. `lessons --file` calls it. why
+// selects through scopeLessons with the same rules, because its header
+// also counts pins. The edit hook selects with LessonsForFilesBudget, and tests hold
+// the two equal for one file. orient applies the same config rules over
+// the whole repository through Config.Surface, without the covered-cluster
+// filter. A limit of 0 means no cap, so a deliberate view can list every
+// lesson.
 func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
 	out, _, err := LessonsForScopeBudget(st, cfg, file, limit, 0)
 
@@ -338,6 +425,17 @@ func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit in
 // point at them instead of hiding them. Mined lessons that the limit
 // cuts are not counted, because the pointer names pins only.
 func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) ([]model.Lesson, int, error) {
+	out, trimmed, _, err := scopeLessons(st, cfg, file, limit, pinBudget)
+
+	return out, trimmed, err
+}
+
+// scopeLessons is LessonsForScopeBudget that also returns the number of
+// pins in out. The pins come first in out. The count uses the rule of
+// surfacedMined, so a list header can name pins apart from mined lessons.
+func scopeLessons(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) (
+	out []model.Lesson, trimmed, pins int, err error,
+) {
 	// A pin budget above the surface's own cap selects pins that the cap
 	// then cuts. Clamp it, so the pin budget names the cap that applies.
 	// A limit of 0 is no cap, so it never clamps the pin budget.
@@ -349,12 +447,12 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 	// Surface applies the real threshold, mute, and pins.
 	mined, err := st.LessonsForFile(file, 1, 100)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	applied, err := st.Proposals(model.ProposalApplied)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	// Drop mined lessons an applied pin already captures — without
@@ -364,7 +462,7 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 	// --region) never filters.
 	covered, err := coveredClusters(st, cfg, applied)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	if len(covered) > 0 {
@@ -381,19 +479,21 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 
 	annotate, err := confidenceAnnotator(st, applied, pinBudget > 0)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
-	out, trimmed := cfg.SurfaceBudgetAnnotated(mined, file, pinBudget, annotate)
+	out, trimmed = cfg.SurfaceBudgetAnnotated(mined, file, pinBudget, annotate)
+	pins = len(out) - surfacedMined(cfg, mined)
+
 	if limit > 0 && len(out) > limit {
 		// The pins come first in out, so the pins above the limit are the
 		// pins that the cut removes. Count them, so no pin goes silently.
-		pins := len(out) - surfacedMined(cfg, mined)
 		trimmed += max(pins-limit, 0)
+		pins = min(pins, limit)
 		out = out[:limit]
 	}
 
-	return out, trimmed, nil
+	return out, trimmed, pins, nil
 }
 
 // surfacedMined counts the mined lessons that SurfaceBudgetAnnotated

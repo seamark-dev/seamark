@@ -71,7 +71,21 @@ model-boundary delivery.
   it and names the console. No command makes this edit.
 - **Claude Code hooks turned off.** With `disableAllHooks: true` in a
   project settings file, Claude setup refuses lesson-check enforce, and
-  setup, doctor, and status warn that the seamark hooks never run.
+  setup, doctor, and status warn that the seamark hooks never run. The
+  init and status gate lines no longer claim verdicts or blocking for a
+  client whose hooks are off, Claude Code or Codex, and init says what
+  the managed gate hook there does once the hooks run. Without a typed
+  `--gate-mode`, the init gate line no longer says that
+  `--gate-mode enforce` reached no gate hook.
+- **why and orient count hidden lessons.** Both keep 6 lessons, now say
+  how many more apply and where they are, and orient's header names pins
+  apart from mined review feedback.
+- **why lesson pointer.** `why` names `expand lessons:<dir>` only when
+  that view has lessons, and its header names pins apart from mined
+  review feedback.
+- **change_set for a file without symbols.** The file's entry now says
+  that seamark indexes no symbols there, so its callers and effect reach
+  are unknown.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if
@@ -322,6 +336,35 @@ model-boundary delivery.
   `[unique-name]` edge. `status` shares and the effects of test symbols
   change at the next index run that rebuilds; `seamark index --force`
   applies the change at once.
+- **Fewer false call edges.** A Go method call no longer guesses a
+  `[unique-name]` edge in three cases: its name is a common
+  standard-library name (`Err`, `Replace`, `Close`, `Lock`, …) and the
+  calling file neither shares the method's directory nor imports its
+  package; its operand starts at a package outside the repository
+  (`strings.NewReplacer(…).Replace`); or it calls an unexported method
+  of another directory. Before, a text helper that called
+  `strings.NewReplacer(…).Replace` got `fs:write` from an unrelated
+  `Replace` method. Effects, `check` effect lists and the
+  policy matches on them, `why` callers and `status` shares shrink, and
+  `why` names the skipped cases under `callers (0)  — none resolved`.
+  The change applies at the next index run that rebuilds, because each
+  rebuild resolves every call edge again: after a commit or an edit, a
+  plain `seamark index` is enough. On an unchanged workspace that run
+  skips and keeps the old edges, so run `seamark index --force` once;
+  you need not delete the index. Known limit: two of these rules also
+  drop real calls. The common-name rule drops one from a file that
+  neither shares the method's directory nor imports its package: an
+  interface call, or a call on a field, a promoted method, a local
+  variable, or a call result (`pair.Data.WriteString(…)`,
+  `mk.Writer().Replace(…)`). The outside-package rule drops a chain that
+  returns a repository value: a generic helper (`cmp.Or(p, q).Render()`,
+  `slices.Max(…)`, `sync.OnceValue(…)()`), a conversion to an outside
+  interface type (`io.Writer(w).Write(p)`), or an interface value that
+  the outside package holds or returns (`flag.Lookup(…).Value.Set(…)`,
+  `errors.Unwrap(err).Error()`). Go compiles no call that the
+  unexported-method rule drops. The callee's effects then do not reach
+  the caller. `why` names these rules only under `callers (0)`, so a
+  symbol that keeps other callers shows no sign of a dropped one.
 - **Pin outcome wording.** The lessons guide now says that a pin's first
   firing on any surface starts its outcome clock, also on
   `lessons --prepare`, `change_set`, or `check`, which name no receiver.

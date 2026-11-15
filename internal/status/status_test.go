@@ -513,14 +513,15 @@ func gatherFixture(t *testing.T, f inspecttest.Fixture) (s *Status, out string) 
 	return s, b.String()
 }
 
-// withoutInert returns a copy of the report with every Inert mark
-// cleared. The mark has no JSON form, so a round trip drops it, and the
-// rest of the report must survive.
+// withoutInert returns a copy of the report with every Inert and
+// HooksOff mark cleared. Neither mark has a JSON form, so a round trip
+// drops it, and the rest of the report must survive.
 func withoutInert(s *Status) *Status {
 	c := *s
 	c.Clients = slices.Clone(s.Clients)
 
 	for i := range c.Clients {
+		c.Clients[i].HooksOff = false
 		c.Clients[i].Capabilities = slices.Clone(c.Clients[i].Capabilities)
 
 		for j := range c.Clients[i].Capabilities {
@@ -822,6 +823,81 @@ func TestGatherReadsTheClaudeManagedGateModeByTheInspectionRule(t *testing.T) {
 			assert.Contains(t, b.String(), "gate           enforce (claude hook carries --enforce; blocking verdicts exit 2)")
 		})
 	}
+}
+
+func TestGatherCountsNoGateHookWhileTheClaudeHooksAreOff(t *testing.T) {
+	// disableAllHooks turns every project hook off, so the enforce hook
+	// runs for no command. The gate line must not claim blocking.
+	st, root := seededStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"disableAllHooks": true, "hooks":{"PreToolUse":[`+
+			`{"matcher":"Bash","hooks":[{"type":"command","command":"`+inspecttest.Binary+` gate --enforce --hook"}]}]}}`), 0o644))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "gate           policy mode warn; no gate hook runs for shell commands\n")
+	assert.NotContains(t, b.String(), "enforce (claude hook carries")
+}
+
+// TestPrintGateLeavesOutAClientWhoseHooksAreOff proves what status says
+// about a client whose hooks are off while another client's gate hook runs.
+// The gate line names only the hook that runs, and the clients list carries
+// the warning. The docs describe these lines, so they must not drift.
+func TestPrintGateLeavesOutAClientWhoseHooksAreOff(t *testing.T) {
+	st, root := seededStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"disableAllHooks": true, "hooks":{"PreToolUse":[`+
+			`{"matcher":"Bash","hooks":[{"type":"command","command":"`+inspecttest.Binary+` gate --enforce --hook"}]}]}}`), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"),
+		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
+			`{"type":"command","command":"`+inspecttest.Binary+` gate --hook --client codex"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.Named("current").Write(root))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	out := b.String()
+
+	var gateLine string
+
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(line, "gate ") {
+			gateLine = line
+		}
+	}
+
+	assert.Equal(t, "gate           hook installed (codex); policy mode warn governs", gateLine)
+	assert.NotContains(t, gateLine, "claude")
+	assert.NotContains(t, out, "no gate hook runs for shell commands")
+	assert.Contains(t, out, "disableAllHooks: true turns off the project hooks of Claude Code")
+}
+
+func TestGatherOffersInitWhileTheHooksAreOffAndNoGateHookIsInstalled(t *testing.T) {
+	// Both clients turn their hooks off, and neither has a gate hook. No
+	// hook is present to call inert, so the line keeps the setup route.
+	st, root := seededStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte(`{"disableAllHooks": true}`), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"), []byte("[features]\nhooks = false\n"), 0o644))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(),
+		"gate           policy mode warn; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n")
+	assert.NotContains(t, b.String(), "no gate hook runs for shell commands")
 }
 
 // TestOriginSummaryRoundsSharesToOneDecimal proves that the call-resolution

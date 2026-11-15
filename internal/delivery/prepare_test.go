@@ -480,8 +480,8 @@ pin:
 	assert.Empty(t, p.Lessons, "the pins fill the budget")
 
 	t.Run("a plain path stays unquoted", func(t *testing.T) {
-		assert.Equal(t, "seamark lessons --file /work/api/x.go", inspectCommand("/work", "api/x.go"))
-		assert.Equal(t, `seamark lessons --file '/work/it'\''s.go'`, inspectCommand("/work", "it's.go"))
+		assert.Equal(t, "seamark lessons --file /work/api/x.go", report.InspectCommand("/work", "api/x.go"))
+		assert.Equal(t, `seamark lessons --file '/work/it'\''s.go'`, report.InspectCommand("/work", "it's.go"))
 	})
 
 	t.Run("both text forms name the omissions and their commands", func(t *testing.T) {

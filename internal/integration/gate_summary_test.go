@@ -157,3 +157,44 @@ func TestSummarizeInspectionsListsAnInertGateApart(t *testing.T) {
 	g = SummarizeInspections([]Inspection{{ClientID: "claude", Capabilities: []CapabilityInspection{inert}}})
 	assert.Equal(t, GateEffectNone, g.Effect())
 }
+
+func TestSummarizeGateHooksLeavesAHookThatIsOffOut(t *testing.T) {
+	// A hook whose client turns the hooks off runs for no command, so it
+	// counts in no group and in neither possible count.
+	g := SummarizeGateHooks([]GateHook{
+		{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Managed: true, HooksOff: true},
+		{Path: ".claude/settings.local.json", Mode: hooks.ModeEnforce, Uncertain: true, HooksOff: true},
+	})
+
+	assert.Equal(t, GateSummary{HooksOff: []string{".claude/settings.json", ".claude/settings.local.json"}}, g)
+	assert.Equal(t, GateEffectNone, g.Effect())
+
+	// A running warn hook beside an enforce hook that is off decides the
+	// effect alone.
+	g = SummarizeGateHooks([]GateHook{
+		{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Managed: true, HooksOff: true},
+		{Path: ".codex/hooks.json", Mode: hooks.ModeWarn, Managed: true},
+	})
+
+	assert.Equal(t, GateSummary{Warn: []string{".codex/hooks.json"}, HooksOff: []string{".claude/settings.json"}}, g)
+	assert.Equal(t, GateEffectFollowsPolicy, g.Effect())
+}
+
+func TestSummarizeInspectionsListsAClientWithItsHooksOffAsInert(t *testing.T) {
+	current := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StateCurrent}
+
+	g := SummarizeInspections([]Inspection{
+		{ClientID: "claude", GateMode: hooks.ModeEnforce, PossibleGateMode: hooks.ModeWarn, HooksOff: true,
+			Capabilities: []CapabilityInspection{current}},
+	})
+
+	assert.Equal(t, GateSummary{Inert: []string{"claude"}}, g)
+	assert.Equal(t, GateEffectNone, g.Effect())
+
+	// Without a gate hook, no hook is present to call inert. Status then
+	// keeps the line that offers a setup run.
+	absent := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StateAbsent}
+
+	g = SummarizeInspections([]Inspection{{ClientID: "claude", HooksOff: true, Capabilities: []CapabilityInspection{absent}}})
+	assert.Equal(t, GateSummary{}, g)
+}

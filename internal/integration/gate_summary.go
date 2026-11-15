@@ -48,6 +48,12 @@ type GateSummary struct {
 	// apart, because "no gate hook installed" would send the reader to a
 	// setup run that does not repair it. Init leaves it empty.
 	Inert []string
+	// HooksOff lists the documents of a setup run whose gate hook does
+	// not run, because a client setting turns the hooks off. Such a hook
+	// blocks nothing, so the effect does not count it. The init gate line
+	// names it apart. Status leaves it empty and lists such a client as
+	// inert.
+	HooksOff []string
 }
 
 // GateEffect is what the gate hooks of a workspace do with a blocking
@@ -118,11 +124,19 @@ func (g GateSummary) Effect() GateEffect {
 }
 
 // SummarizeGateHooks groups the gate hooks of a setup run by their
-// document path. A hook that may run is possible when it could block.
+// document path. A hook that may run is possible when it could block. A
+// hook that the client does not run, because its hooks are off, goes in
+// no group and in neither possible count.
 func SummarizeGateHooks(gateHooks []GateHook) GateSummary {
 	var g GateSummary
 
 	for _, hook := range gateHooks {
+		if hook.HooksOff {
+			g.HooksOff = appendOnce(g.HooksOff, hook.Path)
+
+			continue
+		}
+
 		switch {
 		case !g.addHook(hook.Path, hook.Mode, hook.Uncertain):
 		case hook.Filtered:
@@ -190,7 +204,8 @@ func (g *GateSummary) addHook(label, mode string, uncertain bool) bool {
 // entry. A client
 // with a definition that may run a gate is possible, beside the mode of
 // the definitions that certainly run one. A client whose gate entry is
-// inert is listed as inert.
+// inert, or whose gate hook a client setting turns off, is listed as
+// inert.
 func SummarizeInspections(inspections []Inspection) GateSummary {
 	var g GateSummary
 
@@ -202,6 +217,17 @@ func SummarizeInspections(inspections []Inspection) GateSummary {
 
 		if commands.State == StateUnreadable {
 			g.AddUnreadable(insp.ClientID + ": " + cmp.Or(insp.HookDocumentError, commands.Detail))
+
+			continue
+		}
+
+		// A client setting that turns the hooks off makes the gate hook
+		// run for no command. Its mode and its possible mode then describe
+		// nothing that happens, so the summary adds neither. Without a gate
+		// hook, nothing is inert, and status keeps the line that offers a
+		// setup run.
+		if insp.HooksOff && commands.State != StateAbsent {
+			g.Inert = appendOnce(g.Inert, insp.ClientID)
 
 			continue
 		}

@@ -312,7 +312,11 @@ func planCodexHooks(plan *ClientPlan, root, binary string, req ClientSetup, conf
 
 	// Hooks turned off in the project configuration make every hook of
 	// this run inert. The reader must learn that here, not from doctor.
-	plan.Findings = append(plan.Findings, config.hooksDisabledFindings()...)
+	// The gate hooks get the mark, so the gate line does not count them
+	// as running.
+	off := config.hooksDisabledFindings()
+	plan.Findings = append(plan.Findings, off...)
+	markHooksOff(plan.GateHooks, off)
 
 	// Codex records trust against the hash of a hook. So Codex skips a
 	// new or changed hook until the user reviews it. The fact holds for a
@@ -887,6 +891,7 @@ func (codexSetup) Inspect(root string) Inspection {
 		Capabilities:      capabilities,
 		GateMode:          gate.mode,
 		GateBackground:    gate.background,
+		HooksOff:          gate.off,
 		PossibleGateMode:  gate.possible,
 		ManagedGateMode:   gate.managed,
 		HookDocumentError: gate.err,
@@ -1059,9 +1064,14 @@ func classifyCodexHooks(reads codexHookReads, rules hookRules) (entries []Capabi
 		}
 	}
 
+	// The gate reading takes the same finding as the warning, so status
+	// counts no gate hook that the warning says never runs.
+	off := reads.config.hooksDisabledFindings()
+	gate.off = len(off) > 0
+
 	if edits.State != StateAbsent || commands.State != StateAbsent {
 		findings = append(findings, codexTrustFinding, codexContextFinding)
-		findings = append(findings, reads.config.hooksDisabledFindings()...)
+		findings = append(findings, off...)
 	}
 
 	return collect(), gate, findings

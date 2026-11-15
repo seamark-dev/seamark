@@ -334,8 +334,11 @@ func planClaudeHooks(plan *ClientPlan, narration *claudeNarration, root string, 
 	plan.Findings = append(plan.Findings, backgroundRemovalFindings(approve.ClaudeSettings, merged.Removed, false)...)
 
 	// Hooks turned off by disableAllHooks make every hook of this run
-	// inert. The reader must learn that here, not from doctor.
-	plan.Findings = append(plan.Findings, claudeHooksDisabledFindings(settings, local, localState)...)
+	// inert. The reader must learn that here, not from doctor. The gate
+	// hooks get the mark, so the gate line does not count them as running.
+	off := claudeHooksDisabledFindings(settings, local, localState)
+	plan.Findings = append(plan.Findings, off...)
+	markHooksOff(plan.GateHooks, off)
 
 	// The lesson-check hooks go into the shared file beside the lessons
 	// hook. The enforce preconditions use the definitions that this plan
@@ -804,6 +807,7 @@ func (claudeSetup) Inspect(root string) Inspection {
 		Capabilities:      capabilities,
 		GateMode:          gate.mode,
 		GateBackground:    gate.background,
+		HooksOff:          gate.off,
 		PossibleGateMode:  gate.possible,
 		ManagedGateMode:   gate.managed,
 		HookDocumentError: gate.err,
@@ -832,6 +836,9 @@ func (claudeSetup) InspectLessonHooks(root string) Inspection {
 type gateInspection struct {
 	mode, possible, managed, err string
 	background                   bool
+	// off is true when a client setting turns the hooks off, so the gate
+	// hook runs for no command.
+	off bool
 }
 
 // inspectClaudeHooks classifies the lifecycle hooks from the shared
@@ -924,8 +931,13 @@ func inspectClaudeHooks(root string, evidence VerificationEvidence, rules hookRu
 	installed := (lessons != nil && (len(lessons.Entries) > 0 || len(lessons.ReportOnly) > 0)) ||
 		slices.ContainsFunc(all, func(c *CapabilityInspection) bool { return c.State != StateAbsent })
 
+	// The gate reading takes the same finding as the warning, so status
+	// counts no gate hook that the warning says never runs.
+	off := claudeHooksDisabledFindings(settings, local, localState)
+	gate.off = len(off) > 0
+
 	if installed {
-		findings = append(findings, claudeHooksDisabledFindings(settings, local, localState)...)
+		findings = append(findings, off...)
 	}
 
 	return collect(), gate, findings, lessons

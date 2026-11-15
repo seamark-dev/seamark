@@ -712,10 +712,11 @@ func TestPrintGateLineNamesTheUncheckedFileUnderEveryGateLine(t *testing.T) {
 				require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", tc.policy))
 			}
 
-			// A run writes the policy file only when none exists.
+			// A run writes the policy file only when none exists. Each case
+			// models a run where the user typed the mode of the case.
 			var plain, explicit testWriter
-			printGateLine(&plain, root, tc.gateMode, tc.hooks, []string{local}, tc.policy == "")
-			printGateLine(&explicit, root, tc.gateMode, tc.hooks, nil, tc.policy == "")
+			printGateLine(&plain, root, tc.gateMode, true, tc.hooks, []string{local}, tc.policy == "")
+			printGateLine(&explicit, root, tc.gateMode, true, tc.hooks, nil, tc.policy == "")
 
 			out := plain.String()
 
@@ -739,6 +740,53 @@ func TestPrintGateLineNamesTheUncheckedFileUnderEveryGateLine(t *testing.T) {
 
 			assert.Equal(t, strings.Replace(out, uncheckedLocalNote, "", 1), explicit.String(),
 				"a run that checks every file prints the same lines without the note")
+		})
+	}
+}
+
+func TestPrintGateLineNamesTheGateModeFlagOnlyWhenTyped(t *testing.T) {
+	// Without --gate-mode, the enforce mode of the run comes from an
+	// installed hook. A line that says where the flag went would then name
+	// a flag that the user never gave. So only a typed flag gets the
+	// clause, and the lines after the gate line stay the same.
+	const shared = ".claude/settings.json"
+
+	managedWarn := integration.GateHook{Path: shared, Mode: gateModeWarn, Managed: true}
+	possible := integration.GateHook{Path: shared, Mode: gateModeEnforce, Uncertain: true}
+
+	for name, tc := range map[string]struct {
+		hooks []integration.GateHook
+		plain string // the gate line when the user typed no --gate-mode
+		typed string // the gate line when the user typed --gate-mode enforce
+	}{
+		"no gate hook carries --enforce": {
+			[]integration.GateHook{managedWarn},
+			"  gate    warn — verdicts are reported, nothing blocks\n",
+			"  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook of this run\n",
+		},
+		"beside a possible definition": {
+			[]integration.GateHook{managedWarn, possible},
+			"  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing\n",
+			"  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing;\n" +
+				"          --gate-mode enforce reached no gate hook of this run\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// A kept warn policy keeps the line off the policy branch, so the
+			// mode of the run alone picks the line.
+			root := t.TempDir()
+			require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", "mode: warn\n"))
+
+			var plain, typed testWriter
+			printGateLine(&plain, root, gateModeEnforce, false, tc.hooks, nil, false)
+			printGateLine(&typed, root, gateModeEnforce, true, tc.hooks, nil, false)
+
+			require.True(t, strings.HasPrefix(plain.String(), tc.plain), "the plain gate line:\n%s", plain.String())
+			require.True(t, strings.HasPrefix(typed.String(), tc.typed), "the typed gate line:\n%s", typed.String())
+			assert.NotContains(t, plain.String(), "--gate-mode enforce reached")
+
+			assert.Equal(t, strings.TrimPrefix(typed.String(), tc.typed), strings.TrimPrefix(plain.String(), tc.plain),
+				"only the gate line differs")
 		})
 	}
 }
@@ -819,7 +867,7 @@ func TestPrintGateLinePicksTheRouteOfEachPossibleDefinition(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var b testWriter
-			printGateLine(&b, t.TempDir(), gateModeWarn, tc.hooks, nil, true)
+			printGateLine(&b, t.TempDir(), gateModeWarn, false, tc.hooks, nil, true)
 
 			assert.Contains(t, b.String(), unknown+tc.want)
 			assert.NotContains(t, b.String(), "run the seamark gate directly")
@@ -861,8 +909,8 @@ func TestPrintGateLineCallsAPolicyFileKeptOnlyWhenItExistedBefore(t *testing.T) 
 			require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", tc.policy))
 
 			var written, kept testWriter
-			printGateLine(&written, root, tc.gateMode, tc.hooks, nil, true)
-			printGateLine(&kept, root, tc.gateMode, tc.hooks, nil, false)
+			printGateLine(&written, root, tc.gateMode, true, tc.hooks, nil, true)
+			printGateLine(&kept, root, tc.gateMode, true, tc.hooks, nil, false)
 
 			assert.Contains(t, written.String(), "the new"+tc.text)
 			assert.NotContains(t, written.String(), "the kept")
@@ -1074,6 +1122,13 @@ func TestInitClientWarnsWhenCodexHooksAreTurnedOff(t *testing.T) {
 	out := initClients(t, root, false, false, false, "", integration.CodexID)
 	assert.Contains(t, out, "note    .codex/config.toml: [features] hooks = false turns every Codex hook off")
 	assert.Contains(t, out, "set [features] hooks = true")
+
+	// The gate line claims no verdict for a hook that never runs. It says
+	// what the managed hook does once the hooks run.
+	assert.Contains(t, out, "  gate    off — no gate hook runs while the hooks are off (see the note above), "+
+		"so no shell command gets a verdict\n"+
+		"          the gate hook setup manages follows .seamark/policy.yaml once the hooks run\n")
+	assert.NotContains(t, out, "verdicts are reported")
 }
 
 func TestInitClientWarnsWhenClaudeHooksAreTurnedOff(t *testing.T) {
@@ -1081,10 +1136,323 @@ func TestInitClientWarnsWhenClaudeHooksAreTurnedOff(t *testing.T) {
 	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", `{"disableAllHooks": true}`))
 
 	// A gate mode is no lesson-check mode, so the run installs and warns.
-	// The gate line stays as it is.
+	// The gate line claims no verdict and no block for a hook that never
+	// runs.
 	out := initClients(t, root, false, false, false, "enforce", integration.ClaudeID)
 	assert.Contains(t, out, "note    .claude/settings.json: disableAllHooks: true turns off the project hooks of Claude Code, "+
 		"so the installed seamark hooks never run")
 	assert.Contains(t, out, "remove disableAllHooks, or set it to false")
 	assert.Equal(t, 1, strings.Count(out, "disableAllHooks: true turns off"))
+	assert.Contains(t, out, "  gate    off — no gate hook runs while the hooks are off (see the note above), "+
+		"so no shell command gets a verdict\n"+
+		"          the gate hook setup manages carries --enforce: its deny/require_approval verdicts block once the hooks run\n")
+	assert.NotContains(t, out, "exit 2 and block")
+	assert.NotContains(t, out, "verdicts are reported")
+}
+
+func TestInitGateLineLeavesOutAClientWithItsHooksOff(t *testing.T) {
+	// Claude Code runs no hook, and Codex does. The gate line describes
+	// the Codex hook, and a note names the hook that does not run.
+	root := t.TempDir()
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", `{"disableAllHooks": true}`))
+
+	out := initClients(t, root, false, false, false, "", integration.ClaudeID, integration.CodexID)
+	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n")
+	assert.Contains(t, out, "  note    the gate hook in .claude/settings.json does not run while the hooks are off "+
+		"(see the note above); the gate line covers the other hooks\n")
+}
+
+func TestInitGateModeNotesSkipAHookThatIsOff(t *testing.T) {
+	// The local hook names a binary that the tests treat as present. A
+	// missing binary would stop the hook before the note, and the test
+	// would then prove nothing.
+	const note = "  note    .claude/settings.local.json runs a gate hook without --enforce"
+
+	local := inspecttest.PreToolUseDocument("Bash", inspecttest.Binary+" gate --hook")
+
+	// With the hooks on, the local warn hook gets the note.
+	on := t.TempDir()
+	require.NoError(t, inspecttest.WriteFile(on, ".claude/settings.local.json", local))
+
+	out := initClients(t, on, false, false, false, gateModeEnforce, integration.ClaudeID)
+	require.Contains(t, out, note, "the fixture reaches the note")
+
+	// A local warn gate hook that never runs needs no note about the
+	// enforce flag: the off line covers it.
+	off := t.TempDir()
+	require.NoError(t, inspecttest.WriteFile(off, ".claude/settings.json", `{"disableAllHooks": true}`))
+	require.NoError(t, inspecttest.WriteFile(off, ".claude/settings.local.json", local))
+
+	out = initClients(t, off, false, false, false, gateModeEnforce, integration.ClaudeID)
+	assert.Contains(t, out, "  gate    off — no gate hook runs while the hooks are off")
+	assert.NotContains(t, out, "runs a gate hook without --enforce")
+}
+
+func TestInitGateLineIgnoresAnEnforceHookThatIsOff(t *testing.T) {
+	// Claude Code turns its hooks off, so its managed enforce hook runs
+	// for no command. The Codex warn hook runs, and the policy says warn.
+	// So nothing blocks, and the line must not say enforce.
+	root := t.TempDir()
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", `{"disableAllHooks": true}`))
+	require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", starterPolicyFor(gateModeWarn)))
+
+	initClients(t, root, false, false, false, gateModeEnforce, integration.ClaudeID)
+	initClients(t, root, false, false, false, "", integration.CodexID)
+
+	// The plain run keeps the mode of each client.
+	out := initClients(t, root, false, false, false, "", integration.ClaudeID, integration.CodexID)
+	assert.Contains(t, out, "          PreToolUse Bash                /bin/seamark gate --enforce --hook\n")
+	assert.Contains(t, out, "          PreToolUse Bash                /bin/seamark gate --hook --client codex\n")
+	assert.NotContains(t, out, "gate    enforce")
+	assert.NotContains(t, out, "exit 2 and block")
+
+	// The user typed no --gate-mode, so the line names no such flag. The
+	// Claude Code hook carries --enforce, so no line may deny it. The note
+	// states its mode, as the off line does when every hook is off.
+	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks\n"+
+		"  note    the gate hook in .claude/settings.json does not run while the hooks are off "+
+		"(see the note above); the gate line covers the other hooks\n"+
+		"          the managed gate hook in .claude/settings.json carries --enforce: "+
+		"its deny/require_approval verdicts block once the hooks run\n"+
+		"  note    .codex/hooks.json runs its gate hook without --enforce: that hook follows .seamark/policy.yaml\n")
+	assert.NotContains(t, out, "reached no gate hook")
+}
+
+func TestInitGateLineNamesTheManagedHookThatIsOffBesideAnUnmanagedEnforcingHook(t *testing.T) {
+	// Codex runs a gate hook with --enforce that setup does not manage, so
+	// setup installs no Codex gate hook beside it. Setup does install the
+	// Claude Code gate hook, but the hooks there are off. So the line says
+	// that this hook does not run, not that setup installed none.
+	root := t.TempDir()
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", `{"disableAllHooks": true}`))
+	require.NoError(t, inspecttest.WriteFile(root, ".codex/config.toml", "[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n"+
+		"[[hooks.PreToolUse.hooks]]\ntype = \"command\"\n"+
+		"command = \"/opt/bin/seamark gate --enforce --hook --client codex\"\n"))
+
+	out := initClients(t, root, false, false, false, "", integration.ClaudeID, integration.CodexID)
+	assert.Contains(t, out, "          PreToolUse Bash                /bin/seamark gate --hook\n")
+	assert.Contains(t, out, "  gate    enforce — .codex/config.toml [hooks] runs its own gate hook with --enforce: deny/require_approval\n"+
+		"          verdicts exit 2 and block; the hook setup manages does not run while the hooks are off. Setup never\n"+
+		"          edits a gate hook it does not manage; remove that hook to stop blocking\n"+
+		"  note    the gate hook in .claude/settings.json does not run while the hooks are off "+
+		"(see the note above); the gate line covers the other hooks\n"+
+		"          the managed gate hook in .claude/settings.json follows .seamark/policy.yaml once the hooks run\n")
+	assert.NotContains(t, out, "installed no gate hook of its own")
+}
+
+func TestGateLineWithAManagedHookThatIsOff(t *testing.T) {
+	// One client turns its hooks off, and another client runs a gate hook.
+	// The gate line describes the hook that runs. It must not deny the
+	// managed hook that is off, and it names --gate-mode only when the user
+	// typed it.
+	const (
+		shared = ".claude/settings.json"
+		local  = ".claude/settings.local.json"
+		codex  = ".codex/hooks.json"
+		inline = ".codex/config.toml [hooks]"
+		broken = "mode: [broken\n"
+		offFor = "  note    the gate hook in .claude/settings.json does not run while the hooks are off " +
+			"(see the note above); the gate line covers the other hooks\n"
+		offEnforce = "          the managed gate hook in .claude/settings.json carries --enforce: " +
+			"its deny/require_approval verdicts block once the hooks run\n"
+		offWarn = "          the managed gate hook in .claude/settings.json follows .seamark/policy.yaml once the hooks run\n"
+	)
+
+	sharedEnforceOff := integration.GateHook{Path: shared, Mode: gateModeEnforce, Managed: true, HooksOff: true}
+	sharedWarnOff := integration.GateHook{Path: shared, Mode: gateModeWarn, Managed: true, HooksOff: true}
+	localWarnOff := integration.GateHook{Path: local, Mode: gateModeWarn, HooksOff: true}
+	codexWarn := integration.GateHook{Path: codex, Mode: gateModeWarn, Managed: true}
+	inlineWarn := integration.GateHook{Path: inline, Mode: gateModeWarn}
+	inlineEnforce := integration.GateHook{Path: inline, Mode: gateModeEnforce}
+	possible := integration.GateHook{Path: inline, Mode: gateModeEnforce, Uncertain: true}
+
+	for name, tc := range map[string]struct {
+		gateMode  string
+		requested bool // the user typed --gate-mode
+		hooks     []integration.GateHook
+		policy    string // the body of .seamark/policy.yaml; empty means no file
+		want      string // the whole output; %v stands for the error of a broken policy
+	}{
+		"an installed enforce mode": {
+			gateModeEnforce, false, []integration.GateHook{sharedEnforceOff, codexWarn}, "mode: warn\n",
+			"  gate    warn — verdicts are reported, nothing blocks\n" + offFor + offEnforce +
+				"  note    .codex/hooks.json runs its gate hook without --enforce: that hook follows .seamark/policy.yaml\n" +
+				"          instead; re-run with --gate-mode enforce to bake the flag into every selected client's gate hook\n",
+		},
+		"a typed enforce mode": {
+			gateModeEnforce, true, []integration.GateHook{sharedEnforceOff, inlineWarn}, "mode: warn\n",
+			"  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook that runs\n" +
+				offFor + offEnforce +
+				"  note    .codex/config.toml [hooks] runs a gate hook without --enforce that setup does not manage: --gate-mode enforce\n" +
+				"          does not reach it, and that hook follows .seamark/policy.yaml; edit it, or remove it and re-run\n" +
+				"          to let setup manage the gate\n",
+		},
+		"a typed enforce mode beside a possible definition": {
+			gateModeEnforce, true, []integration.GateHook{sharedEnforceOff, codexWarn, possible}, "mode: warn\n",
+			"  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing;\n" +
+				"          --gate-mode enforce reached no gate hook that runs\n" + offFor + offEnforce +
+				"  note    .codex/config.toml [hooks] holds a definition that may also run a gate hook; setup cannot tell what it does\n" +
+				"  note    .codex/hooks.json runs its gate hook without --enforce: that hook follows .seamark/policy.yaml\n" +
+				"          instead; re-run with --gate-mode enforce to bake the flag into every selected client's gate hook\n",
+		},
+		// The note names each hook that is off by its path, also one that
+		// setup does not manage. Only the managed hook gets its mode,
+		// because setup does not know what the other hook does.
+		"an unmanaged hook that is off beside a running hook": {
+			gateModeWarn, false, []integration.GateHook{sharedWarnOff, localWarnOff, codexWarn}, "",
+			"  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n" +
+				"  note    the gate hook in .claude/settings.json, .claude/settings.local.json does not run while the hooks are off " +
+				"(see the note above); the gate line covers the other hooks\n" + offWarn,
+		},
+		// The note does not depend on a managed hook that is off. Setup can
+		// leave out its own hook when a local gate hook already runs, so an
+		// unmanaged hook can be the only hook that is off. It gets no mode.
+		"an unmanaged hook that is off with no managed hook that is off": {
+			gateModeWarn, false, []integration.GateHook{localWarnOff, codexWarn}, "",
+			"  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n" +
+				"  note    the gate hook in .claude/settings.local.json does not run while the hooks are off " +
+				"(see the note above); the gate line covers the other hooks\n",
+		},
+		"an unmanaged enforcing hook": {
+			gateModeWarn, false, []integration.GateHook{sharedWarnOff, inlineEnforce}, "",
+			"  gate    enforce — .codex/config.toml [hooks] runs its own gate hook with --enforce: deny/require_approval\n" +
+				"          verdicts exit 2 and block; the hook setup manages does not run while the hooks are off. Setup never\n" +
+				"          edits a gate hook it does not manage; remove that hook to stop blocking\n" + offFor + offWarn,
+		},
+		"an unmanaged enforcing hook and a broken policy": {
+			gateModeWarn, false, []integration.GateHook{sharedWarnOff, inlineEnforce}, broken,
+			"  gate    enforce — .codex/config.toml [hooks] runs its own gate hook with --enforce, and .seamark/policy.yaml\n" +
+				"          failed to load (%v); that hook fails closed: EVERY hooked command blocks until the\n" +
+				"          policy is fixed. The hook setup manages does not run while the hooks are off\n" + offFor + offWarn,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if tc.policy != "" {
+				require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", tc.policy))
+			}
+
+			want := tc.want
+
+			_, policyErr := policyFileMode(root, tc.gateMode)
+			require.Equal(t, tc.policy == broken, policyErr != nil, "only the broken policy fails to load")
+
+			if policyErr != nil {
+				want = strings.Replace(want, "%v", policyErr.Error(), 1)
+			}
+
+			var b testWriter
+			printGateLine(&b, root, tc.gateMode, tc.requested, tc.hooks, nil, tc.policy == "")
+			assert.Equal(t, want, b.String())
+		})
+	}
+}
+
+func TestInitOffLineNamesTheModeOfEachManagedHook(t *testing.T) {
+	// Both clients turn their hooks off, and their managed gate hooks
+	// differ in mode. One sentence would give the mode of one hook to
+	// both, so the line names each hook with its own mode.
+	root := t.TempDir()
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", `{"disableAllHooks": true}`))
+	require.NoError(t, inspecttest.WriteFile(root, ".codex/config.toml", "[features]\nhooks = false\n"))
+
+	initClients(t, root, false, false, false, gateModeEnforce, integration.ClaudeID)
+	initClients(t, root, false, false, false, "", integration.CodexID)
+
+	out := initClients(t, root, false, false, false, "", integration.ClaudeID, integration.CodexID)
+	assert.Contains(t, out, "  gate    off — no gate hook runs while the hooks are off (see the note above), "+
+		"so no shell command gets a verdict\n"+
+		"          the managed gate hook in .claude/settings.json carries --enforce: "+
+		"its deny/require_approval verdicts block once the hooks run\n"+
+		"          the managed gate hook in .codex/hooks.json follows .seamark/policy.yaml once the hooks run\n")
+	assert.NotContains(t, out, "the gate hook setup manages")
+}
+
+func TestGateOffLineCases(t *testing.T) {
+	// Every gate hook of these runs is off, so the off line and its own
+	// lines are the whole output. No line may describe a running hook.
+	const (
+		shared   = ".claude/settings.json"
+		local    = ".claude/settings.local.json"
+		config   = ".codex/config.toml"
+		broken   = "mode: [broken\n"
+		offLine  = "  gate    off — no gate hook runs while the hooks are off (see the note above), so no shell command gets a verdict\n"
+		enforces = "          the gate hook setup manages carries --enforce: its deny/require_approval verdicts block once the hooks run\n"
+	)
+
+	managedEnforce := integration.GateHook{Path: shared, Mode: gateModeEnforce, Managed: true, HooksOff: true}
+
+	for name, tc := range map[string]struct {
+		gateMode string
+		hooks    []integration.GateHook
+		policy   string // the body of .seamark/policy.yaml; empty means no file
+		want     string // the lines after the off line
+	}{
+		"a managed enforce hook": {gateModeEnforce, []integration.GateHook{managedEnforce}, "", enforces},
+		"a managed report-only hook": {
+			gateModeWarn,
+			[]integration.GateHook{{Path: shared, Mode: integration.GateModeReportOnly, Managed: true, HooksOff: true}},
+			"", "          the gate hook setup manages stays report-only once the hooks run\n",
+		},
+		"a managed warn hook": {
+			gateModeWarn, []integration.GateHook{{Path: shared, Mode: gateModeWarn, Managed: true, HooksOff: true}},
+			"", "          the gate hook setup manages follows .seamark/policy.yaml once the hooks run\n",
+		},
+		"an unmanaged hook alone": {
+			gateModeWarn, []integration.GateHook{{Path: config, Mode: gateModeEnforce, HooksOff: true}}, "", "",
+		},
+		"a local warn hook in an enforce run": {
+			gateModeEnforce, []integration.GateHook{managedEnforce, {Path: local, Mode: gateModeWarn, HooksOff: true}},
+			"", enforces,
+		},
+		"two managed hooks with different modes": {
+			gateModeEnforce,
+			[]integration.GateHook{managedEnforce, {Path: ".codex/hooks.json", Mode: gateModeWarn, Managed: true, HooksOff: true}},
+			"",
+			"          the managed gate hook in .claude/settings.json carries --enforce: " +
+				"its deny/require_approval verdicts block once the hooks run\n" +
+				"          the managed gate hook in .codex/hooks.json follows .seamark/policy.yaml once the hooks run\n",
+		},
+		"a broken policy": {gateModeEnforce, []integration.GateHook{managedEnforce}, broken, enforces},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if tc.policy != "" {
+				require.NoError(t, inspecttest.WriteFile(root, ".seamark/policy.yaml", tc.policy))
+			}
+
+			// A broken policy adds its note after the managed hook lines.
+			want := offLine + tc.want
+
+			_, policyErr := policyFileMode(root, tc.gateMode)
+			require.Equal(t, tc.policy == broken, policyErr != nil, "only the broken policy fails to load")
+
+			if policyErr != nil {
+				want += "          note: .seamark/policy.yaml also failed to load (" + policyErr.Error() + ")\n"
+			}
+
+			var b testWriter
+			printGateLine(&b, root, tc.gateMode, false, tc.hooks, nil, tc.policy == "")
+			assert.Equal(t, want, b.String())
+		})
+	}
+}
+
+func TestPlainInitGateLineWithTheHooksOff(t *testing.T) {
+	// The plain form does not read the local file, where a false can turn
+	// the hooks on again. "while the hooks are off" stays true then, and
+	// the unchecked-source lines still follow.
+	root := t.TempDir()
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", `{"disableAllHooks": true}`))
+
+	var b testWriter
+	require.NoError(t, runInit(&b, root, "/bin/seamark", gateModeEnforce, false, "", false))
+
+	out := b.String()
+	assert.Contains(t, out, "this run did not read .claude/settings.local.json")
+	assert.Contains(t, out, "  gate    off — no gate hook runs while the hooks are off (see the note above), "+
+		"so no shell command gets a verdict\n"+
+		"          the gate hook setup manages carries --enforce: its deny/require_approval verdicts block once the hooks run\n"+
+		"          this run does not check .claude/settings.local.json for gate hooks")
+	assert.NotContains(t, out, "exit 2 and block")
 }
