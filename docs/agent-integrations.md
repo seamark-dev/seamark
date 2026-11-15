@@ -722,9 +722,13 @@ stay out of the repository until sanitized: paths and identifiers are
 substituted consistently, and nothing that names an account is kept.
 
 An oracle file (`apply_patch_oracle.json`) records what the installed
-client binary did with each input offline, no model involved. The
-decoder is tested against it, and the native check reruns it on the
-installed version to catch parser drift.
+client binary did with each input offline, no model involved. Its path
+cases come from codex-cli 0.154.0: they record which paths a patch
+names. The decoder is tested against them, and the native check reruns
+them on the installed version to catch parser drift. Its content cases
+come from codex-cli 0.164.0: they record the exact before and after
+bytes of 29 patch shapes, and the native check replays them when the
+installed version is the recorded one.
 
 ### Tests and checks
 
@@ -748,8 +752,9 @@ provides no compatibility evidence.
 The Codex offline checks use a scratch `CODEX_HOME`. They configure trust
 only for the disposable test repository, leaving your project's trust
 unchanged. Scripted responses come from a local test server, not a model.
-`CLIENT=claude` runs the shell configuration checks; the Go native tests
-are Codex-only.
+`CLIENT=claude` runs the shell configuration checks and the Go tests
+that replay the reviewed Claude Code timing and guard recordings. The
+other Go native tests are Codex-only.
 
 The credential canary belongs to the offline check only; the smoke
 leaves the operator's environment as it is. The smoke's distillation
@@ -791,9 +796,12 @@ Before release:
   Claude Code 2.1.319 validates the 10-second pre-edit timeout for
   `Write` and `Edit` in both contexts, with a fail-open limit at 10
   seconds.
-- Add a verified Codex Update before/after oracle, then implement and
-  test content projection. Current conservative unknown/deny behavior
-  is not sufficient for the planned release.
+- Implement and test the content projection of a Codex Update patch.
+  The before/after oracle that it needs is recorded: 29 content cases
+  from codex-cli 0.164.0 in
+  `internal/integration/testdata/codex/apply_patch_oracle.json`. The
+  current conservative unknown/deny behavior is not sufficient for the
+  planned release.
 - **Done:** Refuse conflicting duplicate lesson-check handlers consistently
   across clients. Retain Codex strict refusal and add equivalent Claude
   handling.
