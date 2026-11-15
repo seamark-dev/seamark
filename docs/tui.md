@@ -117,7 +117,9 @@ The state of the workspace at a glance.
   repository and names the console of that root. A newer schema asks for
   an upgrade instead. When that console cannot run, it names `seamark
   index --move-root --db <file>` in this workspace when the file lies in
-  it and in no nested checkout, else `use another --db`. A missing root
+  it and in no nested checkout. It names that run too when the recorded
+  root is missing and the file lies outside every checkout. Otherwise it
+  names `use another --db`. A missing root
   can be a moved repository or a detached disk, so `b` builds over it
   only for a file inside this workspace and outside any repository nested
   in it. It also
@@ -396,7 +398,9 @@ client, suppressed repeats, and eligible lessons never delivered.
 Delivered means emitted through a recorded surface, not read or
 followed. When mined lessons are below the threshold or muted, a line
 counts them, and `o` opens Settings › Lesson mutes. Plain route:
-`seamark lessons --stats`, from the same reader.
+`seamark lessons --stats`, from the same reader. The CLI view also shows
+the MCP tool usage from `.seamark/mcp-usage.jsonl`; the console does
+not.
 
 **Evidence** shows the two sources: local fix commits and GitHub reviews.
 Each source shows its stored findings, its freshness (`refreshed <age>`,
@@ -691,10 +695,13 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   directory, names `seamark index --move-root --db <file>` in this
   workspace instead. A command in the recorded root with that file would
   write two repositories, and without it an id names a row of another
-  ledger. A root that a stat cannot find or reach, or that git now
-  widens, names that run here when the file lies in this workspace and
-  in no nested checkout, else another `--db`, because no command can
-  enter that root. The home directory counts as no checkout. The pin writes, the lesson settings saves, and the
+  ledger. A root that a stat cannot reach for a reason other than a
+  missing path, or that git now widens, names that run here when the
+  file lies in this workspace and in no nested checkout, else another
+  `--db`, because no command can enter that root. A missing root names `seamark index --db <file>` here
+  for a file of this workspace, that `--move-root` run for a file
+  outside every checkout, and another `--db` for a file in another
+  checkout. The home directory counts as no checkout. The pin writes, the lesson settings saves, and the
   sample refuse in the same way. The CLI commands `--apply`,
   `--retarget`, and `--prune` follow the same rule, with one difference:
   outside git, a command in a directory inside the recorded root counts
@@ -708,8 +715,9 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   cannot run, and `o` opens no build. A `--db` that names the default database
   through a link, a relative path, or another case of the path counts as
   the default database.
-- The new pin, pin edit, pin removal, mute, and delivery saves refuse a
-  `.seamark/lessons.yaml` with CRLF line breaks. They also refuse a file
+- The new pin, pin edit, pin removal, mute, delivery, and check
+  definition (`M`) saves refuse a `.seamark/lessons.yaml` with CRLF line
+  breaks. They also refuse a file
   with more than one hard link: "replacing this file would break its
   hard link; edit .seamark/lessons.yaml by hand". Apply still writes a
   CRLF file.

@@ -112,10 +112,10 @@ delivery scopes; evidence coverage is the fallback when none verify.
 | `init` | no | no | `.seamark/` scaffolds; per selected agent `.claude/settings.json`, `.mcp.json`, `.codex/hooks.json`, `.codex/config.toml`, the skill directories | `.gitignore`, scaffolded YAML (meant to be committed) | no | no |
 | `index` | only `--reviews`, via `gh` | no | `index.db` | no | no | `gh` auth for `--reviews` |
 | `why` / `orient` | no | no | no | no | no | no |
-| `lessons` | no | `--distill` and `--extract-triggers`: your agent CLI | proposals, trigger paths in `index.db`; firing log | `lessons.yaml`, only via `--apply`/`--prune`/`--retarget`/`--set-mode` with `distill.write` | no | the agent CLI's own |
+| `lessons` | no | `--distill` and `--extract-triggers`: your agent CLI | proposals, trigger paths in `index.db`; firing log; delivery state; `lesson-check-audit.jsonl` (`--verify`, and the `--guard`, `--baseline`, and `--verify --hook` handlers); pending baselines in `.seamark/checks/pending/` (`--guard` and `--baseline` handlers) | `lessons.yaml`, only via `--apply`/`--prune`/`--retarget`/`--set-mode` with `distill.write` | `--guard --hook` exits 2 and denies the edit on a violation, an edit that the check cannot evaluate, or an invalid `lessons.yaml`; `--verify` exits 2 on a violation; `--baseline --hook` and `--verify --hook` always exit 0 | the agent CLI's own |
 | `report` | no | no | the HTML file | no | no | no |
 | `gate` | no | no | `audit.jsonl` | no | exit 2 under enforce | no |
-| `check` | no | no | `audit.jsonl`, index refresh, the `lessons-audit.jsonl` firing record, `lesson-check-audit.jsonl` with `--lessons` | no | exit 2 under enforce | no |
+| `check` | no | no | `audit.jsonl`, index refresh, the `lessons-audit.jsonl` firing record, `lesson-check-audit.jsonl` with `--lessons` | no | exit 2 under enforce; with `--lessons`, also exit 2 on a lesson violation in any mode | no |
 | `mcp` | no | the connected agent client | index refresh, `audit.jsonl`, `lessons-audit.jsonl` and `lesson-check-audit.jsonl` (check tool), `lessons-audit.jsonl` (change_set), `mcp-usage.jsonl` | no | no | no |
 | `lsp` | no | your editor | index refresh | no | no | no |
 | `state` | no | no | `index.db` on import | no | no | no |

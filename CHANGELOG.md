@@ -35,7 +35,8 @@ model-boundary delivery.
   receiver-unknown; own-call edit reminders remain same-call-only.
 - **Executable lessons.** Advisory/check/enforce modes, hand-authored
   `forbid-path-change/1` and `no-added-pattern/1` predicates, explicit
-  `--verify`, `check --lessons`, MCP `lesson_checks`, mode changes and
+  `--verify`, `check --lessons`, the `lesson_checks` argument of the MCP
+  `check` tool, mode changes and
   separate baseline/guard/post-edit hooks. Installation differs from
   active or native-verified coverage. Codex Update content projection
   is still incomplete and is required before release.
@@ -422,7 +423,8 @@ model-boundary delivery.
 - **change_set partner counts.** The MCP `change_set` description and
   the docs now give M in `N/M commits` the same meaning as `why` does.
 - **Full lesson view of a file.** `seamark lessons --file <path>` now
-  lists every lesson that applies. It kept at most 8 and dropped the
+  lists every pin that applies and at most 100 mined lessons, the most
+  recurring first. It kept at most 8 and dropped the
   rest without a count, while change_set, check, `lessons --prepare` and
   the edit hooks name it as the command that shows what they leave out.
 - **Every doctor action.** Doctor now prints every corrective action of

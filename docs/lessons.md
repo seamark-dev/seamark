@@ -142,7 +142,8 @@ evidence confidence first and region specificity second — a weak pin
 must not hold a slot a strong one wants, and among equals a pin on the
 file beats its package beats a repo-wide `*` — with a `+N more` pointer
 for the rest. Deliberate views (`--file`, `why`, `orient`) apply no
-pin budget. `--file` shows every lesson that applies. `why` and
+pin budget. `--file` shows every pin that applies and at most 100 mined
+lessons, the most recurring first. `why` and
 `orient` show the first 6 lessons and a `+N more` line that names where
 the rest are: `seamark lessons --file <path>` for `why`;
 `.seamark/lessons.yaml` and `seamark lessons --list` for `orient`. Only the
@@ -646,7 +647,7 @@ change different things:
 | Prune | Removes a linked pin and marks its proposal superseded. | The pin file and the ledger. `seamark lessons --prune <ids>`, or `-` in Lessons › Pins. |
 | Mute | Hides mined lessons from selection; never pins. A rule matches in any case; a region matches that region and every region under it. A region with a trailing "/" (`api/`) matches only the regions under it, not `api` itself. | The `mute:` list. The mined lessons stay in the index, and `lessons --list` marks them `(muted)`. |
 | Threshold | The minimum mined recurrences. Mined lessons only; never pins. | The `threshold:` key. |
-| Budget | A cap on one injection or one answer. `pin_budget` caps the pins of one edit-hook or exploration injection (at most 8 lessons in total per injection). `change_budget` caps one `change_set` answer, one preparation, or one `check` advisory. The checks that a preparation lists have no budget. | The budget keys. `--file` and `why` apply no pin budget and keep every restatement. `--file` shows every lesson that applies. `why` shows at most 6 and counts the rest. |
+| Budget | A cap on one injection or one answer. `pin_budget` caps the pins of one edit-hook or exploration injection (at most 8 lessons in total per injection). `change_budget` caps one `change_set` answer, one preparation, or one `check` advisory. The checks that a preparation lists have no budget. | The budget keys. `--file` and `why` apply no pin budget and keep every restatement. `--file` shows every pin that applies and at most 100 mined lessons, the most recurring first. `why` shows at most 6 and counts the rest. |
 | Repetition | Once-per-context suppression of repeats in one agent context (`hook_delivery: once-per-context`). Edit hook only. The exploration hook keeps its own repeat state, which `hook_delivery` does not configure. | Delivery state in `.seamark/lessons-hook-state.json` (exploration: `.seamark/lessons-explore-state.json`); `change_set`, `lessons --prepare`, `check`, `why`, and the CLI views always show their selection. |
 | Sample | The local selection for explicit paths, before suppression, with no record. Console only: `s` in a pin review or a lessons Settings review. | Nothing: no file, no firing record, no delivery state. |
 
@@ -844,8 +845,10 @@ unstaged tracked changes plus nonignored untracked files. Repeated
 `--file` selects only those paths, including ignored files. A relative
 path starts at the process directory. The result names the snapshot,
 configuration and checker versions, selection, omissions and freshness.
-Exit 0 means passed, no applicable checks, or no executable checks;
-exit 1 means incomplete; exit 2 means a violation. This does not certify
+Exit 0 means passed, no applicable checks, or no executable checks.
+Exit 1 means that a result is unknown, that the files changed during
+the check, or that the configuration is invalid. Exit 2 means a
+violation. This does not certify
 the whole repository against every lesson.
 
 Default selection leaves out exactly the untracked lesson-check audit,

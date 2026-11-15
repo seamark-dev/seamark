@@ -205,7 +205,8 @@ rules over `diff.effects` gate merges the same way `gate` gates commands, and
 `diff.unindexed_files` exposes coverage blind spots to your rules —
 changed files the index cannot attribute never silently read as safe.
 `diff.files` and `diff.effects` reach the rules in sorted order, so a
-rule that indexes them gives the same verdict on every run.
+rule that indexes them gives the same verdict on every run. The
+`effect` list of `gate` is sorted in the same way.
 The text output also appends the recurring lessons governing the
 touched files — clearly marked advisory, never part of the verdict,
 printed even when the verdict blocks (a deny is exactly when they

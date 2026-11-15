@@ -115,8 +115,9 @@ The rename detection differs by reader:
 - The index freshness check reads `git diff HEAD` with git's default
   rename detection.
 
-The index freshness check, the `check` fallback, and the LSP server run
-git so that it does not rewrite `.git/index`. A change to file metadata
+The index freshness check, the `check` fallback, the console
+(`seamark tui`), and the LSP server run git so that it does not rewrite
+`.git/index`. A change to file metadata
 only, such as `touch`, then leaves the git index as it was, so a
 concurrent git command does not meet `.git/index.lock`.
 
