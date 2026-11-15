@@ -161,7 +161,8 @@ for the two checks, the modes, and their limits.
 ## If something is missing
 
 - **The command rejects `--client`:** run `seamark version` and check
-  `command -v seamark`. Upgrade to v0.7.0 or newer.
+  `command -v seamark`. Upgrade to v0.9.0 or newer, the version that this
+  guide targets.
 - **The AI coding agent cannot find tools:** restart it from the repository,
   run `seamark doctor`, and check its MCP registration and project trust.
 - **Tools report a database schema newer than they understand:** the running
