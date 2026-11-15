@@ -460,3 +460,61 @@ func TestWhySymbolSigIsRedacted(t *testing.T) {
 	out = whyFile(t, st, root, "pkg.longValue")
 	assert.Contains(t, out, "  sig      "+long+"\n")
 }
+
+func TestExpandSymbolRespectsHalfOpenEnd(t *testing.T) {
+	file := "pkg/h.go"
+
+	var src strings.Builder
+	for i := 1; i <= 9; i++ {
+		fmt.Fprintf(&src, "line %d\n", i)
+	}
+
+	// openEnd stops at column 0 of line 7, so line 7 is not part of it.
+	// closedEnd reaches into line 7.
+	st, root := seedOutline(t, []model.Symbol{
+		{FQN: "pkg.openEnd", Name: "openEnd", Kind: model.KindFunction, File: file,
+			Span: model.Span{StartLine: 3, EndLine: 7, EndCol: 0}},
+		{FQN: "pkg.closedEnd", Name: "closedEnd", Kind: model.KindFunction, File: file,
+			Span: model.Span{StartLine: 3, EndLine: 7, EndCol: 1}},
+	}, map[string]string{file: src.String()})
+
+	expand := func(ref string) string {
+		var b strings.Builder
+		require.NoError(t, Expand(&b, st, root, ref))
+
+		return b.String()
+	}
+
+	// The test reads each ref from the outline that a reader sees. So a
+	// change in the outline ref fails here as well as a change in expand.
+	section := definesSection(t, whyFile(t, st, root, file))
+
+	outlineRef := func(fqn string) string {
+		for _, l := range strings.Split(section, "\n") {
+			if strings.Contains(l, " "+fqn+" ") {
+				fields := strings.Fields(l)
+
+				return fields[len(fields)-1]
+			}
+		}
+
+		return ""
+	}
+
+	openRef := outlineRef("pkg.openEnd")
+	assert.Equal(t, "pkg/h.go:3-6", openRef)
+
+	byName := expand("pkg.openEnd")
+	assert.True(t, strings.HasPrefix(byName, "pkg/h.go:3-6\n"), byName)
+	assert.Contains(t, byName, "line 6\n")
+	assert.NotContains(t, byName, "line 7")
+	assert.Equal(t, byName, expand(openRef), "the name and the outline ref show the same lines")
+
+	closedRef := outlineRef("pkg.closedEnd")
+	assert.Equal(t, "pkg/h.go:3-7", closedRef)
+
+	closed := expand("pkg.closedEnd")
+	assert.True(t, strings.HasPrefix(closed, "pkg/h.go:3-7\n"), closed)
+	assert.Contains(t, closed, "line 7\n")
+	assert.Equal(t, closed, expand(closedRef), "the name and the outline ref show the same lines")
+}
