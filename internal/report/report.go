@@ -166,12 +166,7 @@ func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, root, file st
 		return err
 	}
 
-	if len(syms) > 0 {
-		fmt.Fprintf(w, "\ndefines (%d)\n", len(syms))
-		for _, s := range limitSyms(syms, 20) {
-			fmt.Fprintf(w, "  %-8s line %-5d %s\n", s.Kind, s.Span.StartLine, s.FQN)
-		}
-	}
+	printOutline(w, root, file, syms)
 
 	return historySections(w, st, cfg, root, file)
 }
@@ -1570,12 +1565,4 @@ func location(s model.Symbol) string {
 	}
 
 	return fmt.Sprintf("%s:%d", s.File, s.Span.StartLine)
-}
-
-func limitSyms(syms []model.Symbol, n int) []model.Symbol {
-	if len(syms) > n {
-		return syms[:n]
-	}
-
-	return syms
 }

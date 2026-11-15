@@ -120,7 +120,8 @@ Ask your AI coding agent:
 > Which files often change together?
 
 For a specific file, run `seamark why path/to/file` or ask the agent to explain
-it using Seamark. A young repository may have little history to report.
+it using Seamark. It lists what the file defines, with line ranges and
+signatures. A young repository may have little history to report.
 
 ## Start learning from past mistakes
 

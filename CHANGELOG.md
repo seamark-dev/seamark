@@ -86,6 +86,12 @@ model-boundary delivery.
 - **change_set for a file without symbols.** The file's entry now says
   that seamark indexes no symbols there, so its callers and effect reach
   are unknown.
+- **Bounded file outline.** `why <file>` lists each symbol in source
+  order with its `file:start-end` lines and a signature of at most 100
+  characters, with secrets redacted. It says how many symbols it shows,
+  as in `defines (40; showing 20)`, and names an `expand` ref for the
+  source of the first symbol it leaves out. A file with no indexed
+  symbol says so.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if
