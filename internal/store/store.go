@@ -1515,10 +1515,7 @@ func (s *Store) FindSymbols(query string, limit int) ([]model.Symbol, error) {
 		}
 	}
 
-	exact, err := s.querySymbols(
-		`SELECT `+symbolCols+` FROM symbol WHERE fqn = ? OR name = ? LIMIT ?`,
-		query, query, limit,
-	)
+	exact, err := s.ExactSymbols(query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1560,6 +1557,17 @@ func (s *Store) FindSymbols(query string, limit int) ([]model.Symbol, error) {
 	}
 
 	return out, nil
+}
+
+// ExactSymbols returns at most limit symbols whose FQN or name equals
+// query. It is the first step of FindSymbols. A report that offers a why
+// route asks it whether why resolves the route to one symbol, so the
+// check and why use one predicate.
+func (s *Store) ExactSymbols(query string, limit int) ([]model.Symbol, error) {
+	return s.querySymbols(
+		`SELECT `+symbolCols+` FROM symbol WHERE fqn = ? OR name = ? LIMIT ?`,
+		query, query, limit,
+	)
 }
 
 // escapeLike escapes LIKE wildcards in user input.

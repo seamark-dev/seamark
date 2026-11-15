@@ -50,3 +50,37 @@ func TestWhyOutlineRouteRunsThroughExpand(t *testing.T) {
 	assert.Contains(t, lines[1], "func f21(")
 	assert.True(t, strings.HasSuffix(lines[len(lines)-1], "}"), "the last line closes the function: %q", lines[len(lines)-1])
 }
+
+func TestWhyOutlineCallerRouteRunsThroughWhy(t *testing.T) {
+	root := writeFixture(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, "hot.go"), []byte("package main\n\nfunc hot() {\n}\n"), 0o644))
+
+	for i := 1; i <= 5; i++ {
+		src := fmt.Sprintf("package main\n\nfunc use%d() {\n\thot()\n}\n", i)
+		require.NoError(t, os.WriteFile(filepath.Join(root, fmt.Sprintf("use%d.go", i)), []byte(src), 0o644))
+	}
+
+	resps := serve(t, root,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"why","arguments":{"query":"hot.go"}}}`,
+	)
+
+	why, isErr := toolText(t, resps["1"])
+	require.False(t, isErr)
+
+	_, route, found := strings.Cut(why, " · +2 more: why ")
+	require.True(t, found, "the why tool prints the route:\n%s", why)
+
+	query, _, found := strings.Cut(route, "\n")
+	require.True(t, found)
+	assert.Equal(t, "hot", query)
+
+	resps = serve(t, root,
+		fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"why","arguments":{"query":%q}}}`, query),
+	)
+
+	symbol, isErr := toolText(t, resps["1"])
+	require.False(t, isErr, symbol)
+	assert.True(t, strings.HasPrefix(symbol, "hot  (function)\n"), symbol)
+	assert.Contains(t, symbol, "\ncallers (5)\n")
+}

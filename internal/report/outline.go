@@ -9,6 +9,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
+	"github.com/seamark-dev/seamark/internal/store"
 )
 
 // whyOutlineLimit is the number of symbols that the file outline of why
@@ -23,17 +24,23 @@ const outlineSigCap = 100
 
 // printOutline writes the defines section of why <file>. Each entry keeps
 // the full FQN and an inclusive file:start-end ref, because two symbols
-// can share a short name or even a full FQN (two init functions).
-func printOutline(w io.Writer, root, file string, syms []model.Symbol) {
+// can share a short name or even a full FQN (two init functions). The
+// caller lines follow the signature of each entry.
+func printOutline(w io.Writer, st *store.Store, root, file string, syms []model.Symbol) error {
 	if len(syms) == 0 {
 		// Silence reads as "the file defines nothing". The index only
 		// knows the file through history, so the line says that.
 		fmt.Fprintf(w, "\ndefines (0)  no indexed symbols\n")
 
-		return
+		return nil
 	}
 
 	ordered := sourceOrder(syms)
+
+	callers, err := loadOutlineCallers(st, file, ordered[:min(len(ordered), whyOutlineLimit)])
+	if err != nil {
+		return err
+	}
 
 	if len(ordered) > whyOutlineLimit {
 		fmt.Fprintf(w, "\ndefines (%d; showing %d)\n", len(ordered), whyOutlineLimit)
@@ -55,11 +62,19 @@ func printOutline(w io.Writer, root, file string, syms []model.Symbol) {
 		if sig := render.Truncate(scrubSource(s.Sig), outlineSigCap); sig != "" {
 			fmt.Fprintf(w, "           %s\n", sig)
 		}
+
+		if err := callers.printEntry(w, st, root, s); err != nil {
+			return err
+		}
 	}
 
 	if len(ordered) > whyOutlineLimit {
 		printOmitted(w, root, file, ordered[whyOutlineLimit], len(ordered)-whyOutlineLimit)
 	}
+
+	callers.printClosing(w)
+
+	return nil
 }
 
 // printOmitted writes the line for the symbols that the outline leaves

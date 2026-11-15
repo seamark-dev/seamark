@@ -161,15 +161,20 @@ func TestWhyFileOutlineKeepsSourceOrderAndIdentity(t *testing.T) {
 
 	section := definesSection(t, whyFile(t, st, root, file))
 
+	// No symbol has a caller. So each function and method says that the
+	// index has no edge, and one note closes the section.
+	none := "           callers  none indexed"
 	want := []string{
 		fmt.Sprintf("  %-8s %-44s %s", "var", "pkg.b", "pkg/a.go:2-2"),
 		fmt.Sprintf("  %-8s %-44s %s", "var", "pkg.a", "pkg/a.go:2-2"),
-		fmt.Sprintf("  %-8s %-44s %s", "method", "pkg.A.Close", "pkg/a.go:5-7"),
-		fmt.Sprintf("  %-8s %-44s %s", "method", "pkg.B.Close", "pkg/a.go:10-12"),
-		fmt.Sprintf("  %-8s %-44s %s", "function", "pkg.init", "pkg/a.go:20-21"),
-		fmt.Sprintf("  %-8s %-44s %s", "function", "pkg.init", "pkg/a.go:30-31"),
-		fmt.Sprintf("  %-8s %-44s %s", "function", "pkg.left", "pkg/a.go:40-40"),
-		fmt.Sprintf("  %-8s %-44s %s", "function", "pkg.right", "pkg/a.go:40-40"),
+		fmt.Sprintf("  %-8s %-44s %s", "method", "pkg.A.Close", "pkg/a.go:5-7"), none,
+		fmt.Sprintf("  %-8s %-44s %s", "method", "pkg.B.Close", "pkg/a.go:10-12"), none,
+		fmt.Sprintf("  %-8s %-44s %s", "function", "pkg.init", "pkg/a.go:20-21"), none,
+		fmt.Sprintf("  %-8s %-44s %s", "function", "pkg.init", "pkg/a.go:30-31"), none,
+		fmt.Sprintf("  %-8s %-44s %s", "function", "pkg.left", "pkg/a.go:40-40"), none,
+		fmt.Sprintf("  %-8s %-44s %s", "function", "pkg.right", "pkg/a.go:40-40"), none,
+		"  none indexed: the index skips some calls, so no edge does not prove that nothing calls the symbol;" +
+			" why on the symbol lists the skip rules",
 	}
 
 	assert.Equal(t, "defines (8)\n"+strings.Join(want, "\n"), section)
@@ -336,7 +341,9 @@ func TestWhyFileOutlineRouteRuns(t *testing.T) {
 	_, ref, found := strings.Cut(section, "expand ")
 	require.True(t, found)
 
-	ref = strings.TrimSuffix(strings.TrimSpace(ref), " (MCP)")
+	// Other closing lines can follow the route, so the ref ends at its marker.
+	ref, _, found = strings.Cut(ref, " (MCP)")
+	require.True(t, found)
 
 	var b strings.Builder
 	require.NoError(t, Expand(&b, st, root, ref))

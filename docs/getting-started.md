@@ -121,7 +121,8 @@ Ask your AI coding agent:
 
 For a specific file, run `seamark why path/to/file` or ask the agent to explain
 it using Seamark. It lists what the file defines, with line ranges and
-signatures. A young repository may have little history to report.
+signatures. It also gives caller counts and a few caller definitions. A young
+repository may have little history to report.
 
 ## Start learning from past mistakes
 

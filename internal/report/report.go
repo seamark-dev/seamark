@@ -167,7 +167,9 @@ func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, root, file st
 		return err
 	}
 
-	printOutline(w, root, file, syms)
+	if err := printOutline(w, st, root, file, syms); err != nil {
+		return err
+	}
 
 	return historySections(w, st, cfg, root, file)
 }

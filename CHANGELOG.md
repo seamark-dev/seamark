@@ -92,6 +92,12 @@ model-boundary delivery.
   as in `defines (40; showing 20)`, and names an `expand` ref for the
   source of the first symbol it leaves out. A file with no indexed
   symbol says so.
+- **Callers in the file outline.** `why <file>` now gives each shown
+  symbol that has callers its caller count, split into callers in other
+  non-test files and in test files, and up to three caller definitions,
+  at most 30 per outline. It names `why <symbol>` for the rest. A
+  function without an indexed caller says `none indexed`: the index has
+  no edge, which does not prove that nothing calls it.
 - **Signature redaction in why.** `why <symbol>` now redacts
   secret-shaped text in its `sig` line, as the file outline does.
 - **Expand by symbol.** `expand <symbol>` no longer shows the line after
