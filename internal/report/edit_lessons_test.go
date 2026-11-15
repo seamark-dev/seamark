@@ -483,6 +483,7 @@ func TestReminderForSeveralFilesNamesRegions(t *testing.T) {
 		"- [pin · db] wrap dependent writes\n" +
 		"- [×4 · api] RUF001 (weak evidence: 1 event)\n" +
 		"(+2 more pins for these files: `seamark lessons --file <path>` shows the full view of one file)\n" +
+		"(inspect the pins in `seamark tui`, Lessons › Pins, from a terminal; or read .seamark/lessons.yaml)\n" +
 		"(all raw findings: `seamark lessons --region <dir>` for a touched directory — a repeated mistake " +
 		"not covered above is worth proposing as a pin in .seamark/lessons.yaml)\n"
 	assert.Equal(t, want, b.String())

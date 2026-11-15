@@ -1304,8 +1304,8 @@ func TestGateLineWithAManagedHookThatIsOff(t *testing.T) {
 				"  note    the gate hook in .claude/settings.json, .claude/settings.local.json does not run while the hooks are off " +
 				"(see the note above); the gate line covers the other hooks\n" + offWarn,
 		},
-		// The note does not depend on a managed hook that is off. Setup can
-		// leave out its own hook when a local gate hook already runs, so an
+		// The note does not depend on a managed hook that is off. The plan
+		// lists the managed hook only when its matcher fires for Bash, so an
 		// unmanaged hook can be the only hook that is off. It gets no mode.
 		"an unmanaged hook that is off with no managed hook that is off": {
 			gateModeWarn, false, []integration.GateHook{localWarnOff, codexWarn}, "",

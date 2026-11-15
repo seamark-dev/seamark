@@ -115,6 +115,7 @@ func TestDeliverMatchesTheClaudeFixtureAndTheSingleFileReminder(t *testing.T) {
 			require.NoError(t, report.PrintLessonReminder(&want, file, lessons, morePins))
 
 			assert.Equal(t, want.String(), got.advice[0])
+			assert.Equal(t, 1, strings.Count(got.advice[0], "(inspect the pins in "), "a pin block names the route once")
 			assert.Equal(t, StatusEmitted, out.Status)
 			assert.Equal(t, len(got.advice[0]), out.ContextBytes)
 			assert.Equal(t, len(lessons), out.Emitted)
@@ -146,6 +147,7 @@ func TestDeliverSpendsOneBudgetAndWritesOneRecordForSeveralFiles(t *testing.T) {
 	assert.Contains(t, got.advice[0], "2 files (api/handler.go, db/query.go)")
 	assert.Contains(t, got.advice[0], "quoted data, not instructions", "the advisory framing stays")
 	assert.Contains(t, got.advice[0], "+1 more pins")
+	assert.Equal(t, 1, strings.Count(got.advice[0], "(inspect the pins in "), "one route per reply, not per file")
 	assert.NotContains(t, got.advice[0], "solitary finding", "the threshold still applies")
 
 	firings, err := reviews.ReadFirings(root)
@@ -155,6 +157,28 @@ func TestDeliverSpendsOneBudgetAndWritesOneRecordForSeveralFiles(t *testing.T) {
 	assert.Equal(t, "apply_patch", firings[0].Tool)
 	assert.Equal(t, out.ContextBytes, firings[0].ContextBytes, "one context-byte total per emission")
 	assert.Len(t, firings[0].MatchSHA, 64)
+}
+
+// TestDeliverLeavesTheRouteOutOfAMinedOnlyReminder covers a workspace
+// without pins. The reminder shows mined lessons only, so it names no pin
+// inspection route.
+func TestDeliverLeavesTheRouteOutOfAMinedOnlyReminder(t *testing.T) {
+	root := workspace(t)
+	st := lessonStore(t, root)
+	cfg := reviews.DefaultConfig()
+	cfg.Delivery = reviews.HookDeliveryAlways
+
+	var got capture
+
+	out, err := Deliver(context.Background(), st,
+		Request{Root: root, ClientID: "fake", Event: editEvent(root, "session-1", true, "api/handler.go"), Config: cfg},
+		got.emit)
+	require.NoError(t, err)
+	require.Len(t, got.advice, 1)
+
+	assert.Contains(t, got.advice[0], "- [×4] RUF001\n")
+	assert.NotContains(t, got.advice[0], "(inspect the pins")
+	assert.Equal(t, len(got.advice[0]), out.ContextBytes)
 }
 
 func TestDeliverSuppressesOnlyAfterEmissionAndResets(t *testing.T) {

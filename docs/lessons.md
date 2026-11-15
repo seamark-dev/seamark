@@ -707,8 +707,11 @@ one theme never spend two slots:
 - **The edit hook** (`lessons --hook`, wired by `seamark init`): per
   file, at most `pin_budget` pins (default 3, confidence-ranked, a
   `+N more` pointer for the rest) plus the file's recurring mined
-  lessons. Offline, silent when there is nothing to say. With opt-in
-  `hook_delivery: once-per-context`, already-delivered lessons stay silent
+  lessons. Offline, silent when there is nothing to say. A reminder
+  that shows a pin, or points at held-back pins, also names where to
+  inspect the pins: Lessons › Pins in `seamark tui`, or
+  `.seamark/lessons.yaml`. It names no command that changes a pin. With
+  opt-in `hook_delivery: once-per-context`, already-delivered lessons stay silent
   until Claude Code compacts the current session, and a pin that the context
   already has leaves the selection before the budget, so a later matching
   edit reaches the next pin. Only files inside the

@@ -86,6 +86,34 @@ model-boundary delivery.
 - **change_set for a file without symbols.** The file's entry now says
   that seamark indexes no symbols there, so its callers and effect reach
   are unknown.
+- **Bounded file outline.** `why <file>` lists each symbol in source
+  order with its `file:start-end` lines and a signature of at most 100
+  characters, with secrets redacted. It says how many symbols it shows,
+  as in `defines (40; showing 20)`, and names an `expand` ref for the
+  source of the first symbol it leaves out. A file with no indexed
+  symbol says so.
+- **Callers in the file outline.** `why <file>` now gives each shown
+  symbol that has callers its caller count, split into callers in other
+  non-test files and in test files, and up to three caller definitions,
+  at most 30 per outline. It names `why <symbol>` for the rest. A
+  function without an indexed caller says `none indexed`: the index has
+  no edge, which does not prove that nothing calls it.
+- **change_set caller unit.** The `called from outside` line now ends
+  with `— callers in other non-test files`, the count that `why <file>`
+  also shows.
+- **Pin inspection route.** A lesson reminder that shows a pin, from the
+  edit hook or `seamark lessons --file`, now says where to inspect the
+  pins: Lessons › Pins in `seamark tui`, or `.seamark/lessons.yaml`. It
+  offers no command that changes a pin.
+- **Signature redaction in why.** `why <symbol>` now redacts
+  secret-shaped text in its `sig` line, as the file outline does.
+- **Expand by symbol.** `expand <symbol>` no longer shows the line after
+  a declaration whose span ends at the start of that line.
+- **orient health header.** `orient` opens with the index time and age,
+  its freshness (current, stale, or unknown), the file coverage, and the
+  call-edge origin shares, read by the same rules as `seamark status`. A
+  missing or malformed coverage summary reads as unknown in both, and an
+  index time after the current time gives `orient` an unknown age.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if

@@ -109,10 +109,11 @@ seamark orient
 seamark doctor
 ```
 
-`orient` shows the main code areas, frequently called functions, files that
-often change together, and recent decisions. `doctor` reports setup problems
-and suggests corrective commands. An optional component that is missing may
-need attention only if you want to use it; read the individual findings.
+`orient` shows a short index health header, the main code areas, frequently
+called functions, files that often change together, and recent decisions.
+`doctor` reports setup problems and suggests corrective commands. An optional
+component that is missing may need attention only if you want to use it; read
+the individual findings.
 
 Ask your AI coding agent:
 
@@ -120,7 +121,9 @@ Ask your AI coding agent:
 > Which files often change together?
 
 For a specific file, run `seamark why path/to/file` or ask the agent to explain
-it using Seamark. A young repository may have little history to report.
+it using Seamark. It lists what the file defines, with line ranges and
+signatures. It also gives caller counts and a few caller definitions. A young
+repository may have little history to report.
 
 ## Start learning from past mistakes
 

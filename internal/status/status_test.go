@@ -3,20 +3,19 @@ package status
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/model"
@@ -120,6 +119,102 @@ func TestPrintSurfacesTheUncomfortableParts(t *testing.T) {
 	assert.Contains(t, out, "no gate hook installed")
 	assert.Contains(t, out, "clients        claude  no hooks installed; MCP registration not registered")
 	assert.Contains(t, out, "               codex   no hooks installed; MCP registration not registered")
+}
+
+// TestPrintNamesUnreadableCoverageUnknown proves that a summary the
+// indexer cannot write prints as unknown coverage. An empty object once
+// printed "0 of 0 seen files", which reads as a full and empty index.
+func TestPrintNamesUnreadableCoverageUnknown(t *testing.T) {
+	for _, summary := range []string{
+		`{}`,
+		`{"files_seen":3,"files_parsed":5,"parse_errors":0}`,
+	} {
+		st, root := seededStore(t)
+		require.NoError(t, st.SetMeta(store.MetaIndexSummary, summary))
+
+		s, err := Gather(st, root)
+		require.NoError(t, err)
+		assert.False(t, s.Coverage.Known, summary)
+
+		var b bytes.Buffer
+		Print(&b, s)
+
+		assert.Contains(t, b.String(),
+			"parsed         unknown — reindex with this seamark to record coverage\n", summary)
+		assert.NotContains(t, b.String(), "seen files", summary)
+	}
+}
+
+// TestPrintGivesAFutureTimeNoAge proves that a time after now prints as
+// unknown. A clock skew once printed a negative age such as "-5m".
+func TestPrintGivesAFutureTimeNoAge(t *testing.T) {
+	future := time.Now().Add(2 * time.Hour).Unix()
+	s := &Status{History: store.HistoryWindow{Decisions: 1, MedianTS: future, OldestTS: future}}
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	assert.Contains(t, b.String(), "history        1 decisions; evidence median age unknown (oldest unknown)\n")
+	assert.NotContains(t, b.String(), "age -", "no negative age")
+}
+
+// TestPrintGivesPastTimesAnAge proves that the history and review ages
+// use the clock of the report. Each time has a margin inside its unit,
+// so a slow run prints the same text.
+func TestPrintGivesPastTimesAnAge(t *testing.T) {
+	now := time.Now()
+	s := &Status{
+		History: store.HistoryWindow{
+			Decisions: 2,
+			MedianTS:  now.Add(-3*time.Hour - 30*time.Minute).Unix(),
+			OldestTS:  now.Add(-50 * time.Hour).Unix(),
+		},
+		ReviewsMinedAt: now.Add(-5*time.Minute - 30*time.Second).Unix(),
+	}
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	assert.Contains(t, b.String(), "history        2 decisions; evidence median age 3h (oldest 2d)\n")
+	assert.Contains(t, b.String(), "reviews        0 lessons from 0 review findings; last mined 5m ago\n")
+}
+
+// TestPrintNamesEveryOrigin proves that status prints every call-edge
+// origin. Only orient folds the origins after a limit, because its header
+// must stay short.
+func TestPrintNamesEveryOrigin(t *testing.T) {
+	s := &Status{EdgeOrigins: map[string]int{
+		model.OriginSamePackage: 40, model.OriginQualified: 20, model.OriginUniqueName: 15,
+		model.OriginSameClass: 10, "o1": 7, "o2": 5, "o3": 3,
+	}}
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	assert.Contains(t, b.String(), "symbols        0, 0 edges — call resolution "+
+		"40.0% same-package · 20.0% qualified · 15.0% unique-name · 10.0% same-class · "+
+		"7.0% o1 · 5.0% o2 · 3.0% o3 (100 calls)\n")
+	assert.NotContains(t, b.String(), "more origins")
+}
+
+// TestGatherAgreesWithTheSharedReader proves that status reads the health
+// facts through the reader that orient uses, so the two cannot disagree.
+func TestGatherAgreesWithTheSharedReader(t *testing.T) {
+	st, root := seededStore(t)
+	require.NoError(t, st.SetMeta(store.MetaIndexedAt, "1700000000"))
+	require.NoError(t, st.SetMeta(store.MetaIndexedState, "a fingerprint of another workspace"))
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+
+	h, err := indexhealth.Read(st, root, index.WorkspaceState)
+	require.NoError(t, err)
+
+	assert.Equal(t, h.Coverage, s.Coverage)
+	assert.Equal(t, h.IndexedAt, s.IndexedAt)
+	assert.Equal(t, h.Freshness, s.Freshness)
+	assert.Equal(t, FreshStale, s.Freshness)
+	assert.Equal(t, h.EdgeOrigins, s.EdgeOrigins)
 }
 
 func TestGatherReadsTheDeletedCount(t *testing.T) {
@@ -898,89 +993,4 @@ func TestGatherOffersInitWhileTheHooksAreOffAndNoGateHookIsInstalled(t *testing.
 	assert.Contains(t, b.String(),
 		"gate           policy mode warn; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n")
 	assert.NotContains(t, b.String(), "no gate hook runs for shell commands")
-}
-
-// TestOriginSummaryRoundsSharesToOneDecimal proves that the call-resolution
-// shares have one decimal and sum to 100.0. Truncated whole percents lost up
-// to one point per origin, so the old line summed to 98 on a real index.
-func TestOriginSummaryRoundsSharesToOneDecimal(t *testing.T) {
-	cases := []struct {
-		origins map[string]int
-		want    string
-	}{
-		{
-			map[string]int{"qualified": 1, "same-class": 1, "same-package": 1},
-			"33.4% qualified · 33.3% same-class · 33.3% same-package (3 calls)",
-		},
-		{
-			map[string]int{"unique-name": 103, "qualified": 99, "same-class": 99, "same-package": 99},
-			"25.8% unique-name · 24.8% qualified · 24.7% same-class · 24.7% same-package (400 calls)",
-		},
-		{
-			map[string]int{"qualified": 3907, "same-class": 2664, "same-package": 21597, "unique-name": 4888},
-			"65.3% same-package · 14.8% unique-name · 11.8% qualified · 8.1% same-class (33056 calls)",
-		},
-		{
-			// A count that rounds to zero prints 0.0%, so the line still sums to 100.0.
-			map[string]int{"same-package": 29999, "unique-name": 1},
-			"100.0% same-package · 0.0% unique-name (30000 calls)",
-		},
-		{map[string]int{}, "none"},
-		{map[string]int{"qualified": 0}, "none"},
-	}
-
-	for _, c := range cases {
-		assert.Equal(t, c.want, originSummary(c.origins))
-	}
-}
-
-// TestOriginSummarySharesAlwaysSumTo100 checks random maps from a fixed
-// seed. Each line must sum to 1000 tenths, and a share must never rise
-// along the display order.
-func TestOriginSummarySharesAlwaysSumTo100(t *testing.T) {
-	names := []string{"qualified", "same-class", "same-package", "unique-name", "parse", "other"}
-	share := regexp.MustCompile(`^(\d+)\.(\d)% \S+$`)
-	rng := rand.New(rand.NewPCG(1, 2))
-
-	for run := range 200 {
-		origins := map[string]int{}
-		calls := 0
-
-		for _, name := range names[:1+rng.IntN(len(names))] {
-			origins[name] = rng.IntN(50001)
-			calls += origins[name]
-		}
-
-		line := originSummary(origins)
-
-		if calls == 0 {
-			assert.Equal(t, "none", line, "run %d", run)
-
-			continue
-		}
-
-		body, ok := strings.CutSuffix(line, fmt.Sprintf(" (%d calls)", calls))
-		require.True(t, ok, "run %d: %q", run, line)
-
-		sum, prev := 0, 1001
-
-		for _, part := range strings.Split(body, " · ") {
-			m := share.FindStringSubmatch(part)
-			require.NotNil(t, m, "run %d: part %q", run, part)
-
-			whole, err := strconv.Atoi(m[1])
-			require.NoError(t, err)
-
-			tenth, err := strconv.Atoi(m[2])
-			require.NoError(t, err)
-
-			value := whole*10 + tenth
-			assert.LessOrEqual(t, value, prev, "run %d: %q", run, line)
-
-			sum += value
-			prev = value
-		}
-
-		assert.Equal(t, 1000, sum, "run %d: %q", run, line)
-	}
 }

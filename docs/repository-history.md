@@ -11,9 +11,11 @@ seamark index       # ~seconds; parse + mine history + propagate effects
 seamark orient      # the one-screen overview
 ```
 
-`orient` shows scale, module layout, the most-called production API,
-the change hubs (files whose edits rarely travel alone), and the recent
-decision trail. Then interrogate anything that looks load-bearing:
+`orient` shows scale, an index health header (index time and age,
+freshness, file coverage, and call-edge origin shares), module layout,
+the most-called production API, the change hubs (files whose edits
+rarely travel alone), and the recent decision trail. Then interrogate
+anything that looks load-bearing:
 
 Example output (counts and paths depend on the indexed checkout):
 
@@ -51,7 +53,8 @@ A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
 several methods share, or through a function value, gets no edge, and
 in Go neither does a common method name (`Close`, `Err`, …) from a file
-that neither shares nor imports its package, a call whose operand
+that neither shares the method's directory nor imports its package, a
+call whose operand
 starts at a package outside the repository, or an unexported method of
 another directory. When
 every caller edge is a guess, `why` lists them under
@@ -170,9 +173,9 @@ whose exit status the wrapper discards (`… || true`) reads
 
 Every safety-sensitive answer needs this context: **"no effects found"
 from a half-parsed index is not "no effects."** The same honesty runs
-through the other surfaces — `orient` warns when files failed to parse,
-and `seamark check` attaches a note when a changed file has changes
-outside every indexed symbol, so absence of evidence never silently reads as evidence of
+through the other surfaces — `orient` opens with the index health and
+warns when files failed to parse, and `seamark check` attaches a note
+when a changed file has changes outside every indexed symbol, so absence of evidence never silently reads as evidence of
 safety.
 
 Installation health is the other half:

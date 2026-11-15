@@ -1,13 +1,15 @@
 package report
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"path"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -30,20 +32,26 @@ const (
 // tools. The MCP orient tool and the seamark://orient resource call it.
 // The CLI calls OrientCLI instead.
 func Orient(w io.Writer, st *store.Store, root string) error {
-	return orient(w, st, root, orientFooterMCP)
+	return orient(w, st, root, orientFooterMCP, time.Now(), index.WorkspaceState)
 }
 
 // OrientCLI writes the same repo overview with the CLI footer, which
 // offers only routes that run in the CLI.
 func OrientCLI(w io.Writer, st *store.Store, root string) error {
-	return orient(w, st, root, orientFooterCLI)
+	return orient(w, st, root, orientFooterCLI, time.Now(), index.WorkspaceState)
 }
 
 // orient writes the repo overview an agent needs before its first edit:
 // scale, module layout, the load-bearing API, the files whose changes
 // travel in groups, and the recent decision trail. One screen, not a
 // tour — every extra line here is paid on every onboarding.
-func orient(w io.Writer, st *store.Store, root, footer string) error {
+//
+// now is the time that the index age uses, and fingerprint gives the
+// current workspace fingerprint for the freshness. The callers pass both,
+// so a test fixes the clock and the git state without a shared variable.
+func orient(w io.Writer, st *store.Store, root, footer string,
+	now time.Time, fingerprint func(string) string,
+) error {
 	stats, err := st.Stats()
 	if err != nil {
 		return err
@@ -57,24 +65,27 @@ func orient(w io.Writer, st *store.Store, root, footer string) error {
 		fmt.Fprintf(w, "         %d review lessons (run `seamark index --reviews` to refresh)\n", stats.Lessons)
 	}
 
-	// A compact coverage warning when files failed to parse: everything
-	// below describes only the code the index can see, and pretending
-	// otherwise would make incomplete answers look authoritative
-	// (RFC-001 §5.2). Details live in `seamark status`.
-	if summary, err := st.GetMeta(store.MetaIndexSummary); err == nil && summary != "" {
-		var cov struct {
-			ParseErrors int `json:"parse_errors"`
+	health, err := indexhealth.Read(st, root, fingerprint)
+	if err != nil {
+		return err
+	}
+
+	for _, line := range healthLines(health, now) {
+		fmt.Fprintf(w, "%s\n", line)
+	}
+
+	// The warning names the files that failed to parse. Every section
+	// below describes only the code that the index can see, so an agent
+	// must know that the answers are incomplete. Unknown coverage gets
+	// no warning, because the health header already names it.
+	if cov := health.Coverage; cov.Known && cov.ParseErrors > 0 {
+		noun := "files"
+		if cov.ParseErrors == 1 {
+			noun = "file"
 		}
 
-		if json.Unmarshal([]byte(summary), &cov) == nil && cov.ParseErrors > 0 {
-			noun := "files"
-			if cov.ParseErrors == 1 {
-				noun = "file"
-			}
-
-			fmt.Fprintf(w, "  WARN   %d %s failed to parse and are invisible below — `seamark status` has details\n",
-				cov.ParseErrors, noun)
-		}
+		fmt.Fprintf(w, "  WARN   %d %s failed to parse and are invisible below — `seamark status` has details\n",
+			cov.ParseErrors, noun)
 	}
 
 	if err := moduleSection(w, st); err != nil {
@@ -160,6 +171,82 @@ func orient(w io.Writer, st *store.Store, root, footer string) error {
 
 	return nil
 }
+
+// healthLines renders the three lines of the index health header: the
+// index time and the freshness, the file coverage, and the call-edge
+// origins. The facts and their rules come from indexhealth, which status
+// also uses. The header offers no `seamark index` route. That command
+// fails under the database of another repository, and the refresh notes
+// already name the next step.
+func healthLines(h indexhealth.Health, now time.Time) [3]string {
+	const label, indent = "  health ", "         "
+
+	indexed := "indexed unknown (no completed index run)"
+
+	if h.IndexedAt > 0 {
+		// UTC keeps the text the same in every local time zone.
+		stamp := time.Unix(h.IndexedAt, 0).UTC().Format("2006-01-02 15:04") + " UTC"
+
+		if age := indexhealth.Age(h.IndexedAt, now); age == "unknown" {
+			indexed = "indexed " + stamp + " (age unknown)"
+		} else {
+			indexed = "indexed " + stamp + " (" + age + " ago)"
+		}
+	}
+
+	var fresh string
+
+	switch h.Freshness {
+	case indexhealth.FreshCurrent:
+		fresh = "freshness current"
+	case indexhealth.FreshStale:
+		fresh = "freshness stale (the workspace changed since this index)"
+	default:
+		fresh = "freshness unknown (no git fingerprint)"
+	}
+
+	// The line names no parse errors, because the warning below names
+	// them.
+	coverage := "coverage unknown (no readable coverage summary) — `seamark status` has details"
+
+	if c := h.Coverage; c.Known {
+		coverage = fmt.Sprintf("parsed %d of %d seen files", c.FilesParsed, c.FilesSeen)
+
+		if c.FilesSkipped > 0 {
+			coverage += fmt.Sprintf(" · %d skipped by config", c.FilesSkipped)
+		}
+
+		switch {
+		case c.FilesDeleted == 1:
+			coverage += " · 1 tracked file deleted, not staged"
+		case c.FilesDeleted > 1:
+			coverage += fmt.Sprintf(" · %d tracked files deleted, not staged", c.FilesDeleted)
+		}
+	}
+
+	// Zero call edges is a valid index, for example one with no supported
+	// code. It prints a count, never a percent.
+	origins := "none indexed (0 calls)"
+
+	for _, n := range h.EdgeOrigins {
+		if n > 0 {
+			origins = indexhealth.OriginSummary(h.EdgeOrigins, orientOriginLimit)
+
+			break
+		}
+	}
+
+	return [3]string{
+		label + indexed + " · " + fresh,
+		indent + coverage,
+		indent + "call edges by origin: " + origins,
+	}
+}
+
+// orientOriginLimit is the most origins that the header names. The rest
+// fold into one entry, so a database with many origins keeps one short
+// line.
+const orientOriginLimit = 5
 
 // orientLessonLimit is the number of lessons that orient shows. A count
 // line names the rest, so the cap hides no lesson silently.

@@ -85,7 +85,10 @@ the hook file that setup manages for that client, the status gate line
 names no such client, and it says that no gate hook runs only when no
 gate hook runs. The client's warning in the status clients list then
 says that its hooks never run. When status cannot read that file, it
-names the client as unreadable on the gate line or under it. A run without `--client`
+names the client as unreadable on the gate line or under it. A
+`.seamark/policy.yaml` that fails to load changes this: while a warn or
+enforce gate hook runs, the status gate line names the broken policy
+and leaves the unreadable file out. A run without `--client`
 does not check `.claude/settings.local.json` for gate hooks. Its `gate`
 line says so and names `seamark doctor`, which checks that file. A verdict blocks only by
 exit status 2, so a gate hook that you wrap yourself must pass that

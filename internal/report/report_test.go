@@ -1820,7 +1820,7 @@ func TestChangeSetCountsOnlyCallersInOtherNonTestFiles(t *testing.T) {
 
 	t.Run("same-file, test and package callers do not count", func(t *testing.T) {
 		out := changeSet("store/store.go")
-		assert.Contains(t, out, "\n  called from outside    store.Save (1)\n")
+		assert.Contains(t, out, "\n  called from outside    store.Save (1) — callers in other non-test files\n")
 		assert.NotContains(t, out, "Snapshot.Err")
 		assert.NotContains(t, out, "roundCents")
 	})
@@ -1834,14 +1834,14 @@ func TestChangeSetCountsOnlyCallersInOtherNonTestFiles(t *testing.T) {
 	t.Run("rank and cut use the outside count", func(t *testing.T) {
 		out := changeSet("rank/rank.go")
 		assert.Contains(t, out,
-			"\n  called from outside    rank.A (5) · rank.B (4) · rank.C (2) · rank.D (2)\n")
+			"\n  called from outside    rank.A (5) · rank.B (4) · rank.C (2) · rank.D (2) — callers in other non-test files\n")
 	})
 
 	// n counts callers, not caller files. A file with two callers can feel
 	// the edit in two places.
 	t.Run("two callers in one file count as two", func(t *testing.T) {
 		out := changeSet("pair/pair.go")
-		assert.Contains(t, out, "\n  called from outside    pair.Save (2)\n")
+		assert.Contains(t, out, "\n  called from outside    pair.Save (2) — callers in other non-test files\n")
 	})
 }
 
@@ -1861,14 +1861,17 @@ func TestReminderTextIsStable(t *testing.T) {
 		"- [pin] reset pooled state before reuse\n" +
 		"- [×4] RUF001 (3 of 4 in this area)\n" +
 		"(+2 more pins for this area: `seamark lessons --file internal/api/handler.go`)\n" +
+		"(inspect the pins in `seamark tui`, Lessons › Pins, from a terminal; or read .seamark/lessons.yaml)\n" +
 		"(all raw findings: `seamark lessons --region internal/api` — a repeated mistake " +
 		"not covered above is worth proposing as a pin in .seamark/lessons.yaml)\n"
 	assert.Equal(t, want, b.String())
 
 	// A root-level file scopes its raw-findings hint to the file itself.
+	// A shown pin brings the route also when no pin is held back.
 	b.Reset()
 	require.NoError(t, PrintLessonReminder(&b, "main.go", lessons[:1], 0))
 	assert.Contains(t, b.String(), "`seamark lessons --region main.go`")
+	assert.Contains(t, b.String(), pinInspectRoute)
 	assert.NotContains(t, b.String(), "more pins")
 
 	// No lessons, no output: the hook stays silent.
@@ -2184,7 +2187,7 @@ func TestWhyNamesMissingCallers(t *testing.T) {
 
 			assert.Contains(t, out, "\ncallers (0)  — none resolved\n"+
 				"  a call by a method name that several methods share, or through a function value, gets no edge\n"+
-				"  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares nor imports its package\n"+
+				"  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares the method's directory nor imports its package\n"+
 				"  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
 		})
 	}

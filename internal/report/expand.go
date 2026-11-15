@@ -48,7 +48,11 @@ func Expand(w io.Writer, st *store.Store, root, ref string) error {
 		fmt.Fprintf(w, "note: %q also matched %s — expanding %s\n", ref, syms[1].FQN, sym.FQN)
 	}
 
-	return writeRegion(w, root, sym.File, sym.Span.StartLine, sym.Span.EndLine)
+	// The span is half-open, so the same conversion as the outline ref
+	// keeps the two routes on the same lines.
+	start, end := inclusiveLines(sym.Span)
+
+	return writeRegion(w, root, sym.File, start, end)
 }
 
 // expandLessonCap bounds one lessons expand, echoing expandLineCap's
