@@ -13,6 +13,7 @@ Mark: two channel marks with the safe passage between them. Ink #14181A, paper #
 | Mark on a light surface | `seamark-mark-on-light.svg` |
 | Mark on a dark surface | `seamark-mark-on-dark.svg` |
 | Mark, tinted by CSS `color` | `seamark-mark-mono.svg` (inline only) |
+| README console screenshot | `seamark-tui-lessons-pins.png` (Lessons › Pins in `seamark tui`, 2021x1270) |
 
 SVGs contain no text, so they render identically anywhere. Anything with the
 wordmark ships as PNG so the type does not fall back to the viewer's mono font.

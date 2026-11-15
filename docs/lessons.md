@@ -142,7 +142,8 @@ evidence confidence first and region specificity second — a weak pin
 must not hold a slot a strong one wants, and among equals a pin on the
 file beats its package beats a repo-wide `*` — with a `+N more` pointer
 for the rest. Deliberate views (`--file`, `why`, `orient`) apply no
-pin budget. `--file` shows every lesson that applies. `why` and
+pin budget. `--file` shows every pin that applies and at most 100 mined
+lessons, the most recurring first. `why` and
 `orient` show the first 6 lessons and a `+N more` line that names where
 the rest are: `seamark lessons --file <path>` for `why`;
 `.seamark/lessons.yaml` and `seamark lessons --list` for `orient`. Only the
@@ -301,7 +302,7 @@ proposed pins — distilled from review findings, awaiting YOUR decision
         When a struct is reused across runs, reset all accumulated
         state — not just the primary field — before reusing it.
 
-decide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; `--dismiss` remembers the no
+decide: `seamark lessons --apply p6` pins a chosen proposal; comma lists and ranges work too; `--dismiss` remembers the no
 ```
 
 ### The economics
@@ -458,16 +459,15 @@ drifted pin:
 ```text
   p65   train-serve-parity                 *
         fair — 2 event(s), fix, newest 65d
-        working — flagged 4× in ~120 region-commits before exposure; 0× in 31 since (fired 9×)
         regions now: workers
+        working — flagged 4× in ~120 region-commits before exposure; 0× in 31 since (fired 9×)
   p47   leak-exception-to-client           svc/api
         not landing — recurred 2× since exposure (fired 12×)
 
 not landing — p47 fires but the mistake recurs; escalation is yours:
 reword the note, raise the pin, or graduate it to a check
 
-retarget: `seamark lessons --retarget p65,p62,…` updates those pins to
-the recomputed regions (lessons.yaml and the ledger together)
+retarget: `seamark lessons --retarget p65,p62,…` updates those pins to the recomputed regions (lessons.yaml and the ledger together; needs distill.write, else it prints the block)
 ```
 
 `--retarget` is the upgrade path for pins distilled before region sets
@@ -573,6 +573,33 @@ file, without a diff. Their last line then names the refusal that the
 gate cannot lift, also for a link or a read-only file. They write only
 a result that still loads with every other pin intact.
 
+In a copied or moved checkout, the index still records the original
+root until an index run in the new checkout. `--apply`, `--retarget`,
+and `--prune` then refuse before they open the index. In a copy, the
+pin file lies under the recorded root and the ledger lies in this
+database, so one decision would change two repositories. After a move,
+the recorded root no longer exists, and a write would create it again.
+The refusal writes nothing, prints no change to make by hand, also
+with `distill.write` off, and exits 1. Run `seamark index` in the new
+checkout, then the command again.
+
+A copy:
+
+```text
+$ seamark lessons --apply p1
+seamark: the index of this checkout records another repository (<original>), so this command would change the pin file there and the ledger in this database; nothing changed; run `seamark index` in <copy> first
+```
+
+A move:
+
+```text
+$ seamark lessons --apply p1
+seamark: the index of this checkout records a directory that no longer exists (<original>), and a write would recreate it; nothing changed; run `seamark index` in <moved> first
+```
+
+A `--db` of another repository follows the rule that the
+[console guide](tui.md#versions-and-limits) gives for the same commands.
+
 ### Pins that a person writes
 
 You can write a pin by hand in `.seamark/lessons.yaml` or in the
@@ -647,7 +674,7 @@ change different things:
 | Prune | Removes a linked pin and marks its proposal superseded. | The pin file and the ledger. `seamark lessons --prune <ids>`, or `-` in Lessons › Pins. |
 | Mute | Hides mined lessons from selection; never pins. A rule matches in any case; a region matches that region and every region under it. A region with a trailing "/" (`api/`) matches only the regions under it, not `api` itself. | The `mute:` list. The mined lessons stay in the index, and `lessons --list` marks them `(muted)`. |
 | Threshold | The minimum mined recurrences. Mined lessons only; never pins. | The `threshold:` key. |
-| Budget | A cap on one injection or one answer. `pin_budget` caps the pins of one edit-hook or exploration injection (at most 8 lessons in total per injection). `change_budget` caps one `change_set` answer, one preparation, or one `check` advisory. The checks that a preparation lists have no budget. | The budget keys. `--file` and `why` apply no pin budget and keep every restatement. `--file` shows every lesson that applies. `why` shows at most 6 and counts the rest. |
+| Budget | A cap on one injection or one answer. `pin_budget` caps the pins of one edit-hook or exploration injection (at most 8 lessons in total per injection). `change_budget` caps one `change_set` answer, one preparation, or one `check` advisory. The checks that a preparation lists have no budget. | The budget keys. `--file` and `why` apply no pin budget and keep every restatement. `--file` shows every pin that applies and at most 100 mined lessons, the most recurring first. `why` shows at most 6 and counts the rest. |
 | Repetition | Once-per-context suppression of repeats in one agent context (`hook_delivery: once-per-context`). Edit hook only. The exploration hook keeps its own repeat state, which `hook_delivery` does not configure. | Delivery state in `.seamark/lessons-hook-state.json` (exploration: `.seamark/lessons-explore-state.json`); `change_set`, `lessons --prepare`, `check`, `why`, and the CLI views always show their selection. |
 | Sample | The local selection for explicit paths, before suppression, with no record. Console only: `s` in a pin review or a lessons Settings review. | Nothing: no file, no firing record, no delivery state. |
 
@@ -805,6 +832,11 @@ seamark lessons --set-mode enforce --pin <pin-ref> --check <check-id>
 seamark lessons --set-mode advisory --pin <pin-ref>
 ```
 
+In the console, Lessons › Pins edits the mode and the check of the
+cursor pin with `i`, opens a check definition with `M`, and runs the
+default verification with `V`
+([console guide](tui.md#check-definitions-and-verification)).
+
 A mode change validates the configuration and follows `distill.write`.
 With writing off it refuses the write and prints the change to make by
 hand. It does not install hooks or grant trust. The impact view states
@@ -845,8 +877,10 @@ unstaged tracked changes plus nonignored untracked files. Repeated
 `--file` selects only those paths, including ignored files. A relative
 path starts at the process directory. The result names the snapshot,
 configuration and checker versions, selection, omissions and freshness.
-Exit 0 means passed, no applicable checks, or no executable checks;
-exit 1 means incomplete; exit 2 means a violation. This does not certify
+Exit 0 means passed, no applicable checks, or no executable checks.
+Exit 1 means that a result is unknown, that the files changed during
+the check, or that the configuration is invalid. Exit 2 means a
+violation. This does not certify
 the whole repository against every lesson.
 
 Default selection leaves out exactly the untracked lesson-check audit,
@@ -868,6 +902,57 @@ stays qualified. Neither replaces the completion check above. Install
 checks separately with `seamark init --client claude --lesson-checks check`
 or the selected client's `enforce` mode. The advisory edit hook remains
 fail-open and never becomes a guard.
+
+### The lesson-check hooks
+
+`seamark init --lesson-checks check` installs two handlers beside the
+advisory edit hook: a baseline handler before each covered edit and a
+post-edit handler after it. `--lesson-checks enforce` installs the guard
+in place of the baseline handler. For Claude Code the handlers run on
+`Edit`, `Write`, and `MultiEdit`, and the post-edit handler also runs on
+`PostToolUseFailure`. For Codex they run on `apply_patch` with
+`--client codex`. Each handler reads one native event from stdin, makes
+no agent call, and uses no network.
+
+| Command | When it runs | What it does | Exit status |
+| --- | --- | --- | --- |
+| `seamark lessons --baseline --hook` | before an edit, in `check` mode | stores the state of the edited paths before the edit in `.seamark/checks/pending/`; it never denies the edit | always 0 |
+| `seamark lessons --guard --hook` | before an edit, in `enforce` mode | checks the proposed edit against the enforce pins, and stores the baseline when it allows the edit | 0 allows; 2 denies on a violation, on an edit that the check cannot evaluate, or on an invalid `lessons.yaml` |
+| `seamark lessons --verify --hook` | after an edit | reads the baseline of the same tool call, checks the result on disk against every `check` and `enforce` pin in scope, reports the findings to the agent, and deletes the baseline; it never undoes the edit | always 0 |
+
+A valid configuration without an enforce pin never makes the guard deny.
+A tool outside the covered list passes the guard, and its record names
+the cause. `--guard` and `--baseline` need `--hook` and combine with no
+other `lessons` mode. `--verify --hook` takes no `--file` and no
+`--json`, because it reads its paths from the event. Setup gives the
+baseline handler and the guard a 10 s hook timeout, and the post-edit
+handler 15 s.
+
+A deny prints the reason on stderr, as the gate does. This is a guard run
+on a Claude Code `Write` event that adds a forbidden marker:
+
+```text
+$ seamark lessons --guard --hook < write-event.json
+seamark: blocked by policy: lesson check no-debug (no-added-pattern/1) of pin e16bd32b164e "keep-debug-markers-out": Write adds a line matching the pattern at api/a.go:3: // DEBUG_ONLY
+$ echo $?
+2
+```
+
+The post-edit handler gives its findings to the agent as
+`additionalContext` in the hook reply on stdout. For the same edit, after
+the write, the text reads:
+
+```text
+seamark post-edit lesson checks after this Write call: violation (1 evaluated pin: 1 violation, 0 unknown; snapshot eab4d48e46b5)
+- violation: pin e16bd32b164e, check no-debug (no-added-pattern/1): api/a.go:3 adds a line that matches the pattern
+The files stay as written; repair the violation in a later edit. Check again: seamark lessons --verify --file <root>/api/a.go
+```
+
+Each run appends one record to `.seamark/lesson-check-audit.jsonl`: a
+`baseline`, `guard`, or `post-edit` record. The next handler run removes
+a pending baseline that is older than one hour, and writes a
+`baseline-discarded` record for it. The records hold digests of the session and
+tool-call IDs, never the raw IDs.
 
 The guard requests denial. A reviewed recording of Claude Code 2.1.319
 verifies native denial of `Write` and `Edit` in the root and child

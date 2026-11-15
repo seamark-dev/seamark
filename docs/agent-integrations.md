@@ -1,6 +1,7 @@
 # AI coding agent integrations
 
-This guide targets **v0.7.0 or newer**. See
+This guide targets **v0.9.0 or newer**; the lesson-check and
+exploration hooks are new in v0.9.0. See
 [installation](getting-started.md) to install or upgrade Seamark.
 
 Seamark connects to Claude Code and Codex in three ways:
@@ -99,6 +100,15 @@ instead, because a matcher edit would make the hook run twice. A Codex
 gate handler in the Claude Code form is the exception when `seamark init
 --client codex` removes it, because another gate handler stays: doctor
 names that setup run instead.
+
+Seamark reads a Codex matcher as the source of codex-cli 0.164.0 does.
+An empty matcher and `*` select every tool. A matcher of only ASCII
+letters, digits, `_`, and `|` is a list of exact tool names. Any other
+matcher is a regular expression that selects a tool when it matches a
+part of the name. Each rule tests the tool name and its aliases, so
+`Edit` and `Write` also select `apply_patch`, and `Agent` selects
+`spawn_agent`. Seamark uses Go regular expressions, and Codex uses Rust
+ones, so a rare pattern can compile or match differently in the two.
 
 Codex runs every matching handler, so two handlers of the seamark gate
 or lessons hook in `.codex/hooks.json` that run for one tool run that
@@ -722,9 +732,13 @@ stay out of the repository until sanitized: paths and identifiers are
 substituted consistently, and nothing that names an account is kept.
 
 An oracle file (`apply_patch_oracle.json`) records what the installed
-client binary did with each input offline, no model involved. The
-decoder is tested against it, and the native check reruns it on the
-installed version to catch parser drift.
+client binary did with each input offline, no model involved. Its path
+cases come from codex-cli 0.154.0: they record which paths a patch
+names. The decoder is tested against them, and the native check reruns
+them on the installed version to catch parser drift. Its content cases
+come from codex-cli 0.164.0: they record the exact before and after
+bytes of 29 patch shapes, and the native check replays them when the
+installed version is the recorded one.
 
 ### Tests and checks
 
@@ -748,8 +762,9 @@ provides no compatibility evidence.
 The Codex offline checks use a scratch `CODEX_HOME`. They configure trust
 only for the disposable test repository, leaving your project's trust
 unchanged. Scripted responses come from a local test server, not a model.
-`CLIENT=claude` runs the shell configuration checks; the Go native tests
-are Codex-only.
+`CLIENT=claude` runs the shell configuration checks and the Go tests
+that replay the reviewed Claude Code timing and guard recordings. The
+other Go native tests are Codex-only.
 
 The credential canary belongs to the offline check only; the smoke
 leaves the operator's environment as it is. The smoke's distillation
@@ -791,9 +806,12 @@ Before release:
   Claude Code 2.1.319 validates the 10-second pre-edit timeout for
   `Write` and `Edit` in both contexts, with a fail-open limit at 10
   seconds.
-- Add a verified Codex Update before/after oracle, then implement and
-  test content projection. Current conservative unknown/deny behavior
-  is not sufficient for the planned release.
+- Implement and test the content projection of a Codex Update patch.
+  The before/after oracle that it needs is recorded: 29 content cases
+  from codex-cli 0.164.0 in
+  `internal/integration/testdata/codex/apply_patch_oracle.json`. The
+  current conservative unknown/deny behavior is not sufficient for the
+  planned release.
 - **Done:** Refuse conflicting duplicate lesson-check handlers consistently
   across clients. Retain Codex strict refusal and add equivalent Claude
   handling.

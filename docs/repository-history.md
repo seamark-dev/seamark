@@ -115,8 +115,9 @@ The rename detection differs by reader:
 - The index freshness check reads `git diff HEAD` with git's default
   rename detection.
 
-The index freshness check, the `check` fallback, and the LSP server run
-git so that it does not rewrite `.git/index`. A change to file metadata
+The index freshness check, the `check` fallback, the console
+(`seamark tui`), and the LSP server run git so that it does not rewrite
+`.git/index`. A change to file metadata
 only, such as `touch`, then leaves the git index as it was, so a
 concurrent git command does not meet `.git/index.lock`.
 
@@ -129,7 +130,7 @@ seamark status          # or --json; also served as MCP resource seamark://statu
 Example status output:
 
 ```text
-workspace      current (schema v3)
+workspace      current (schema v8)
 parsed         703 of 832 seen files (98 skipped by config)
 symbols        1221, 2931 edges — call resolution 71.3% qualified · 23.9% same-package · 4.8% unique-name (1796 calls)
 effects        83 direct-sink symbols, 692 by propagation

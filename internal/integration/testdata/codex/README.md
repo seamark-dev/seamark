@@ -124,7 +124,9 @@ Files:
   entry was confirmed by the native run of 2026-09-21, the gate entry by
   no native run yet). A test compares the generated gate and lesson
   entries with this file, entry for entry. The adapter writes no
-  `description` key: the file can hold the user's own hooks too. The file holds no
+  `description` key, because the file can hold the user's own hooks too.
+  The fixture keeps a top-level `description`, as a user's file can, and
+  the test does not compare it. The file holds no
   `PostCompact` entry: the edit decoder names no resettable receiver, so
   a reset has nothing to clear, and setup installs no hook without an
   effect. The reset decoder exists and is tested against

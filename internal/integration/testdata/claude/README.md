@@ -23,7 +23,9 @@ Files:
   inside a subagent call") and `agent_type`. The fixture keeps the parent
   `session_id`, the case in which a session-keyed receiver hides advice
   from the subagent. The reference does not say which `session_id` a
-  subagent reports; a native parent/subagent run is pending.
+  subagent reports. The native run of Claude Code 2.1.300 shows it:
+  `native/hooks/009-PostToolUse.json`, a tool call inside a subagent,
+  carries the parent `session_id` beside `agent_id` and `agent_type`.
 - `pre_tool_use_edit_replace_all.json`, `pre_tool_use_multiedit_create.json`,
   `pre_tool_use_write_new_file.json`: **synthetic** inputs of the
   lesson-check guard decoder (`claude_guard.go`), shaped from the edit

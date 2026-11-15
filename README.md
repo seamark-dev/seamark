@@ -60,6 +60,7 @@ guide to go further.
 | Capability | What it gives you | Try it |
 | --- | --- | --- |
 | [**Lessons from your history**](#learn-from-your-repository) | Proposed lessons from fix commits and pull-request reviews, each linked to its evidence. You decide which to keep. | `seamark index --reviews` · [Lessons guide](docs/lessons.md) |
+| [**Executable lessons**](#executable-lessons) (new in v0.9.0) | A pin can carry a check that Seamark runs on the working tree, and optionally on each edit before the write. | `seamark lessons --verify` · [Lessons guide](docs/lessons.md#executable-lessons-advisory-check-and-enforce) |
 | **Reminders with the edit result** | Hooks give your AI coding agent an accepted lesson when it edits a matching file, also in a new session. The agent reads it with the edit result and can use it in the next step. | `seamark lessons --file path/to/file` · [Agent setup](docs/agent-integrations.md) |
 | [**Repository evidence over MCP**](#mcp-tools) | Five tools tell your agent where to start, why code is there, which files usually change together, and what a diff can reach. | `seamark orient` · [History and analysis](docs/repository-history.md) |
 | [**Agent skills**](#agent-skills) (optional) | Three skills tell your agent when to use Seamark to explore, plan, and review a change. | `seamark init --client claude --skills` · [Skills guide](skills/README.md) |
@@ -69,7 +70,8 @@ guide to go further.
 
 ## Get started
 
-These instructions are for **v0.7.0 or newer**.
+These instructions are for **v0.9.0 or newer**. Lesson preparation, the
+delivery reading, and the executable lesson checks are new in v0.9.0.
 
 Install the latest published version on macOS or Linux:
 
@@ -177,7 +179,7 @@ after the agent has constructed the call. For earlier guidance, use
 `seamark lessons --prepare path/to/file` before building a change.
 `seamark report --open` opens a local report of proposals and accepted lessons;
 `seamark lessons --stats` shows which reminders have been delivered.
-The Unreleased `seamark lessons --delivery` reading counts the delivery
+The `seamark lessons --delivery` reading counts the delivery
 records of each pin version in the audit logs. It counts a write as
 prevented only when a written deny on a natively verified path, today
 Claude Code `Write` and `Edit`, has no later execution record. These
@@ -200,6 +202,32 @@ checks. Browsing never writes; pin, settings and decision changes,
 fetches and agent runs start from a preview of their effects. Explicit
 verification runs at once and records its audit, not a pin change.
 [Workspace console →](docs/tui.md)
+
+### Executable lessons
+
+A pin can also carry a check that Seamark runs. You define the check by
+hand in `.seamark/lessons.yaml`: `forbid-path-change/1` reports any
+change in the scope of the pin, and `no-added-pattern/1` reports an
+added line that matches a Go regular expression. The mode of the pin
+says when the check runs. `advisory` only shows the guidance. `check`
+runs the check when you verify the work. `enforce` also checks each
+covered edit before the tool writes it.
+
+```bash
+seamark lessons --set-mode check --pin <pin-ref> --check <check-id>
+seamark lessons --verify                               # exit 2 on a violation
+seamark check --lessons                                # the policy check and the lesson checks
+seamark init --client claude --lesson-checks enforce   # install the hooks for each covered edit
+```
+
+`--set-mode` follows `distill.write`, as `--apply` does. A mode installs
+no hook: `seamark init --lesson-checks check` installs the hooks that
+check an edit after it runs, and `--lesson-checks enforce` also installs
+the guard that asks the client to deny a violation before the write. A recording verifies that
+native deny for Claude Code `Write` and `Edit` only, and the client lets
+the write run after its 10 s hook timeout. See
+[Executable lessons](docs/lessons.md#executable-lessons-advisory-check-and-enforce)
+for the scope, the exit codes, and the limits.
 
 ## Agent skills
 
@@ -275,7 +303,7 @@ diff policies are available, but they are not the main onboarding path.
 See the [policy guide](docs/policies.md) before enabling enforcement.
 
 Next, we plan to build on lesson delivery and the agent integration framework
-with unified hook management. This is future work, not part of v0.8.0.
+with unified hook management. This is future work, not part of v0.9.0.
 See [current status](docs/STATUS.md) and the [changelog](CHANGELOG.md).
 
 ## Privacy and local data
