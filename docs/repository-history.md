@@ -129,7 +129,7 @@ seamark status          # or --json; also served as MCP resource seamark://statu
 Example status output:
 
 ```text
-workspace      current (schema v3)
+workspace      current (schema v8)
 parsed         703 of 832 seen files (98 skipped by config)
 symbols        1221, 2931 edges — call resolution 71.3% qualified · 23.9% same-package · 4.8% unique-name (1796 calls)
 effects        83 direct-sink symbols, 692 by propagation

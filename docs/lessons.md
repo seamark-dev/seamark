@@ -301,7 +301,7 @@ proposed pins — distilled from review findings, awaiting YOUR decision
         When a struct is reused across runs, reset all accumulated
         state — not just the primary field — before reusing it.
 
-decide: `seamark lessons --apply p3,p7` (or a range: p1..p9) pins them; `--dismiss` remembers the no
+decide: `seamark lessons --apply p6` pins a chosen proposal; comma lists and ranges work too; `--dismiss` remembers the no
 ```
 
 ### The economics
@@ -458,16 +458,15 @@ drifted pin:
 ```text
   p65   train-serve-parity                 *
         fair — 2 event(s), fix, newest 65d
-        working — flagged 4× in ~120 region-commits before exposure; 0× in 31 since (fired 9×)
         regions now: workers
+        working — flagged 4× in ~120 region-commits before exposure; 0× in 31 since (fired 9×)
   p47   leak-exception-to-client           svc/api
         not landing — recurred 2× since exposure (fired 12×)
 
 not landing — p47 fires but the mistake recurs; escalation is yours:
 reword the note, raise the pin, or graduate it to a check
 
-retarget: `seamark lessons --retarget p65,p62,…` updates those pins to
-the recomputed regions (lessons.yaml and the ledger together)
+retarget: `seamark lessons --retarget p65,p62,…` updates those pins to the recomputed regions (lessons.yaml and the ledger together; needs distill.write, else it prints the block)
 ```
 
 `--retarget` is the upgrade path for pins distilled before region sets
