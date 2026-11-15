@@ -2496,7 +2496,7 @@ func TestCommonMethodNameNeedsNoEvidenceOutsideGo(t *testing.T) {
 
 // TestGoGuessSkipsChainsFromExternalImports proves that a Go call whose
 // operand chain starts at a package outside the repository gets no
-// name-match edge. Such a value has no repository method, so the guess
+// name-match edge. Such a value is rarely a repository value, so the guess
 // would give the caller false effects.
 func TestGoGuessSkipsChainsFromExternalImports(t *testing.T) {
 	root := t.TempDir()
@@ -3219,4 +3219,185 @@ func TestIndexRunKeepsGitIndex(t *testing.T) {
 		assert.False(t, sum.Skipped)
 		assertGitIndexKept(t, root, before, "the build")
 	})
+}
+
+// TestGoGuessSkipRulesDropSomeRealCalls pins the real calls that the Go skip
+// rules of the name-match tier drop. Each lost call compiles and reaches a
+// file write, yet gets no edge and no effect. The docs and the changelog list
+// these calls as a known limit. A change that restores one must update that
+// list, so this test fails until it does.
+func TestGoGuessSkipRulesDropSomeRealCalls(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"pin/pin.go": `package pin
+
+import "os"
+
+type Writer struct{}
+
+func (Writer) Replace(s string) { _ = os.WriteFile(s, nil, 0o600) }
+
+func (Writer) Render() { _ = os.WriteFile("r", nil, 0o600) }
+
+func Open() Writer { return Writer{} }
+
+type Level int
+
+func (Level) Describe() string { _ = os.WriteFile("d", nil, 0o600); return "" }
+
+type Flag struct{}
+
+func (*Flag) Set(v string) error { return os.WriteFile(v, nil, 0o600) }
+
+func (*Flag) String() string { return "" }
+
+type Sink struct{}
+
+func (Sink) Write(p []byte) (int, error) { return len(p), os.WriteFile("w", p, 0o600) }
+
+type Fault struct{}
+
+func (Fault) Error() string { _ = os.WriteFile("e", nil, 0o600); return "" }
+`,
+		"mk/mk.go": `package mk
+
+import "example.com/m/pin"
+
+func Writer() pin.Writer { return pin.Open() }
+`,
+		"field/types.go": `package field
+
+import "example.com/m/pin"
+
+type App struct{ W pin.Writer }
+`,
+		"field/run.go": `package field
+
+func (a App) RunM() { a.W.Replace("x") }
+`,
+		"promo/types.go": `package promo
+
+import "example.com/m/pin"
+
+type App struct{ pin.Writer }
+`,
+		"promo/run.go": `package promo
+
+func (a App) RunM() { a.Replace("x") }
+
+func RunF(a App) { a.Replace("x") }
+
+func Draw(a App) { a.Render() }
+`,
+		"local/run.go": `package local
+
+import "example.com/m/mk"
+
+func Var() { w := mk.Writer(); w.Replace("x") }
+
+func Chain() { mk.Writer().Replace("x") }
+`,
+		"local2/run.go": `package local2
+
+import (
+	"example.com/m/mk"
+	"example.com/m/pin"
+)
+
+var _ pin.Writer
+
+func Chain() { mk.Writer().Replace("x") }
+`,
+		"iface/run.go": `package iface
+
+func Run(r interface{ Replace(string) }) { r.Replace("x") }
+`,
+		"gen/run.go": `package gen
+
+import (
+	"cmp"
+	"slices"
+	"sync"
+
+	"example.com/m/pin"
+)
+
+func Or(p, q pin.Writer) { cmp.Or(p, q).Render() }
+
+func OrVar(p, q pin.Writer) { r := cmp.Or(p, q); r.Render() }
+
+func Max(ls []pin.Level) string { return slices.Max(ls).Describe() }
+
+func Once(load func() pin.Writer) { sync.OnceValue(load)().Render() }
+
+func Direct() { pin.Open().Render() }
+`,
+		"flagx/run.go": `package flagx
+
+import (
+	"flag"
+
+	"example.com/m/pin"
+)
+
+var _ pin.Flag
+
+func Set() { _ = flag.Lookup("x").Value.Set("v") }
+`,
+		"conv/run.go": `package conv
+
+import (
+	"errors"
+	"io"
+
+	"example.com/m/pin"
+)
+
+func Write(w pin.Sink, p []byte) { _, _ = io.Writer(w).Write(p) }
+
+func Text(err error) string { return errors.Unwrap(err).Error() }
+
+func Direct(w pin.Sink, p []byte) { _, _ = w.Write(p) }
+
+func Message(f pin.Fault) string { return f.Error() }
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	// The common-name rule drops a call from a file that neither shares the
+	// method's directory nor imports its package. The outside-package rule
+	// drops a chain that starts at a standard-library package, also when
+	// the chain returns a repository value. The conv file imports pin, so
+	// only the outside-package rule can drop its calls.
+	lost := []string{
+		"field.App.RunM", "promo.App.RunM", "promo.RunF", "local.Var", "local.Chain", "iface.Run",
+		"gen.Or", "gen.Max", "gen.Once", "flagx.Set", "conv.Write", "conv.Text",
+	}
+
+	for _, caller := range lost {
+		for callee := range calleeFQNs(t, st, caller) {
+			assert.NotContains(t, callee, "pin.", "%s keeps no edge into pin", caller)
+		}
+
+		assert.NotContains(t, effectTags(t, st, caller), "fs:write", "%s gets no effect of the dropped call", caller)
+	}
+
+	// The controls keep the guess: a name outside the common table, an
+	// import of the method's package, and a chain from a local variable or
+	// a repository package.
+	kept := map[string]string{
+		"promo.Draw":   "pin.Writer.Render",
+		"local2.Chain": "pin.Writer.Replace",
+		"gen.OrVar":    "pin.Writer.Render",
+		"gen.Direct":   "pin.Writer.Render",
+		"conv.Direct":  "pin.Sink.Write",
+		"conv.Message": "pin.Fault.Error",
+	}
+
+	for caller, callee := range kept {
+		assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, caller)[callee], "%s keeps its guess", caller)
+		assert.Contains(t, effectTags(t, st, caller), "fs:write", "%s keeps the effect", caller)
+	}
 }

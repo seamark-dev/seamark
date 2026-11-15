@@ -1247,6 +1247,7 @@ func TestGateLineWithAManagedHookThatIsOff(t *testing.T) {
 	// typed it.
 	const (
 		shared = ".claude/settings.json"
+		local  = ".claude/settings.local.json"
 		codex  = ".codex/hooks.json"
 		inline = ".codex/config.toml [hooks]"
 		broken = "mode: [broken\n"
@@ -1259,6 +1260,7 @@ func TestGateLineWithAManagedHookThatIsOff(t *testing.T) {
 
 	sharedEnforceOff := integration.GateHook{Path: shared, Mode: gateModeEnforce, Managed: true, HooksOff: true}
 	sharedWarnOff := integration.GateHook{Path: shared, Mode: gateModeWarn, Managed: true, HooksOff: true}
+	localWarnOff := integration.GateHook{Path: local, Mode: gateModeWarn, HooksOff: true}
 	codexWarn := integration.GateHook{Path: codex, Mode: gateModeWarn, Managed: true}
 	inlineWarn := integration.GateHook{Path: inline, Mode: gateModeWarn}
 	inlineEnforce := integration.GateHook{Path: inline, Mode: gateModeEnforce}
@@ -1292,6 +1294,24 @@ func TestGateLineWithAManagedHookThatIsOff(t *testing.T) {
 				"  note    .codex/config.toml [hooks] holds a definition that may also run a gate hook; setup cannot tell what it does\n" +
 				"  note    .codex/hooks.json runs its gate hook without --enforce: that hook follows .seamark/policy.yaml\n" +
 				"          instead; re-run with --gate-mode enforce to bake the flag into every selected client's gate hook\n",
+		},
+		// The note names each hook that is off by its path, also one that
+		// setup does not manage. Only the managed hook gets its mode,
+		// because setup does not know what the other hook does.
+		"an unmanaged hook that is off beside a running hook": {
+			gateModeWarn, false, []integration.GateHook{sharedWarnOff, localWarnOff, codexWarn}, "",
+			"  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n" +
+				"  note    the gate hook in .claude/settings.json, .claude/settings.local.json does not run while the hooks are off " +
+				"(see the note above); the gate line covers the other hooks\n" + offWarn,
+		},
+		// The note does not depend on a managed hook that is off. Setup can
+		// leave out its own hook when a local gate hook already runs, so an
+		// unmanaged hook can be the only hook that is off. It gets no mode.
+		"an unmanaged hook that is off with no managed hook that is off": {
+			gateModeWarn, false, []integration.GateHook{localWarnOff, codexWarn}, "",
+			"  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n" +
+				"  note    the gate hook in .claude/settings.local.json does not run while the hooks are off " +
+				"(see the note above); the gate line covers the other hooks\n",
 		},
 		"an unmanaged enforcing hook": {
 			gateModeWarn, false, []integration.GateHook{sharedWarnOff, inlineEnforce}, "",

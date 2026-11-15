@@ -568,10 +568,12 @@ func printGateLine(w io.Writer, root, gateMode string, requested bool, gateHooks
 
 	for i, hook := range gateHooks {
 		// A hook that the client does not run describes nothing that
-		// happens now. The off line and the note below name it. They give
-		// its mode only for a managed hook, because setup knows what that
-		// hook does once the hooks run. The sentences about the run still
-		// must not deny that hook.
+		// happens now. When another hook runs, the note below names each
+		// such hook by its path. When no other hook runs, the off line
+		// names no path, so an unmanaged hook that is off gets no line.
+		// Only a managed hook gets its mode, because setup knows what it
+		// does once the hooks run. The sentences about the run still must
+		// not deny that hook.
 		if hook.HooksOff {
 			if hook.Managed {
 				managedOff = true

@@ -75,7 +75,8 @@ model-boundary delivery.
   init and status gate lines no longer claim verdicts or blocking for a
   client whose hooks are off, Claude Code or Codex, and init says what
   the managed gate hook there does once the hooks run. Without a typed
-  `--gate-mode`, the init gate line no longer names that flag.
+  `--gate-mode`, the init gate line no longer says that
+  `--gate-mode enforce` reached no gate hook.
 - **why and orient count hidden lessons.** Both keep 6 lessons, now say
   how many more apply and where they are, and orient's header names pins
   apart from mined review feedback.
@@ -350,12 +351,20 @@ model-boundary delivery.
   rebuild resolves every call edge again: after a commit or an edit, a
   plain `seamark index` is enough. On an unchanged workspace that run
   skips and keeps the old edges, so run `seamark index --force` once;
-  you need not delete the index. Known limit: the common-name rule also
-  drops some real calls. A direct call on a field whose type comes from
-  a package that the calling file does not import, such as
-  `pair.Data.WriteString(…)`, loses its guessed edge. So does an
-  interface call into a package that the caller does not or cannot
-  import. The callee's effects then do not reach the caller.
+  you need not delete the index. Known limit: two of these rules also
+  drop real calls. The common-name rule drops one from a file that
+  neither shares the method's directory nor imports its package: an
+  interface call, or a call on a field, a promoted method, a local
+  variable, or a call result (`pair.Data.WriteString(…)`,
+  `mk.Writer().Replace(…)`). The outside-package rule drops a chain that
+  returns a repository value: a generic helper (`cmp.Or(p, q).Render()`,
+  `slices.Max(…)`, `sync.OnceValue(…)()`), a conversion to an outside
+  interface type (`io.Writer(w).Write(p)`), or an interface value that
+  the outside package holds or returns (`flag.Lookup(…).Value.Set(…)`,
+  `errors.Unwrap(err).Error()`). Go compiles no call that the
+  unexported-method rule drops. The callee's effects then do not reach
+  the caller. `why` names these rules only under `callers (0)`, so a
+  symbol that keeps other callers shows no sign of a dropped one.
 - **Pin outcome wording.** The lessons guide now says that a pin's first
   firing on any surface starts its outcome clock, also on
   `lessons --prepare`, `change_set`, or `check`, which name no receiver.

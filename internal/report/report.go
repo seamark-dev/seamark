@@ -141,7 +141,7 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string
 		fmt.Fprintf(w, "\ncallers (0)  — none resolved\n")
 		fmt.Fprintf(w, "  a call by a method name that several methods share, or through a function value, gets no edge\n")
 		fmt.Fprintf(w, "  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares nor imports its package\n")
-		fmt.Fprintf(w, "  in Go, a call on a value of a package outside the repository, or to an unexported method of another directory, gets no edge\n")
+		fmt.Fprintf(w, "  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
 	}
 
 	if len(callees) > 0 {
@@ -405,8 +405,9 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 }
 
 // LessonsForScope returns the lessons to surface for a file, after the
-// config's mute, pin, and threshold rules. why and `lessons --file` call
-// it. The edit hook selects with LessonsForFilesBudget, and tests hold
+// config's mute, pin, and threshold rules. `lessons --file` calls it. why
+// selects through scopeLessons with the same rules, because its header
+// also counts pins. The edit hook selects with LessonsForFilesBudget, and tests hold
 // the two equal for one file. orient applies the same config rules over
 // the whole repository through Config.Surface, without the covered-cluster
 // filter. A limit of 0 means no cap, so a deliberate view can list every

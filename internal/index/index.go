@@ -1788,10 +1788,14 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 //  4. any other          → the single same-family repo     (unique-name)
 //     selector call        symbol with that method name
 //
-// In Go, tier 4 skips two kinds of call. A call whose operand chain starts
-// at an import outside the repository gets no edge, because such a value
-// has no repository method. An unexported method of another directory
-// gets no edge, because Go allows no such call.
+// In Go, tier 4 skips three kinds of call. A call whose operand chain starts
+// at an import outside the repository gets no edge. Such a value is rarely
+// a repository value, and every measured guess there was false. A generic
+// helper such as cmp.Or can return one, and that real call then loses its
+// edge. A common standard-library method name gets no edge when the calling
+// file neither shares the method's directory nor imports its package (see
+// uniqueMethod). An unexported method of another directory gets no edge,
+// because Go allows no such call.
 //
 // Known limitation: resolution is purely syntactic, so a local variable
 // shadowing an import alias (or sharing a method name) can produce a wrong
@@ -1894,8 +1898,11 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 			}
 		case g.externalRoot(imports, call.Root):
 			// The operand chain starts at a package outside the repository,
-			// as strings.NewReplacer(…).Replace(s) does. Its value has no
-			// repository method, so the call gets no edge.
+			// as strings.NewReplacer(…).Replace(s) does. Such a value is
+			// rarely a repository value, and every measured guess there was
+			// false, so the call gets no edge. A generic helper such as
+			// cmp.Or can return a repository value, and that real call then
+			// loses its edge.
 		default:
 			// Complex operand (x.db.Close()): only the guess tier applies.
 			dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)

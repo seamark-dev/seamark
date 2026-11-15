@@ -77,9 +77,15 @@ line stating the effective behavior; a selected client whose hook still
 runs without the flag is named under that line. When a client's settings
 turn its hooks off (Claude Code `disableAllHooks: true`, Codex
 `[features] hooks = false`), the `gate` line of init and status leaves
-that client's gate hook out and says that it does not run. Init also
-says what the managed gate hook there does once the hooks run, for
-example that it carries `--enforce`. A run without `--client`
+that client's gate hook out. Init says that the hook does not run: on
+the gate line when no other gate hook runs, else in a note under it.
+Init also says what the managed gate hook there does once the hooks
+run, for example that it carries `--enforce`. When status can read
+the hook file that setup manages for that client, the status gate line
+names no such client, and it says that no gate hook runs only when no
+gate hook runs. The client's warning in the status clients list then
+says that its hooks never run. When status cannot read that file, it
+names the client as unreadable on the gate line or under it. A run without `--client`
 does not check `.claude/settings.local.json` for gate hooks. Its `gate`
 line says so and names `seamark doctor`, which checks that file. A verdict blocks only by
 exit status 2, so a gate hook that you wrap yourself must pass that

@@ -51,9 +51,9 @@ A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
 several methods share, or through a function value, gets no edge, and
 in Go neither does a common method name (`Close`, `Err`, …) from a file
-that neither shares nor imports its package, a call on a value of a
-package outside the repository, or an unexported method of another
-directory. When
+that neither shares nor imports its package, a call whose operand
+starts at a package outside the repository, or an unexported method of
+another directory. When
 every caller edge is a guess, `why` lists them under
 `callers (N)  — N resolved by name match only`. The
 `usually changed with` lines carry **function grain**: `· mostly …`
@@ -227,18 +227,29 @@ table in [Data flow](data-flow.md).
   the repository (`strings.NewReplacer(…).Replace`), an unexported
   method of another directory, and a common standard-library method
   name (`Err`, `Replace`, `Close`, …) when the calling file neither
-  shares the method's directory nor imports its package.
+  shares the method's directory nor imports its package. An index built
+  before these Go rules keeps its old edges until an index run rebuilds
+  it; on an unchanged workspace, `seamark index --force` rebuilds it at
+  once.
 - A method call whose name several methods share, a call that these Go
   rules skip, and a call through a function value get no edge. `why`
   then can print `callers (0)  — none resolved` for a method that has
   real callers, so read the call sites before you treat it as unused.
-  The common-name rule drops some real calls too: a direct call on a
-  field whose type comes from a package that the calling file does not
-  import, such as `pair.Data.WriteString(…)`, and an interface call
-  into a package that the caller does not or cannot import. Effects
-  never cross a dropped edge, so the callee's effects do not reach the
-  caller. Each index run that rebuilds applies the change; on an
-  unchanged workspace, `seamark index --force` applies it at once.
+  Two of these Go rules also drop real calls. The common-name rule drops
+  one from a file that neither shares the method's directory nor imports
+  its package: an interface call, or a call on a field, a promoted
+  method, a local variable, or a call result
+  (`pair.Data.WriteString(…)`, `mk.Writer().Replace(…)`). The
+  outside-package rule drops a chain that returns a repository value: a
+  generic helper (`cmp.Or(p, q).Render()`, `slices.Max(…)`,
+  `sync.OnceValue(…)()`), a conversion to an outside interface type
+  (`io.Writer(w).Write(p)`), or an interface value that the outside
+  package holds or returns (`flag.Lookup(…).Value.Set(…)`,
+  `errors.Unwrap(err).Error()`). Go compiles no call that the
+  unexported-method rule drops. Effects never cross a dropped edge, so
+  the callee's effects do not reach the caller. `why` names these rules
+  only under `callers (0)`, so a symbol that keeps other callers shows
+  no sign of a dropped one.
 - A local variable shadowing an import alias can produce a wrong edge
   (declared as such via its origin label). Scope tracking is future work.
 - Python's DB-API has no syntactic read/write split, so `cursor.execute`

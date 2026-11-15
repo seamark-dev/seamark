@@ -843,6 +843,44 @@ func TestGatherCountsNoGateHookWhileTheClaudeHooksAreOff(t *testing.T) {
 	assert.NotContains(t, b.String(), "enforce (claude hook carries")
 }
 
+// TestPrintGateLeavesOutAClientWhoseHooksAreOff proves what status says
+// about a client whose hooks are off while another client's gate hook runs.
+// The gate line names only the hook that runs, and the clients list carries
+// the warning. The docs describe these lines, so they must not drift.
+func TestPrintGateLeavesOutAClientWhoseHooksAreOff(t *testing.T) {
+	st, root := seededStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"disableAllHooks": true, "hooks":{"PreToolUse":[`+
+			`{"matcher":"Bash","hooks":[{"type":"command","command":"`+inspecttest.Binary+` gate --enforce --hook"}]}]}}`), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"),
+		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
+			`{"type":"command","command":"`+inspecttest.Binary+` gate --hook --client codex"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.Named("current").Write(root))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	out := b.String()
+
+	var gateLine string
+
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(line, "gate ") {
+			gateLine = line
+		}
+	}
+
+	assert.Equal(t, "gate           hook installed (codex); policy mode warn governs", gateLine)
+	assert.NotContains(t, gateLine, "claude")
+	assert.NotContains(t, out, "no gate hook runs for shell commands")
+	assert.Contains(t, out, "disableAllHooks: true turns off the project hooks of Claude Code")
+}
+
 func TestGatherOffersInitWhileTheHooksAreOffAndNoGateHookIsInstalled(t *testing.T) {
 	// Both clients turn their hooks off, and neither has a gate hook. No
 	// hook is present to call inert, so the line keeps the setup route.
