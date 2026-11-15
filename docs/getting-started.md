@@ -1,7 +1,9 @@
 # Install Seamark and connect your AI coding agent
 
-This guide targets **v0.7.0 or newer**. Upgrade an older installation before
-using `--client` and the Codex hook integration.
+This guide targets **v0.9.0 or newer**. `--client` and the Codex hook
+integration need v0.7.0 or newer. Lesson preparation
+(`lessons --prepare`), the delivery reading (`lessons --delivery`), and
+the executable lesson checks need v0.9.0.
 
 ## Requirements
 

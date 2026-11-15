@@ -1,6 +1,7 @@
 # AI coding agent integrations
 
-This guide targets **v0.7.0 or newer**. See
+This guide targets **v0.9.0 or newer**; the lesson-check and
+exploration hooks are new in v0.9.0. See
 [installation](getting-started.md) to install or upgrade Seamark.
 
 Seamark connects to Claude Code and Codex in three ways:

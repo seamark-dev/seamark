@@ -69,7 +69,8 @@ guide to go further.
 
 ## Get started
 
-These instructions are for **v0.7.0 or newer**.
+These instructions are for **v0.9.0 or newer**. Lesson preparation, the
+delivery reading, and the executable lesson checks are new in v0.9.0.
 
 Install the latest published version on macOS or Linux:
 
@@ -177,7 +178,7 @@ after the agent has constructed the call. For earlier guidance, use
 `seamark lessons --prepare path/to/file` before building a change.
 `seamark report --open` opens a local report of proposals and accepted lessons;
 `seamark lessons --stats` shows which reminders have been delivered.
-The Unreleased `seamark lessons --delivery` reading counts the delivery
+The `seamark lessons --delivery` reading counts the delivery
 records of each pin version in the audit logs. It counts a write as
 prevented only when a written deny on a natively verified path, today
 Claude Code `Write` and `Edit`, has no later execution record. These
@@ -275,7 +276,7 @@ diff policies are available, but they are not the main onboarding path.
 See the [policy guide](docs/policies.md) before enabling enforcement.
 
 Next, we plan to build on lesson delivery and the agent integration framework
-with unified hook management. This is future work, not part of v0.8.0.
+with unified hook management. This is future work, not part of v0.9.0.
 See [current status](docs/STATUS.md) and the [changelog](CHANGELOG.md).
 
 ## Privacy and local data
