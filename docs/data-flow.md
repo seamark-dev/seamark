@@ -27,12 +27,16 @@ optional.
 | Pin apply (`lessons --apply`) | your decision | `.seamark/lessons.yaml` (committed file; only with `distill.write`) | none | yes |
 | Gate hook (`gate --hook`) | the agent's proposed command | verdict on stdout/exit code; `.seamark/audit.jsonl` | none | audit entries |
 | Edit hook (`lessons --hook`, for Codex `lessons --hook --client codex`) | edited file paths and provider session ID; for Codex the `apply_patch` text, which is parsed for paths and never run | lesson reminders on stdout | none | firing log plus optional local, digest-only once-per-context state |
+| Exploration hook (`lessons --explore --hook`, Claude Code only) | the Claude Code `Read` event: the read path and the session and agent IDs | lesson advice on stdout | none | firing log; repeat state in `.seamark/lessons-explore-state.json`, which holds digests only, and whose entries expire after 24 hours |
+| Lesson-check hooks (`lessons --baseline --hook`, `--guard --hook`, `--verify --hook`) | the edit event, the edited files, and `lessons.yaml` | a deny reason on stderr (guard); findings for the agent on stdout (post-edit) | none | pending baselines in `.seamark/checks/pending/`: owner-only, ignored by git, and holding the content of an edited file before the edit when a `no-added-pattern/1` pin scopes it; in `.seamark/lesson-check-audit.jsonl`, one `guard`, `baseline`, or `post-edit` record per run, plus one `baseline-discarded` record for each pending baseline that the sweep of the run removes because it expired or is not a regular file; the records hold digests of the session and call IDs, never the raw IDs |
+| Lesson verification (`lessons --verify`, `check --lessons`) | the working tree against `HEAD`, and `lessons.yaml` | terminal | none | one `verify` record in `.seamark/lesson-check-audit.jsonl`, plus one `baseline-discarded` record for each pending baseline that the sweep after the run removes |
 | Diff check (`seamark check`) | a unified diff | verdict; audit entry; index self-repair, which stops the check on any failure (exit 1, no audit entry); under enforce, input that names no changed file blocks with exit 2 and writes no audit entry | none | `audit.jsonl` entries, refreshed index, a `lessons-audit.jsonl` firing record when the advisory prints lessons, and with `--lessons` a `lesson-check-audit.jsonl` record |
 | MCP server (`seamark mcp`) | `index.db` | the connected agent client, per request (stdio) | none | index self-repair; when it fails, reads open with a one-line note and `check` refuses. The `check` tool writes what `seamark check` writes: `audit.jsonl`, `lessons-audit.jsonl`, and with `lesson_checks` `lesson-check-audit.jsonl`. `change_set` writes a `lessons-audit.jsonl` firing record. One `.seamark/mcp-usage.jsonl` line per tool call: tool, client name, time, latency, reply size, result; no argument, path, symbol, query, or reply text. The file stays local |
 | LSP server (`seamark lsp`) | source tree, `index.db` | your editor (stdio) | none | refreshed index, except under a database of another repository, where a save does not rebuild |
 | Report (`seamark report`) | `index.db` | a local HTML file | none | yes |
 | State (`seamark state export`/`import`) | durable tables in `index.db` | a local JSON file, or stdin/stdout | none | yes |
 | Health (`seamark status`, `seamark doctor`) | `index.db`, local config, PATH | terminal | none | no |
+| Console (`seamark tui`) | `index.db`, the configuration files, local git | terminal | GitHub API through `gh` for a review refresh; your agent CLI for a distillation or a trigger extraction | only after a preview or a confirmation: `index.db` (index build, evidence refresh, proposals, ledger), `lessons.yaml` (pins, lesson settings, check definitions), `config.yaml` (settings), and the files that `init` writes (integration setup). `V` writes at once, with no preview: the records of a lesson verification in `lesson-check-audit.jsonl` |
 
 Every command that runs `git` or `gh` does so as a subprocess of the
 local binary you already trust; seamark adds no credentials of its own
@@ -119,8 +123,11 @@ delivery scopes; evidence coverage is the fallback when none verify.
 | `mcp` | no | the connected agent client | index refresh, `audit.jsonl`, `lessons-audit.jsonl` and `lesson-check-audit.jsonl` (check tool), `lessons-audit.jsonl` (change_set), `mcp-usage.jsonl` | no | no | no |
 | `lsp` | no | your editor | index refresh | no | no | no |
 | `state` | no | no | `index.db` on import | no | no | no |
+| `tui` | review refresh via `gh` | distillation and trigger extraction: your agent CLI | after a preview: `index.db` and the setup files; at once on `V`: `lesson-check-audit.jsonl` | after a preview: `lessons.yaml`, `config.yaml`, and the files that `init` writes | no | `gh` auth for a review refresh; the agent CLI's own |
 | `status` | no | no | no | no | no | no |
 | `doctor` | no | no | no | no | no | no |
 
-See [threat-model.md](threat-model.md) for what these boundaries do and
-do not defend against.
+[Configuration](configuration.md#verification-state-and-report-inputs)
+gives the bounds, the retention, and the privacy of the lesson-check
+files. See [threat-model.md](threat-model.md) for what these boundaries
+do and do not defend against.
