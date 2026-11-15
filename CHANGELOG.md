@@ -112,7 +112,8 @@ model-boundary delivery.
 - **orient health header.** `orient` opens with the index time and age,
   its freshness (current, stale, or unknown), the file coverage, and the
   call-edge origin shares, read by the same rules as `seamark status`. A
-  missing or malformed coverage summary reads as unknown in both.
+  missing or malformed coverage summary reads as unknown in both, and an
+  index time after the current time gives `orient` an unknown age.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if

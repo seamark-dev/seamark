@@ -230,6 +230,29 @@ func TestAge(t *testing.T) {
 	assert.Equal(t, "unknown", Age(now.Add(time.Minute).Unix(), now), "a future time has no age")
 }
 
+// TestAgeFutureBoundary proves that every time after now gives
+// "unknown", also a time so far ahead that time.Unix overflows. Before
+// the fix, math.MaxInt64 printed the duration limit as "106751d".
+func TestAgeFutureBoundary(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+
+	for _, tc := range []struct {
+		name string
+		ts   int64
+		want string
+	}{
+		{"now", now.Unix(), "0m"},
+		{"one second before now", now.Unix() - 1, "0m"},
+		{"one second after now", now.Unix() + 1, "unknown"},
+		{"far future", math.MaxInt64 / 2, "unknown"},
+		{"int64 limit", math.MaxInt64, "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, Age(tc.ts, now))
+		})
+	}
+}
+
 // TestParseUnix proves that only an integer in the int64 range gives a
 // time. An out-of-range value gives 0 and not the int64 limit, which
 // would print as a time in a far year.

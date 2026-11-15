@@ -203,11 +203,16 @@ func Age(ts int64, now time.Time) string {
 		return "unknown"
 	}
 
+	// The check compares seconds before time.Unix runs. time.Unix
+	// overflows for a time far in the future, and the overflow gives a
+	// time in the past, so the age prints the duration limit in days.
+	if ts > now.Unix() {
+		return "unknown"
+	}
+
 	d := now.Sub(time.Unix(ts, 0))
 
 	switch {
-	case d < 0:
-		return "unknown"
 	case d < time.Hour:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	case d < 48*time.Hour:
