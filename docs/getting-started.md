@@ -109,10 +109,11 @@ seamark orient
 seamark doctor
 ```
 
-`orient` shows the main code areas, frequently called functions, files that
-often change together, and recent decisions. `doctor` reports setup problems
-and suggests corrective commands. An optional component that is missing may
-need attention only if you want to use it; read the individual findings.
+`orient` shows a short index health header, the main code areas, frequently
+called functions, files that often change together, and recent decisions.
+`doctor` reports setup problems and suggests corrective commands. An optional
+component that is missing may need attention only if you want to use it; read
+the individual findings.
 
 Ask your AI coding agent:
 

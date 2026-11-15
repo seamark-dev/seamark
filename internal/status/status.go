@@ -8,12 +8,9 @@
 package status
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
@@ -30,28 +28,16 @@ import (
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// Coverage is the persisted file summary of the last index run.
-type Coverage struct {
-	// Known is false for indexes written before coverage was persisted;
-	// the renderer must say "unknown", never imply full coverage.
-	Known        bool `json:"known"`
-	FilesSeen    int  `json:"files_seen,omitempty"`
-	FilesParsed  int  `json:"files_parsed,omitempty"`
-	FilesSkipped int  `json:"files_skipped,omitempty"`
-	// FilesDeleted counts the tracked paths that git status shows as
-	// deleted and not staged. It is not a parse error. An index from
-	// before this field reads 0.
-	FilesDeleted int `json:"files_deleted"`
-	ParseErrors  int `json:"parse_errors"`
-}
+// Coverage is the persisted file summary of the last index run. The
+// indexhealth package owns its rules, so status and orient read one
+// summary in the same way.
+type Coverage = indexhealth.Coverage
 
 // Freshness states: whether the index still matches the workspace.
 const (
-	FreshCurrent = "current"
-	FreshStale   = "stale"
-	// FreshUnknown means no fingerprint exists to compare — a non-git
-	// workspace has no cheap change signal. Unknown is not current.
-	FreshUnknown = "unknown"
+	FreshCurrent = indexhealth.FreshCurrent
+	FreshStale   = indexhealth.FreshStale
+	FreshUnknown = indexhealth.FreshUnknown
 )
 
 // Status is the gathered health report, JSON-ready.
@@ -164,32 +150,27 @@ func gather(reg *integration.Registry, st *store.Store, root string) (*Status, e
 func gatherAs(reg *integration.Registry, st *store.Store, root string,
 	self integration.BinaryIdentity,
 ) (*Status, error) {
-	// Unknown until a recorded fingerprint proves otherwise: a non-git
-	// workspace has no change signal, and unknown must not read as
-	// current.
-	s := &Status{Freshness: FreshUnknown}
+	// The shared reader gives the facts that orient also shows. A
+	// recorded fingerprint decides the freshness; without one it stays
+	// unknown, because a non-git workspace has no change signal.
+	health, err := indexhealth.Read(st, root, index.WorkspaceState)
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Status{
+		IndexedAt:   health.IndexedAt,
+		Freshness:   health.Freshness,
+		Coverage:    health.Coverage,
+		EdgeOrigins: health.EdgeOrigins,
+	}
 
 	for _, m := range []struct {
 		key string
 		fn  func(v string)
 	}{
 		{store.MetaSchemaVersion, func(v string) { s.SchemaVersion = v }},
-		{store.MetaIndexedAt, func(v string) { s.IndexedAt = parseUnix(v) }},
-		{store.MetaReviewsMinedAt, func(v string) { s.ReviewsMinedAt = parseUnix(v) }},
-		{store.MetaIndexSummary, func(v string) {
-			var c Coverage
-			if json.Unmarshal([]byte(v), &c) == nil {
-				c.Known = true
-				s.Coverage = c
-			}
-		}},
-		{store.MetaIndexedState, func(v string) {
-			if v == index.WorkspaceState(root) {
-				s.Freshness = FreshCurrent
-			} else {
-				s.Freshness = FreshStale
-			}
-		}},
+		{store.MetaReviewsMinedAt, func(v string) { s.ReviewsMinedAt = indexhealth.ParseUnix(v) }},
 	} {
 		v, err := st.GetMeta(m.key)
 		if err != nil {
@@ -207,10 +188,6 @@ func gatherAs(reg *integration.Registry, st *store.Store, root string,
 	}
 
 	s.Symbols, s.Edges, s.Lessons = stats.Symbols, stats.Edges, stats.Lessons
-
-	if s.EdgeOrigins, err = st.EdgeOriginCounts(); err != nil {
-		return nil, err
-	}
 
 	if s.EffectsDirect, s.EffectsPropagated, err = st.EffectOriginCounts(); err != nil {
 		return nil, err
@@ -279,6 +256,9 @@ func (s *Status) NoteRecordedRoot(recorded, notice string) {
 // The root line comes first, because it says which repository every
 // later line describes.
 func Print(w io.Writer, s *Status) {
+	// One clock read per report, so every age on it uses the same now.
+	now := time.Now()
+
 	if s.rootNotice != "" {
 		fmt.Fprintf(w, "root           %s\n", s.rootNotice)
 	}
@@ -316,13 +296,13 @@ func Print(w io.Writer, s *Status) {
 	}
 
 	fmt.Fprintf(w, "symbols        %d, %d edges — call resolution %s\n",
-		s.Symbols, s.Edges, originSummary(s.EdgeOrigins))
+		s.Symbols, s.Edges, indexhealth.OriginSummary(s.EdgeOrigins, 0))
 	fmt.Fprintf(w, "effects        %d direct-sink symbols, %d by propagation\n",
 		s.EffectsDirect, s.EffectsPropagated)
 
 	if s.History.Decisions > 0 {
 		fmt.Fprintf(w, "history        %d decisions; evidence median age %s (oldest %s)\n",
-			s.History.Decisions, age(s.History.MedianTS), age(s.History.OldestTS))
+			s.History.Decisions, indexhealth.Age(s.History.MedianTS, now), indexhealth.Age(s.History.OldestTS, now))
 	} else {
 		fmt.Fprintf(w, "history        none mined — co-change and decisions are empty\n")
 	}
@@ -335,7 +315,7 @@ func Print(w io.Writer, s *Status) {
 	switch {
 	case s.ReviewsMinedAt > 0:
 		fmt.Fprintf(w, "reviews        %d lessons from %d review findings; last mined %s ago\n",
-			s.Lessons, reviewFindings, age(s.ReviewsMinedAt))
+			s.Lessons, reviewFindings, indexhealth.Age(s.ReviewsMinedAt, now))
 	case reviewFindings > 0 || s.Lessons > 0:
 		// Mined by a seamark from before the freshness stamp existed:
 		// the evidence is real, its age is not knowable.
@@ -574,105 +554,4 @@ func unknownGate(g integration.GateSummary) string {
 	}
 
 	return strings.Join(parts, "; ")
-}
-
-// originSummary renders the call-edge confidence distribution as
-// percentages of the CALL edges (the only kind with resolution
-// uncertainty), largest share first. Each share has one decimal, and the
-// shares sum to 100.0 (see shareTenths).
-func originSummary(origins map[string]int) string {
-	calls := 0
-	for _, n := range origins {
-		calls += n
-	}
-
-	if calls == 0 {
-		return "none"
-	}
-
-	keys := make([]string, 0, len(origins))
-	for k := range origins {
-		keys = append(keys, k)
-	}
-
-	sort.Slice(keys, func(i, j int) bool {
-		if origins[keys[i]] != origins[keys[j]] {
-			return origins[keys[i]] > origins[keys[j]]
-		}
-
-		return keys[i] < keys[j] // deterministic order for equal counts
-	})
-
-	counts := make([]int, len(keys))
-	for i, k := range keys {
-		counts[i] = origins[k]
-	}
-
-	tenths := shareTenths(counts, calls)
-
-	parts := make([]string, 0, len(keys))
-	for i, k := range keys {
-		parts = append(parts, fmt.Sprintf("%d.%d%% %s", tenths[i]/10, tenths[i]%10, k))
-	}
-
-	return strings.Join(parts, " · ") + fmt.Sprintf(" (%d calls)", calls)
-}
-
-// shareTenths turns counts into shares in tenths of a percent that sum to
-// exactly 1000. Truncation alone loses up to one tenth per origin, so the
-// printed line would not sum to 100.0. The largest-remainder method gives
-// the lost tenths to the counts with the largest remainders. Equal
-// remainders go in slice order, which is the display order, so a share
-// never rises along the line. Integer math keeps the result exact on
-// every platform. The caller passes counts in display order and their
-// sum as total, which must be above zero.
-func shareTenths(counts []int, total int) []int {
-	tenths := make([]int, len(counts))
-	order := make([]int, len(counts))
-	given := 0
-
-	for i, n := range counts {
-		tenths[i] = n * 1000 / total
-		given += tenths[i]
-		order[i] = i
-	}
-
-	remainder := func(i int) int { return counts[i] * 1000 % total }
-
-	sort.SliceStable(order, func(a, b int) bool {
-		return remainder(order[a]) > remainder(order[b])
-	})
-
-	for _, i := range order[:1000-given] {
-		tenths[i]++
-	}
-
-	return tenths
-}
-
-// age renders a Unix timestamp as a coarse relative age.
-func age(ts int64) string {
-	if ts <= 0 {
-		return "unknown"
-	}
-
-	d := time.Since(time.Unix(ts, 0))
-
-	switch {
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 48*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
-}
-
-func parseUnix(v string) int64 {
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0
-	}
-
-	return n
 }

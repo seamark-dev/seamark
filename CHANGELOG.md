@@ -109,6 +109,10 @@ model-boundary delivery.
   secret-shaped text in its `sig` line, as the file outline does.
 - **Expand by symbol.** `expand <symbol>` no longer shows the line after
   a declaration whose span ends at the start of that line.
+- **orient health header.** `orient` opens with the index time and age,
+  its freshness (current, stale, or unknown), the file coverage, and the
+  call-edge origin shares, read by the same rules as `seamark status`. A
+  missing or malformed coverage summary reads as unknown in both.
 - **Background and filtered hooks.** Setup, doctor, and status no longer
   report enforcement for a gate or lesson guard that runs in the
   background (async, Claude Code asyncRewake) or that a Claude Code if
