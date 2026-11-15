@@ -101,6 +101,10 @@ model-boundary delivery.
 - **change_set caller unit.** The `called from outside` line now ends
   with `— callers in other non-test files`, the count that `why <file>`
   also shows.
+- **Pin inspection route.** A lesson reminder that shows a pin, from the
+  edit hook or `seamark lessons --file`, now says where to inspect the
+  pins: Lessons › Pins in `seamark tui`, or `.seamark/lessons.yaml`. It
+  offers no command that changes a pin.
 - **Signature redaction in why.** `why <symbol>` now redacts
   secret-shaped text in its `sig` line, as the file outline does.
 - **Expand by symbol.** `expand <symbol>` no longer shows the line after

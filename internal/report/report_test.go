@@ -1861,14 +1861,17 @@ func TestReminderTextIsStable(t *testing.T) {
 		"- [pin] reset pooled state before reuse\n" +
 		"- [×4] RUF001 (3 of 4 in this area)\n" +
 		"(+2 more pins for this area: `seamark lessons --file internal/api/handler.go`)\n" +
+		"(inspect the pins in `seamark tui`, Lessons › Pins, from a terminal; or read .seamark/lessons.yaml)\n" +
 		"(all raw findings: `seamark lessons --region internal/api` — a repeated mistake " +
 		"not covered above is worth proposing as a pin in .seamark/lessons.yaml)\n"
 	assert.Equal(t, want, b.String())
 
 	// A root-level file scopes its raw-findings hint to the file itself.
+	// A shown pin brings the route also when no pin is held back.
 	b.Reset()
 	require.NoError(t, PrintLessonReminder(&b, "main.go", lessons[:1], 0))
 	assert.Contains(t, b.String(), "`seamark lessons --region main.go`")
+	assert.Contains(t, b.String(), pinInspectRoute)
 	assert.NotContains(t, b.String(), "more pins")
 
 	// No lessons, no output: the hook stays silent.

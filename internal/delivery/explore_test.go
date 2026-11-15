@@ -142,9 +142,7 @@ func TestExploreEmitsToTheActualReceiver(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, edit.advice, 1)
 
-	editLines := strings.Split(edit.advice[0], "\n")
-	exploreLines := strings.Split(advice[0], "\n")
-	assert.Equal(t, editLines[1:len(editLines)-2], exploreLines[1:len(exploreLines)-1],
+	assert.Equal(t, lessonLines(edit.advice[0]), lessonLines(advice[0]),
 		"the same lessons in the same list format")
 
 	records := firings(t, identity)
@@ -817,4 +815,19 @@ func TestResetAdvancesEditAndExploreGenerationsIndependently(t *testing.T) {
 			assert.Equal(t, newer, raw, "%s: never overwritten", broken)
 		}
 	})
+}
+
+// lessonLines returns the lesson lines of a reminder. It picks them by
+// their prefix, because the edit reminder adds route lines after them
+// and the exploration advice does not.
+func lessonLines(advice string) []string {
+	var lines []string
+
+	for line := range strings.SplitSeq(advice, "\n") {
+		if strings.HasPrefix(line, "- [") {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
 }

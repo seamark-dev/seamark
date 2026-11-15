@@ -158,7 +158,7 @@ func PrintEditReminder(w io.Writer, files []string, lessons []model.Lesson, more
 
 	for _, l := range lessons {
 		tag := fmt.Sprintf("×%d", l.Occurrences)
-		if l.Reviewer == "pinned" {
+		if isPinLine(l) {
 			tag = "pin"
 		}
 
@@ -170,6 +170,8 @@ func PrintEditReminder(w io.Writer, files []string, lessons []model.Lesson, more
 		fmt.Fprintf(w, "(+%d more pins for these files: `seamark lessons --file <path>` "+
 			"shows the full view of one file)\n", morePins)
 	}
+
+	writePinRoute(w, lessons, morePins)
 
 	fmt.Fprint(w, "(all raw findings: `seamark lessons --region <dir>` for a touched directory — "+
 		"a repeated mistake not covered above is worth proposing as a pin in .seamark/lessons.yaml)\n")

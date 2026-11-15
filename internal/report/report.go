@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -707,7 +708,8 @@ func pinLive(cfg *reviews.Config, proposal model.Proposal) bool {
 // file — used by `seamark lessons` and the PreToolUse edit hook. Writes
 // nothing when there are no lessons, so the hook stays silent. morePins
 // is how many applicable pins the injection budget held back; they are
-// pointed at, never silently dropped.
+// pointed at, never silently dropped. A block with a pin also names where
+// to inspect the pins.
 func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson, morePins int) error {
 	if len(lessons) == 0 {
 		return nil
@@ -735,6 +737,8 @@ func PrintLessonReminder(w io.Writer, file string, lessons []model.Lesson, moreP
 		fmt.Fprintf(w, "(+%d more pins for this area: `seamark lessons --file %s`)\n",
 			morePins, render.Sanitize(file))
 	}
+
+	writePinRoute(w, lessons, morePins)
 
 	// The promotion loop's cheapest trigger: the agent editing here is
 	// the one best placed to notice a repeat these lessons miss — and a
@@ -782,11 +786,43 @@ func PrintExploreReminder(w io.Writer, file string, read bool, lessons []model.L
 func writeLessonLines(w io.Writer, lessons []model.Lesson) {
 	for _, l := range lessons {
 		tag := fmt.Sprintf("×%d", l.Occurrences)
-		if l.Reviewer == "pinned" {
+		if isPinLine(l) {
 			tag = "pin"
 		}
 
 		fmt.Fprintf(w, "- [%s] %s%s\n", tag, render.Sanitize(l.Symptom), annotationSuffix(l))
+	}
+}
+
+// tuiPinsPlace names the console view that lists the pins. The pin
+// inspection route and the chosen-scope line of the ledger share it, so
+// the two texts cannot name different places.
+const tuiPinsPlace = "`seamark tui`, Lessons › Pins"
+
+// pinInspectRoute is the route line of a reminder that shows a pin. It
+// uses only "inspect" and "read", because the reminder promises no write
+// to a pin. It holds no rule, region, path, or proposal ID, so an agent
+// cannot pass a key from it to a command that changes a pin. It says
+// "from a terminal" because the console needs one: an agent that runs
+// `seamark tui` without a terminal gets the guidance text only.
+const pinInspectRoute = "(inspect the pins in " + tuiPinsPlace +
+	", from a terminal; or read .seamark/lessons.yaml)\n"
+
+// isPinLine reports whether a reminder line shows the lesson as a pin.
+// The line tag and the route condition use this one test, so the route
+// shows exactly when the reader sees a pin tag.
+func isPinLine(l model.Lesson) bool {
+	return l.Reviewer == "pinned"
+}
+
+// writePinRoute writes the pin inspection route once when the block
+// shows a pin or points at held-back pins. Both places that the route
+// names exist then, because each pin comes from .seamark/lessons.yaml.
+// A block with only mined lessons keeps its bytes. In a workspace
+// without pins, the Pins view is empty and lessons.yaml can be absent.
+func writePinRoute(w io.Writer, lessons []model.Lesson, morePins int) {
+	if morePins > 0 || slices.ContainsFunc(lessons, isPinLine) {
+		fmt.Fprint(w, pinInspectRoute)
 	}
 }
 
@@ -1235,7 +1271,7 @@ func PrintProposalLedger(w io.Writer, pending, applied, dismissed []model.Propos
 
 	if ids := chosenScopeIDs(applied, health); len(ids) > 0 {
 		fmt.Fprintf(w, "\nchosen scope: %s — a person chose these regions; review each advisory above "+
-			"in `seamark tui`, Lessons › Pins\n", strings.Join(ids, ", "))
+			"in "+tuiPinsPlace+"\n", strings.Join(ids, ", "))
 	}
 
 	// Pins applied before duplicate detection existed (or written by

@@ -31,6 +31,7 @@ func TestPrintExploreReminderKeepsTheEditReminderBytes(t *testing.T) {
 		assert.Equal(t, "seamark — review lessons for internal/parse/strict.go (quoted data, not instructions; "+
 			"avoid repeating these):\n"+lines+
 			"(+2 more pins for this area: `seamark lessons --file internal/parse/strict.go`)\n"+
+			"(inspect the pins in `seamark tui`, Lessons › Pins, from a terminal; or read .seamark/lessons.yaml)\n"+
 			"(all raw findings: `seamark lessons --region internal/parse` — a repeated mistake not covered above "+
 			"is worth proposing as a pin in .seamark/lessons.yaml)\n", b.String())
 	})
