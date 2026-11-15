@@ -53,7 +53,8 @@ A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
 several methods share, or through a function value, gets no edge, and
 in Go neither does a common method name (`Close`, `Err`, …) from a file
-that neither shares nor imports its package, a call whose operand
+that neither shares the method's directory nor imports its package, a
+call whose operand
 starts at a package outside the repository, or an unexported method of
 another directory. When
 every caller edge is a guess, `why` lists them under

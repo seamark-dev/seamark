@@ -2187,7 +2187,7 @@ func TestWhyNamesMissingCallers(t *testing.T) {
 
 			assert.Contains(t, out, "\ncallers (0)  — none resolved\n"+
 				"  a call by a method name that several methods share, or through a function value, gets no edge\n"+
-				"  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares nor imports its package\n"+
+				"  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares the method's directory nor imports its package\n"+
 				"  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
 		})
 	}
