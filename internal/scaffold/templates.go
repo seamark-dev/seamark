@@ -27,7 +27,8 @@ const starterPolicy = `# Seamark gate policy (RFC-001 §5.5). Evaluated before a
 #   effect   list of tags the command classifies to ("infra:mutate" …)
 #   command  {name, argv, raw, is_push, is_force_push, target_branch, dynamic}
 #   env      {is_prod, is_dev, detected: {VAR: value…}}
-#   diff     {files, effects}   (populated by ` + "`seamark check`" + `)
+#   diff     {files, effects, unindexed_files}   (populated by ` + "`seamark check`" + `;
+#            unindexed_files is a count, not a list)
 
 ` + policyModeLineWarn + `
 

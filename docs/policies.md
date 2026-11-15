@@ -50,6 +50,30 @@ require_approval:
     message: database write against a production environment
 ```
 
+Every rule sees the same four inputs. `gate` fills `effect`, `command`,
+and `env`, and gives `diff` its empty values. `check` fills `diff` and
+`env`, and gives `effect` and `command` their empty values. Every key is
+always present, because CEL stops a rule with an error when it reads a
+missing key.
+
+| Input | Value |
+| --- | --- |
+| `effect` | the effect tags of the command, as a sorted list of strings |
+| `command.name` | the base name of the first command whose name is known |
+| `command.argv` | the arguments of that command, its name included |
+| `command.raw` | the command line as the gate received it |
+| `command.is_push`, `command.is_force_push` | whether the commands include a `git push`, and a forced one |
+| `command.target_branch` | the branch of that push, when the gate can name it |
+| `command.dynamic` | true when a command name comes from a variable, or when an interpreter payload cannot be read |
+| `env.detected` | a map of the variables that `environment.detect` names and the process has set |
+| `env.is_prod`, `env.is_dev` | `is_prod` is true when a detected value, in lower case, contains one of `environment.prod_markers`; `is_dev` is its opposite |
+| `diff.files` | the changed paths of the diff, as a sorted list |
+| `diff.effects` | the effect tags that the diff can reach, as a sorted list |
+| `diff.unindexed_files` | a number, not a list: the count of changed files with a change outside any indexed symbol (see below) |
+
+A rule over the count compares a number, for example
+`when: 'diff.unindexed_files > 0'`.
+
 `seamark init` wires the gate into `.claude/settings.json` as a
 PreToolUse hook on Bash (`seamark gate --hook` — the payload is read
 natively, no jq). `seamark init --client codex` wires the same gate into
