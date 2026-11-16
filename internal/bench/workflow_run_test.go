@@ -476,29 +476,97 @@ func TestRunWorkflowRejectsBadConfigurationBeforeStarting(t *testing.T) {
 	}
 }
 
+// The hanging agent sleeps for hangingAgentSleep when nothing kills it. A run
+// must return within hangingAgentBound after the interrupt. The bound is half
+// the sleep, so a return inside it proves the kill on a loaded host too.
+const (
+	hangingAgentSleep = 60 * time.Second
+	hangingAgentBound = 30 * time.Second
+)
+
+// writeHangingAgent writes an agent script that creates marker and then
+// sleeps. The script replaces its shell with sleep, so one kill ends the
+// session and no child process keeps the output pipes open.
+func writeHangingAgent(t *testing.T, marker string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "hang.sh")
+	script := fmt.Sprintf("#!/bin/sh\ntouch '%s'\nexec sleep %d\n", marker, int(hangingAgentSleep/time.Second))
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+
+	return path
+}
+
+// interruptOnAgentStart returns a context that it cancels as soon as marker
+// exists. The wait follows a file that the agent writes, not a fixed delay.
+// So the interrupt lands inside the session after any length of fixture
+// setup. The returned function gives the cancel time and fails the test
+// when the agent never started.
+func interruptOnAgentStart(t *testing.T, marker string) (ctx context.Context, interruptedAt func() time.Time) {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	fired := make(chan time.Time, 1)
+
+	go func() {
+		defer close(fired)
+
+		for {
+			if _, err := os.Stat(marker); err == nil {
+				fired <- time.Now()
+				cancel()
+
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+
+	return ctx, func() time.Time {
+		t.Helper()
+
+		// The run can return before the agent starts, for example on a
+		// setup error. This cancel then ends the wait.
+		cancel()
+
+		at, ok := <-fired
+		require.True(t, ok, "the agent never started, so the interrupt did not reach a session")
+
+		return at
+	}
+}
+
 // TestRunWorkflowTreatsInterruptedSessionAsCancellation checks that Ctrl-C
 // during a session ends the run as a cancellation: no row for the killed
 // session, no stop reason, no error.
 func TestRunWorkflowTreatsInterruptedSessionAsCancellation(t *testing.T) {
-	hang := filepath.Join(t.TempDir(), "hang.sh")
-	require.NoError(t, os.WriteFile(hang, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755))
+	marker := filepath.Join(t.TempDir(), "agent-started")
+	hang := writeHangingAgent(t, marker)
 	out := filepath.Join(t.TempDir(), "rows.jsonl")
+	ctx, interruptedAt := interruptOnAgentStart(t, marker)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	time.AfterFunc(300*time.Millisecond, cancel)
-
-	started := time.Now()
 	sum, err := RunWorkflow(ctx, WorkflowConfig{
 		Trials: 2, Instance: SchemaSyncCochangeInstance(), AgentArgv: SameAgentArgv([]string{hang}),
 		SeamarkBin: "/opt/seamark/bin/seamark", Out: out, Model: "claude-test",
 		RequireStructuredResult: true, RequireExpectedInit: true,
 	})
+	returned := time.Now()
+
 	require.NoError(t, err, "an interrupt is a stop, not a failure")
 	assert.Empty(t, sum.Rows, "a killed session is not a measurement")
 	assert.Empty(t, sum.StoppedReason)
 	assert.NoFileExists(t, out)
-	assert.Less(t, time.Since(started), 5*time.Second)
+
+	// The clock starts at the interrupt, so fixture setup and fingerprinting
+	// on a loaded host do not count against the bound.
+	assert.Less(t, returned.Sub(interruptedAt()), hangingAgentBound)
 }
 
 func TestRunWorkflowStopsCleanlyOnCancel(t *testing.T) {

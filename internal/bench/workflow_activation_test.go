@@ -233,24 +233,42 @@ func TestRunActivationRejectsBadInput(t *testing.T) {
 // interrupt during a session ends the run cleanly, with no row for the
 // killed session.
 func TestRunActivationTreatsInterruptedSessionAsCancellation(t *testing.T) {
-	hang := filepath.Join(t.TempDir(), "hang.sh")
-	require.NoError(t, os.WriteFile(hang, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755))
+	marker := filepath.Join(t.TempDir(), "agent-started")
+	hang := writeHangingAgent(t, marker)
 	out := filepath.Join(t.TempDir(), "activation.jsonl")
+	ctx, interruptedAt := interruptOnAgentStart(t, marker)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	time.AfterFunc(300*time.Millisecond, cancel)
-
-	started := time.Now()
 	sum, err := RunActivation(ctx, WorkflowConfig{
 		Instance: SchemaSyncCochangeInstance(), AgentArgv: SameAgentArgv([]string{hang}),
 		SeamarkBin: "/opt/seamark/bin/seamark", Out: out,
 	}, testPromptSet())
+	returned := time.Now()
+
 	require.NoError(t, err, "an interrupt is a stop, not a failure")
 	assert.Empty(t, sum.Rows)
 	assert.Empty(t, sum.StoppedReason)
 	assert.NoFileExists(t, out)
-	assert.Less(t, time.Since(started), 5*time.Second)
+
+	// The clock starts at the interrupt, so fixture setup and fingerprinting
+	// on a loaded host do not count against the bound.
+	assert.Less(t, returned.Sub(interruptedAt()), hangingAgentBound)
+}
+
+// TestRunActivationStopsCleanlyOnCancel checks that an interrupt before the
+// first session ends the run with no row, no file, and no error.
+func TestRunActivationStopsCleanlyOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	out := filepath.Join(t.TempDir(), "activation.jsonl")
+	sum, err := RunActivation(ctx, WorkflowConfig{
+		Instance: SchemaSyncCochangeInstance(), AgentArgv: SameAgentArgv([]string{noopAgent(t)}),
+		SeamarkBin: "/opt/seamark/bin/seamark", Out: out,
+	}, testPromptSet())
+	require.NoError(t, err, "a cancelled run reports partial results, not an error")
+	assert.Empty(t, sum.Rows)
+	assert.Empty(t, sum.StoppedReason)
+	assert.NoFileExists(t, out)
 }
 
 // validActivationRow is a report-ready activation row for one prompt of
