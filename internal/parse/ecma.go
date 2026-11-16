@@ -49,10 +49,15 @@ const ecmaTSExtraQuery = `
 (abstract_class_declaration name: (type_identifier) @class.name) @class.decl
 `
 
-// ecmaCallQuery finds call sites; run against a single declaration node.
+// ecmaCallQuery finds call sites and private member references; run
+// against a single declaration node. A private member access (X.#name)
+// is a reference also when no call wraps it, such as a value passed on
+// or a getter read. callsIn records a call of a private member through
+// the member pattern only, so each access gives one reference.
 const ecmaCallQuery = `
 (call_expression function: (identifier) @call.bare)
 (call_expression function: (member_expression) @call.selector)
+(member_expression property: (private_property_identifier)) @member.private
 `
 
 // EcmaExtractor extracts symbols, imports, and call references from
@@ -161,6 +166,7 @@ func (e *EcmaExtractor) Extract(relPath string, src []byte) (*FileResult, error)
 		case caps["class.decl"] != nil:
 			// The class carries the calls of its body outside its methods:
 			// field initializers, static blocks, and decorators of members.
+			// It also references each of its private methods and accessors.
 			if atModuleTopLevel(caps["class.decl"]) {
 				e.addDecl(res, src, moduleKey, caps["class.decl"], caps["class.name"], "", model.KindType, true)
 			}
@@ -238,7 +244,9 @@ func (e *EcmaExtractor) addBinding(res *FileResult, src []byte, moduleKey string
 	e.addDecl(res, src, moduleKey, spec, nameNode, "", kind, true)
 }
 
-// callsIn runs the call query inside one declaration.
+// callsIn runs the call query inside one declaration. A class also
+// references each private method and accessor that it declares (see
+// classPrivateMethodRefs).
 func (e *EcmaExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 	qc := tree_sitter.NewQueryCursor()
 	defer qc.Close()
@@ -263,8 +271,11 @@ func (e *EcmaExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 					Line: uint32(node.StartPosition().Row) + 1,
 				})
 			case "call.selector":
+				// The member pattern records a call of a private member.
+				// A private name must not reach the receiver, qualifier
+				// or guess path of a plain method call.
 				prop := node.ChildByFieldName("property")
-				if prop == nil {
+				if prop == nil || prop.Kind() == "private_property_identifier" {
 					continue
 				}
 
@@ -286,7 +297,119 @@ func (e *EcmaExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 				}
 
 				out = append(out, ref)
+			case "member.private":
+				if ref, ok := privateMemberRef(node, decl, src); ok {
+					out = append(out, ref)
+				}
 			}
+		}
+	}
+
+	return append(out, classPrivateMethodRefs(decl, src)...)
+}
+
+// privateMemberRef returns the private reference of one member access
+// (X.#name) for the symbol decl. ok is false when the class that
+// declares the name is not the class of decl. Such a class is a nested
+// class, a class expression or a class inside a function. Its members
+// are no symbols, and the symbol that carries the access carries the
+// code of that class too.
+func privateMemberRef(access, decl *tree_sitter.Node, src []byte) (CallRef, bool) {
+	prop := access.ChildByFieldName("property")
+	owner := ownerClass(decl)
+
+	if prop == nil || owner == nil {
+		return CallRef{}, false
+	}
+
+	name := prop.Utf8Text(src)
+
+	declaring := declaringClass(access, name, src)
+	if declaring == nil || !sameNode(declaring, owner) {
+		return CallRef{}, false
+	}
+
+	return CallRef{Name: name, Line: uint32(access.StartPosition().Row) + 1, Private: true}, true
+}
+
+// ownerClass returns the class whose private names the symbol decl
+// resolves as its own: decl itself for a class, the class of a method
+// directly in a class body, and nil for any other decl.
+func ownerClass(decl *tree_sitter.Node) *tree_sitter.Node {
+	switch decl.Kind() {
+	case "class_declaration", "abstract_class_declaration":
+		return decl
+	case "method_definition":
+		if body := decl.Parent(); body != nil && body.Kind() == "class_body" {
+			return body.Parent()
+		}
+	}
+
+	return nil
+}
+
+// declaringClass returns the class that declares the private name at
+// node: the innermost class around node whose body declares the name.
+// JavaScript resolves a private name this way, so a nested class that
+// declares the same name hides the outer one. nil means no class
+// declares it, which is a syntax error.
+func declaringClass(node *tree_sitter.Node, name string, src []byte) *tree_sitter.Node {
+	for p := node.Parent(); p != nil; p = p.Parent() {
+		if p.Kind() == "class_body" && declaresPrivate(p, name, src) {
+			return p.Parent()
+		}
+	}
+
+	return nil
+}
+
+// declaresPrivate reports whether a class body declares the private
+// name as a method, an accessor or a field. A JS field names itself in
+// the "property" field, and a TS field and every method in "name".
+func declaresPrivate(body *tree_sitter.Node, name string, src []byte) bool {
+	for i := uint(0); i < body.NamedChildCount(); i++ {
+		member := body.NamedChild(i)
+
+		n := member.ChildByFieldName("name")
+		if n == nil {
+			n = member.ChildByFieldName("property")
+		}
+
+		if n != nil && n.Kind() == "private_property_identifier" && n.Utf8Text(src) == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// classPrivateMethodRefs returns one private reference for each private
+// method and accessor declared directly in the class decl, and nil for
+// any other decl. check counts the class for every changed line in its
+// span. With these references the class reaches what its private methods
+// reach, so an edit in the class keeps their effects. A private field
+// needs no reference, because the class carries its initializer.
+func classPrivateMethodRefs(decl *tree_sitter.Node, src []byte) []CallRef {
+	owner := ownerClass(decl)
+	if owner == nil || !sameNode(owner, decl) {
+		return nil
+	}
+
+	body := decl.ChildByFieldName("body")
+	if body == nil {
+		return nil
+	}
+
+	var out []CallRef
+
+	for i := uint(0); i < body.NamedChildCount(); i++ {
+		member := body.NamedChild(i)
+		if member.Kind() != "method_definition" {
+			continue
+		}
+
+		if n := member.ChildByFieldName("name"); n != nil && n.Kind() == "private_property_identifier" {
+			out = append(out, CallRef{Name: n.Utf8Text(src), Line: uint32(n.StartPosition().Row) + 1, Private: true})
 		}
 	}
 
@@ -343,6 +466,14 @@ func sameNode(a, b *tree_sitter.Node) bool {
 // reaches here only when it is no symbol, such as a computed ([k])
 // method. The class carries its calls, and its this is the same as in a
 // named method of that class.
+//
+// The walk does not stop at the body of a nested class. A nested class
+// can extend the outer class, so this.save() in its body can call the
+// outer method. A computed member key in that body keeps the outer this.
+// The walk cannot tell these cases from a nested class with its own
+// method, so a stop loses real receiver calls. The cost is an
+// over-report: this outside the methods of a nested class, such as in a
+// field arrow function, also counts as the outer instance.
 func thisIsReceiver(node, decl *tree_sitter.Node) bool {
 	for p := node.Parent(); p != nil; p = p.Parent() {
 		if p.StartByte() == decl.StartByte() && p.EndByte() == decl.EndByte() {

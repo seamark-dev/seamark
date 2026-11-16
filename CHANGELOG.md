@@ -485,7 +485,13 @@ model-boundary delivery.
   literals and lambdas included. A JS/TS or Python class now carries the
   calls of its body outside its methods, such as field initializers,
   static blocks and class attributes, while each method keeps its own
-  calls. A private JS/TS method (`#m`) is now a symbol of its own. A
+  calls. A private JS/TS method (`#m`) is now a symbol of its own. Each
+  access to a private member, such as `this.#m()`, `ps.forEach(this.#m)`,
+  `Jobs.#m(p)`, a getter read or a setter write, resolves only in the
+  class that declares the name: to the private method or accessor, or
+  to the class for a private field. It never reaches a member of another
+  class. The class keeps an edge to each of its private methods and
+  accessors, so an edit in the class still reports their effects. A
   method that is no symbol, such as a JS/TS method with a computed name
   (`[Symbol.iterator]()`), is code of the class, and the class carries
   its calls. `check` counts a changed line for every symbol whose span

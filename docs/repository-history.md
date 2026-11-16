@@ -377,16 +377,28 @@ table in [Data flow](data-flow.md).
   method decorator that the grammar places outside the method (TypeScript
   and Python; a JavaScript method decorator stays with its method). A
   method keeps its own calls, and the class does not repeat them. A
-  private JS/TS method (`#m`) is a method symbol. A method that is no
-  symbol, such as a JS/TS method with a computed name
-  (`[Symbol.iterator]()`) or a Python `def` inside an `if` of the class
-  body, is code of its class: the class carries its calls. `check`
-  counts a changed line for every symbol whose span covers it, so an
-  edit inside a method also reports the effects of the class body, a
-  known over-report. A JS/TS `this.save()` in a class body, such as in
-  a field arrow function or a computed method, resolves to the `save`
-  method of that class as `[same-class]`, as it does in a method. A Go
-  type declares no call, so a struct needs no such rule.
+  private JS/TS method (`#m`) is a method symbol. Each access `X.#m`,
+  called or not (a value passed on, a `bind` operand, a getter read, a
+  setter write, the class name as operand), gives a `[same-class]` edge
+  to the private method or accessor of the class that declares the
+  name, or to the class for a private field when the class carries
+  calls. It never takes the `[unique-name]` guess, because JavaScript
+  allows no access to the private member of another class. The class
+  has a `[same-class]` edge to each of its private methods and
+  accessors, so `why` lists it as a caller and the class keeps their
+  effects. A method that is no symbol, such as a JS/TS method with a
+  computed name (`[Symbol.iterator]()`) or a Python `def` inside an `if`
+  of the class body, is code of its class: the class carries its calls.
+  `check` counts a changed line for every symbol whose span covers it,
+  so an edit inside a method also reports the effects of the class
+  body, a known over-report. A JS/TS `this.save()` in a class body,
+  such as in a field arrow function or a computed method, resolves to
+  the `save` method of that class as `[same-class]`, as it does in a
+  method. A `this` call outside the methods of a nested class, such as
+  in a field arrow function, also resolves to the outer class, a known
+  over-report: the nested class can extend the outer class, and a
+  computed key there keeps the outer `this`. A Go type declares no call,
+  so a struct needs no such rule.
   An index built before this rule is rebuilt once by the next index run
   or MCP call, also on an unchanged workspace; a database file that does
   not accept writes keeps its old edges. A workspace that reads the

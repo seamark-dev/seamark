@@ -209,7 +209,11 @@ when the edited function never touches a sink itself. A package-level
 value is a symbol too and carries the calls of its initializer, and a
 class carries the calls of its body outside its methods, so an edit
 inside a table of handlers or a class field reaches what it calls. A
-private JS/TS method (`#m`) is a symbol. A method that is no symbol,
+private JS/TS method (`#m`) is a symbol. Each access to a private
+member, called or not, reaches only the member of the class that
+declares the name, or the class for a private field. The class reaches
+its private methods and accessors, so an edit anywhere in the class
+still reports their effects. A method that is no symbol,
 such as a JS/TS method with a computed name (`[Symbol.iterator]()`) or
 a Python `def` inside an `if` of the class body, is code of its class,
 so an edit inside it reaches what the class reaches. A changed line

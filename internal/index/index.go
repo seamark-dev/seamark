@@ -531,7 +531,16 @@ func Run(opts Options) (*Summary, error) {
 // carries its calls, so the class no longer carries them. An old blob has
 // no symbol for such a method. A this.#m() call in another method then
 // gets no edge, and that caller misses the effects of the private method.
-const parseCacheVersion = "5"
+//
+// Version "6": every access X.#name in a JS/TS class is a private
+// reference that resolves only in the class that declares the name, and a
+// class references each private method and accessor it declares. An old
+// blob has no such reference: a value, getter or field access of #m gets
+// no edge, and the class misses the effects of its private methods. In an
+// old blob a receiver call this.#m() is a selector call that the
+// same-class tier resolves. A call of #m through any other operand took
+// the guess tier, which now abstains on a # name, so it gets no edge.
+const parseCacheVersion = "6"
 
 // OtherVersion reports an index that another seamark version built: the
 // parse cache version of its last run is not the one of this binary, so
@@ -1985,6 +1994,10 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 // writeCallEdges resolves the call references of one declaration, in
 // descending confidence order. Every edge declares its derivation:
 //
+//  0. JS/TS private      → the method or accessor of the   (same-class)
+//     (#name) member       caller's own class with that
+//     reference, never     name, else that class when it
+//     a guess              carries calls
 //  1. bare identifier    → named import target module,     (qualified)
 //     that is a named      else function in the same       (same-package)
 //     import               package/module
@@ -2057,7 +2070,29 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	// so a same-class resolution is never reported as a name-match guess.
 	best := map[int64]string{}
 
+	keep := func(dst *model.Symbol, origin string) {
+		if dst == nil || dst.ID == decl.Symbol.ID {
+			return
+		}
+
+		if cur, seen := best[dst.ID]; !seen || originRank(origin) > originRank(cur) {
+			best[dst.ID] = origin
+		}
+	}
+
 	for _, call := range decl.Calls {
+		// A private reference names a member of the caller's own class,
+		// never a catalogue sink, so it skips effect detection. It also
+		// skips every other tier: a guess could pick the private member
+		// of another class, which JavaScript does not allow.
+		if call.Private {
+			for _, dst := range privateTargets(res, &decl.Symbol, call.Name) {
+				keep(dst, model.OriginSameClass)
+			}
+
+			continue
+		}
+
 		// Effect detection runs on the raw reference: the interesting
 		// sinks live in external dependencies and never resolve to edges.
 		g.detectCallEffects(fam, rawImports, rawNamed, decl.Symbol.ID, call)
@@ -2118,13 +2153,7 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 			dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 		}
 
-		if dst == nil || dst.ID == decl.Symbol.ID {
-			continue
-		}
-
-		if cur, seen := best[dst.ID]; !seen || originRank(origin) > originRank(cur) {
-			best[dst.ID] = origin
-		}
+		keep(dst, origin)
 	}
 
 	for dstID, origin := range best {
@@ -2137,6 +2166,49 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 		}
 
 		g.callEdges = append(g.callEdges, [2]int64{decl.Symbol.ID, dstID})
+	}
+
+	return nil
+}
+
+// privateTargets returns the symbols that a private (#name) reference of
+// caller resolves to. JavaScript scopes a private name to its class, and
+// the extractor records the reference only for a symbol of the class that
+// declares the name, so the lookup stays in the caller's own class and
+// file. The targets are the method symbols with that name; a get and set
+// pair gives two. A private field is no symbol, so the reference resolves
+// to the class, which carries the field initializer. A class with no
+// calls gives no target, because the edge would add no reach.
+func privateTargets(res *parse.FileResult, caller *model.Symbol, name string) []*model.Symbol {
+	if caller.Kind != model.KindMethod && caller.Kind != model.KindType {
+		return nil
+	}
+
+	class := receiverClass(caller)
+	member := class + "." + name
+
+	var (
+		methods []*model.Symbol
+		owner   *model.Symbol
+	)
+
+	for i := range res.Symbols {
+		sd := &res.Symbols[i]
+
+		switch {
+		case sd.Symbol.Kind == model.KindMethod && sd.Symbol.FQN == member:
+			methods = append(methods, &sd.Symbol)
+		case sd.Symbol.Kind == model.KindType && sd.Symbol.FQN == class && len(sd.Calls) > 0:
+			owner = &sd.Symbol
+		}
+	}
+
+	if len(methods) > 0 {
+		return methods
+	}
+
+	if owner != nil {
+		return []*model.Symbol{owner}
 	}
 
 	return nil
@@ -2337,6 +2409,13 @@ var commonGoMethodNames = map[string]bool{
 // The rule is Go only. Python and ECMA code often calls a value of a module
 // that the file never imports, so an import there is weak evidence.
 func (g *graph) uniqueMethod(fam, name, callerFile string, imported map[string]bool) (dst *model.Symbol, origin string) {
+	// A JS/TS private (#name) member is visible only inside its class, so
+	// a guess must never give it a caller of another class. Go and Python
+	// names never start with "#".
+	if strings.HasPrefix(name, "#") {
+		return nil, ""
+	}
+
 	var candidates []*model.Symbol
 
 	for _, c := range g.methodsByName[fam][name] {

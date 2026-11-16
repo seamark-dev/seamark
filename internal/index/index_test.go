@@ -3696,7 +3696,11 @@ def audit(p):
 // of a field arrow function and of a method with a computed name. Another
 // class with a save method makes the unique-name guess abstain, so only
 // the same-class tier can give the edge and the fs:write effect. A private
-// (#m) method is a method symbol, and this.#flush() resolves to it.
+// (#m) method is a method symbol, and this.#flush() resolves to it. The
+// class also holds an edge to its private method #flush. A nested class
+// that extends Kit inherits save, so its this.save() calls the save method
+// of Kit. A computed member key of a nested class keeps the this of Kit.
+// Both calls resolve to Kit through the same-class tier.
 func TestClassBodyReceiverCallResolvesToItsOwnClass(t *testing.T) {
 	for _, withOther := range []bool{false, true} {
 		root := t.TempDir()
@@ -3729,6 +3733,19 @@ export class Board {
 	store() { fs.writeFileSync("a", "b"); }
 }
 `,
+			"kit.ts": `import * as fs from "fs";
+
+export class Kit {
+	Sub = class extends Kit {
+		f = () => this.save();
+	};
+	Keyed = class { [this.store()] = 1; };
+
+	save() { fs.writeFileSync("a", "b"); }
+
+	store() { fs.writeFileSync("k", "v"); return "k"; }
+}
+`,
 		}
 
 		if withOther {
@@ -3742,22 +3759,27 @@ export class Board {
 		_, st := runIndex(t, root)
 
 		for _, tc := range []struct {
-			caller, callee string
-			depth          int
+			caller  string
+			callees []string
+			depth   int
 		}{
-			{"panel.Panel", "panel.Panel.save", 1},
-			{"panel.Panel.handle", "panel.Panel.save", 1},
-			{"board.Board", "board.Board.store", 1},
-			{"board.Board.#flush", "board.Board.store", 1},
-			{"board.Board.close", "board.Board.#flush", 2},
+			{"panel.Panel", []string{"panel.Panel.save"}, 1},
+			{"panel.Panel.handle", []string{"panel.Panel.save"}, 1},
+			{"board.Board", []string{"board.Board.#flush", "board.Board.store"}, 1},
+			{"board.Board.#flush", []string{"board.Board.store"}, 1},
+			{"board.Board.close", []string{"board.Board.#flush"}, 2},
+			{"kit.Kit", []string{"kit.Kit.save", "kit.Kit.store"}, 1},
 		} {
 			caller := mustFind(t, st, tc.caller)
 
 			callees, err := st.Callees(caller.ID)
 			require.NoError(t, err)
-			require.Len(t, callees, 1, "%s, other class %v", tc.caller, withOther)
-			assert.Equal(t, tc.callee, callees[0].FQN, "%s, other class %v", tc.caller, withOther)
-			assert.Equal(t, model.OriginSameClass, callees[0].Origin, "%s, other class %v", tc.caller, withOther)
+			require.Len(t, callees, len(tc.callees), "%s, other class %v", tc.caller, withOther)
+
+			for i, want := range tc.callees {
+				assert.Equal(t, want, callees[i].FQN, "%s, other class %v", tc.caller, withOther)
+				assert.Equal(t, model.OriginSameClass, callees[i].Origin, "%s, other class %v", tc.caller, withOther)
+			}
 
 			effs, err := st.EffectsForSymbol(caller.ID)
 			require.NoError(t, err)
@@ -3765,4 +3787,139 @@ export class Board {
 				"%s, other class %v", tc.caller, withOther)
 		}
 	}
+}
+
+// TestPrivateMemberReferenceResolvesInItsClass proves that every access
+// X.#name in a class resolves to the private member of that class through
+// the same-class tier, and never through a guess. Another file declares
+// #persist, #log and #run, so a guess would abstain or pick the wrong
+// class. A value, a bind operand, an alias call, a call through the class
+// name, a getter read and a setter write reach the private method or
+// accessor. A get and set pair gives an edge to both. A private field
+// resolves to the class, which carries the field initializer, and a class
+// that carries nothing gives no edge. A private field #run of A gives no
+// edge to the #run method of Other. The class holds an edge to each
+// private method and accessor, so the callers of #persist list it.
+func TestPrivateMemberReferenceResolvesInItsClass(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"store.ts": `import * as fs from "fs";
+
+export class Store {
+	#persist(p: string) { fs.writeFileSync(p, ""); }
+	get #data() { fs.writeFileSync("d", ""); return 1; }
+	set #value(v: number) { fs.writeFileSync("v", ""); }
+	get #state() { return 1; }
+	set #state(v: number) { fs.writeFileSync("s", ""); }
+	#onChange = (p: string) => fs.writeFileSync(p, "");
+	static #log(p: string) { fs.writeFileSync(p, ""); }
+
+	direct(p: string) { this.#persist(p); }
+	value(ps: string[]) { ps.forEach(this.#persist); }
+	bound(p: string) { setTimeout(this.#persist.bind(this, p), 0); }
+	alias(p: string) { const self = this; return function () { self.#persist(p); }; }
+	read() { return this.#data; }
+	write(p: number) { this.#value = p; }
+	toggle() { this.#state = 1; }
+	handler(em: any) { em.on("change", this.#onChange); }
+	viaName(p: string) { Store.#log(p); }
+	pure(p: string) { return p.trim(); }
+}
+`,
+		"a.ts": `export class A {
+	#run = (p: string) => p.trim();
+
+	go(p: string) { return this.#run(p); }
+}
+
+export class Empty {
+	#n = 1;
+
+	peek() { return this.#n; }
+}
+`,
+		"other.ts": `import * as fs from "fs";
+
+export class Other {
+	#persist(p: string) { return p; }
+	static #log(p: string) { return p; }
+	#run(p: string) { fs.writeFileSync(p, ""); }
+
+	start(p: string) { this.#run(p); this.#persist(p); Other.#log(p); }
+}
+`,
+	}
+
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	write1 := []store.Effect{{Tag: "fs:write", Origin: "propagated", Depth: 1}}
+
+	for _, tc := range []struct {
+		caller  string
+		callees []string
+		effects []store.Effect
+	}{
+		{"store.Store.direct", []string{"store.Store.#persist"}, write1},
+		{"store.Store.value", []string{"store.Store.#persist"}, write1},
+		{"store.Store.bound", []string{"store.Store.#persist"}, write1},
+		{"store.Store.alias", []string{"store.Store.#persist"}, write1},
+		{"store.Store.read", []string{"store.Store.#data"}, write1},
+		{"store.Store.write", []string{"store.Store.#value"}, write1},
+		{"store.Store.toggle", []string{"store.Store.#state", "store.Store.#state"}, write1},
+		{"store.Store.handler", []string{"store.Store"}, write1},
+		{"store.Store.viaName", []string{"store.Store.#log"}, write1},
+		{"store.Store.pure", nil, nil},
+		{"a.A.go", []string{"a.A"}, nil},
+		{"a.Empty.peek", nil, nil},
+		{"other.Other.start", []string{"other.Other.#log", "other.Other.#persist", "other.Other.#run"}, write1},
+	} {
+		caller := mustFind(t, st, tc.caller)
+
+		callees, err := st.Callees(caller.ID)
+		require.NoError(t, err)
+
+		var got []string
+
+		for _, c := range callees {
+			got = append(got, c.FQN)
+			assert.Equal(t, model.OriginSameClass, c.Origin, "%s -> %s", tc.caller, c.FQN)
+		}
+
+		assert.Equal(t, tc.callees, got, tc.caller)
+
+		effs, err := st.EffectsForSymbol(caller.ID)
+		require.NoError(t, err)
+		assert.Equal(t, tc.effects, effs, tc.caller)
+	}
+
+	class := mustFind(t, st, "store.Store")
+
+	callees, err := st.Callees(class.ID)
+	require.NoError(t, err)
+
+	var got []string
+	for _, c := range callees {
+		got = append(got, c.FQN)
+	}
+
+	assert.Equal(t, []string{
+		"store.Store.#data", "store.Store.#log", "store.Store.#persist",
+		"store.Store.#state", "store.Store.#state", "store.Store.#value",
+	}, got, "the class reaches each private method and accessor, not its field")
+
+	callers, err := st.Callers(mustFind(t, st, "store.Store.#persist").ID)
+	require.NoError(t, err)
+
+	got = nil
+	for _, c := range callers {
+		got = append(got, c.FQN)
+	}
+
+	assert.Equal(t, []string{
+		"store.Store", "store.Store.alias", "store.Store.bound", "store.Store.direct", "store.Store.value",
+	}, got, "the callers of #persist stay in its class")
 }
