@@ -599,6 +599,17 @@ model-boundary delivery.
   start with `in Go` only when the file of the symbol is a Go file.
   Every language keeps the first line, which names the rules of all
   languages.
+- **`why` and `expand` prefer a defined symbol over a package.** A query
+  that named both a package and a symbol defined in the repository
+  resolved to the package, which has no content, and `expand` failed
+  with "is external". The exact and suffix stages now order their
+  matches before the limit: a defined symbol before a package, an exact
+  FQN before a name, and a suffix that starts a whole component before a
+  raw suffix. When definitions of the same name fill the result, a
+  package of exactly that name takes its last line, so `why` and
+  `expand` still mention it. Which symbols match does not change. `why`
+  no longer calls a package of this repository external: it says that it
+  is a package of this repository and lists it as `(package)`.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

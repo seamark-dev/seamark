@@ -76,6 +76,19 @@ every partner is in the diff, the index holds no partner, or the read
 failed. On a repo with real history, this section is where the
 surprises live.
 
+`why` reads a query as a file path first, then as a symbol: an exact
+FQN or name, then an FQN suffix, then a prefix search. It reports the
+first match and lists up to four others under `also matched`; `expand`
+takes the same first match. Among exact matches a symbol defined in the
+repository comes before a package grouping symbol, and an exact FQN
+before a name; among suffix matches one at a component boundary (`.` or
+`/` before the query) comes before a raw string suffix. When definitions
+of the same name fill the list, a package of exactly that name takes its
+last line, so it is never cut. A package of
+this repository prints `defined  (package of this repository; …)` and
+`(package)` in lists; only a package the code imports from outside
+prints `(external)`.
+
 `change_set` prints each partner once. A partner that the plan leaves
 out and that the closing `history suggests also reviewing` list shows
 prints only there, with the planned file that it shares the most
