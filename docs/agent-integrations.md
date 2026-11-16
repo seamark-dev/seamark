@@ -890,13 +890,19 @@ Before release:
   `TestRunActivationTreatsInterruptedSessionAsCancellation`) cancelled
   on a fixed timer, so their bound measured fixture setup. They now
   cancel when the stub agent has started and bound the time from the
-  interrupt to the return at 30 seconds, half the agent's sleep. The
-  new `TestRunActivationStopsCleanlyOnCancel` covers a cancel before
-  the first session. `TestCommandVersionReadsTheFirstLineOrUnknown`
-  starts each fresh script once before its timed call. With a slowed
-  `git` and CPU load the old tests fail and the new ones pass. Only test
-  files change, so no benchmark fingerprint changes. This item covers
-  these four tests. `TestOTelHistogramPreparedFixtureContract` is a
+  interrupt to the return at 30 seconds, half the agent's sleep. With a
+  slowed `git` and CPU load the old interrupted-session tests fail and
+  the new ones pass. The new `TestRunActivationStopsCleanlyOnCancel`
+  covers a cancel before the first session.
+  `TestCommandVersionReadsTheFirstLineOrUnknown` now starts each fresh
+  script once before its timed call, because on macOS the first start
+  of a freshly written script can wait for seconds while other new
+  programs start; a repeat start stays fast. That wait is measured, not
+  explained. Its failure was not reproduced: the old test passed under
+  the same load, so this step rests on the measured first-start delays
+  and on earlier full-suite failures. Only test files change, so no
+  benchmark fingerprint changes. This item covers these four tests.
+  `TestOTelHistogramPreparedFixtureContract` is a
   separate known flake under load, a judge timeout, and it is not
   fixed. Its first judge run on a fresh tree builds with an empty Go
   build cache, and under CPU load that run can pass the 30-second limit
