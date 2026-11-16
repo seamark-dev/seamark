@@ -105,13 +105,29 @@ func (s State) ReadOnlyDirCause() string {
 // directory that marks a checkout keeps its answer. The console has no
 // such case, and a build would record the inner directory.
 func GatherCommand(root, db string) State {
-	s := Gather(root, db)
+	return Gather(root, db).Command()
+}
 
-	if s.Recorded != "" && store.LiesInside(root, s.Recorded) && !isCheckout(root) {
+// Command is the state as GatherCommand reads it. A surface that already
+// holds the state of Gather uses it, so it reads git no second time.
+func (s State) Command() State {
+	if s.Recorded != "" && store.LiesInside(s.Workspace, s.Recorded) && !isCheckout(s.Workspace) {
 		s.Root = RootSame
 	}
 
 	return s
+}
+
+// RefusedBuildRoute returns the route of a state in which a plain build in
+// W is refused, or "". A surface prints it in place of a plain index run,
+// because that run would fail here.
+func (s State) RefusedBuildRoute() string {
+	d := Decide(s.Facts)
+	if d.Build != BuildRefused {
+		return ""
+	}
+
+	return s.Route(d.Route, SurfaceBuild)
 }
 
 // fileClass relates a file that exists to the workspace.

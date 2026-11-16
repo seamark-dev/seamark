@@ -80,6 +80,11 @@ type Summary struct {
 	// commit. Root then names that repository, and Force would refuse.
 	// It is "" for every other run.
 	RootRoute string
+	// Ownership holds the facts of the database that a skip read. A
+	// surface uses them to say which repository answers, without a second
+	// probe. It is zero after a build, because a build records this
+	// workspace.
+	Ownership ownership.State
 	// FilesSeen counts the listed files that exist in the working tree.
 	// A deleted path and a path outside a sparse checkout are not in it,
 	// because no file exists to see.
@@ -114,14 +119,30 @@ type Summary struct {
 var ErrRootMove = errors.New("a rebuild must not move the recorded root of another repository")
 
 // rootMoveRefusal is one refusal of Run. Its text has the facts and the
-// route, and it matches ErrRootMove.
-type rootMoveRefusal string
+// route, and it matches ErrRootMove. It keeps the facts, so a surface
+// that answers from the old index can name its root without a second
+// probe.
+type rootMoveRefusal struct {
+	text  string
+	state ownership.State
+}
 
 // Error returns the text of the refusal.
-func (r rootMoveRefusal) Error() string { return string(r) }
+func (r rootMoveRefusal) Error() string { return r.text }
 
 // Unwrap makes the refusal match ErrRootMove.
 func (r rootMoveRefusal) Unwrap() error { return ErrRootMove }
+
+// RefusedState returns the facts of the database that a refusal of Run
+// read. ok is false for any other error.
+func RefusedState(err error) (state ownership.State, ok bool) {
+	var r rootMoveRefusal
+	if !errors.As(err, &r) {
+		return ownership.State{}, false
+	}
+
+	return r.state, true
+}
 
 // buildRefusal returns the refusal of a build in this state, or nil. Its
 // text has the facts and the route of the decision.
@@ -132,25 +153,26 @@ func buildRefusal(s ownership.State, d ownership.Decision) error {
 
 	there, here := render.Sanitize(s.Recorded), render.Sanitize(s.Workspace)
 	route := s.Route(d.Route, ownership.SurfaceBuild)
+	refuse := func(text string) error { return rootMoveRefusal{text: text, state: s} }
 
 	switch {
 	case s.DirRefusesWrites():
 		// No read works in this state, so "run it again" would not help.
 		// The text names the directory instead.
-		return rootMoveRefusal(s.ReadOnlyDirCause() + "; nothing changed; " + route)
+		return refuse(s.ReadOnlyDirCause() + "; nothing changed; " + route)
 	case s.Root == ownership.RootUnreadable:
-		return rootMoveRefusal(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
+		return refuse(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
 			"rebuild could move the root of another repository; nothing changed; run it again, %s",
 			render.Sanitize(s.DB), render.Sanitize(s.ReadErr.Error()), route))
 	case s.Root == ownership.RootGone:
-		return rootMoveRefusal(fmt.Sprintf("this database records a directory that does not exist now (%s), which "+
+		return refuse(fmt.Sprintf("this database records a directory that does not exist now (%s), which "+
 			"can be a moved repository or a detached disk, so a rebuild in %s would replace that root; "+
 			"nothing changed; %s", there, here, route))
 	case s.Owner == ownership.OwnerWorkspace:
-		return rootMoveRefusal(fmt.Sprintf("this database lies in %s but records another repository (%s), so a "+
+		return refuse(fmt.Sprintf("this database lies in %s but records another repository (%s), so a "+
 			"rebuild here would move its recorded root; nothing changed; %s", here, there, route))
 	default:
-		return rootMoveRefusal(fmt.Sprintf("this database records another repository (%s), so a rebuild in %s would "+
+		return refuse(fmt.Sprintf("this database records another repository (%s), so a rebuild in %s would "+
 			"move its recorded root, and that repository would lose its pins and maintenance; nothing changed; %s",
 			there, here, route))
 	}
@@ -207,6 +229,8 @@ func Run(opts Options) (*Summary, error) {
 	case refusal != nil:
 		if !opts.Force && !opts.MoveRoot {
 			if sum := freshSummary(root, dbPath, observed, start, store.OpenReadOnly, state, decision); sum != nil {
+				sum.Ownership = state
+
 				if sum.Root != "" && !store.SameDirectory(sum.Root, root) {
 					sum.RootRoute = state.Route(decision.Route, ownership.SurfaceBuild)
 				}
@@ -218,6 +242,8 @@ func Run(opts Options) (*Summary, error) {
 		return nil, refusal
 	case !opts.Force && !opts.MoveRoot:
 		if sum := freshSummary(root, dbPath, observed, start, store.Open, state, decision); sum != nil {
+			sum.Ownership = state
+
 			return sum, nil
 		}
 	}

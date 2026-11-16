@@ -129,24 +129,28 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 		return nil, &rpcError{Code: codeInvalidParams, Message: err.Error()}
 	}
 
-	var render func(st *store.Store) (string, error)
+	var render func(st *store.Store, r refreshed) (string, error)
 
 	switch p.URI {
 	case orientURI:
-		render = func(st *store.Store) (string, error) {
+		render = func(st *store.Store, r refreshed) (string, error) {
 			var b bytes.Buffer
-			err := report.Orient(&b, st, s.root)
+			err := report.OrientNamed(&b, st, s.root, r.named(s.root))
 
 			return b.String(), err
 		}
 	case statusURI:
-		render = func(st *store.Store) (string, error) {
+		render = func(st *store.Store, r refreshed) (string, error) {
 			// The lesson checks block identifies each hook binary against
 			// this server binary and its version.
 			health, err := status.GatherAs(st, s.root, integration.SelfIdentity(s.version))
 			if err != nil {
 				return "", err
 			}
+
+			// The root line and the stale route come from the facts that
+			// seamark status reads, so both print the same for one pair.
+			health.NoteOwnership(s.ownerFacts(r))
 
 			var b bytes.Buffer
 			status.Print(&b, health)
@@ -157,7 +161,7 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 		return nil, &rpcError{Code: codeResourceNotFound, Message: "unknown resource: " + p.URI}
 	}
 
-	text, err := s.withStore(render)
+	text, err := s.withRefreshedStore(render)
 	if err != nil {
 		return nil, &rpcError{Code: codeInternal, Message: err.Error() + s.newerSchemaAdvice(err)}
 	}

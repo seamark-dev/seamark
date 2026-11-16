@@ -35,6 +35,27 @@ func rootMoveFixture(t *testing.T) (origin, other, dbPath string) {
 	return origin, other, store.DefaultPath(origin)
 }
 
+// refusedText is the note of a refused refresh under the index of root.
+// The test spells out the words, so a change of the wording fails here.
+func refusedText(root string) string {
+	return "note: seamark did not refresh this index, because it records another repository (" + root +
+		") and a rebuild here would move its root; this answer describes " + root +
+		" and can differ from this workspace.\n"
+}
+
+// matchText is the note of a skip under the index of root, which matches
+// the workspace of the server.
+func matchText(root string) string {
+	return "note: this index records another repository (" + root + "); it matches this workspace now, " +
+		"and this answer describes " + root + ".\n"
+}
+
+// goneText turns a note of refusedText or matchText into the note of a
+// root that no longer exists.
+func goneText(note string) string {
+	return strings.Replace(note, "records another repository", "records a directory that no longer exists", 1)
+}
+
 // rootMoveCall returns one tools/call request.
 func rootMoveCall(id int, tool, args string) string {
 	return fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, id, tool, args)
@@ -68,7 +89,8 @@ func rootMoveText(t *testing.T, r rpcResp) (string, bool) {
 // TestToolsKeepTheRootOfAnotherDatabase covers the refresh of every tool
 // call under the database of another repository. The server has no flag
 // that allows the move, so it does not rebuild, and each tool answers
-// from the existing index. The log names the refusal and its route.
+// from the existing index. Each answer opens once with the note that
+// names that repository. The log names the refusal and its route.
 func TestToolsKeepTheRootOfAnotherDatabase(t *testing.T) {
 	origin, other, dbPath := rootMoveFixture(t)
 
@@ -90,8 +112,8 @@ func TestToolsKeepTheRootOfAnotherDatabase(t *testing.T) {
 		text, isError := rootMoveText(t, resps[strconv.Itoa(id)])
 
 		assert.False(t, isError, "tool %d answers from the existing index: %s", id, text)
-		assert.True(t, strings.HasPrefix(text, staleNote), "tool %d opens with the note: %s", id, text)
-		assert.Equal(t, 1, strings.Count(text, staleNote), "tool %d names it once", id)
+		assert.True(t, strings.HasPrefix(text, refusedText(origin)), "tool %d opens with the note: %s", id, text)
+		assert.Equal(t, 1, strings.Count(text, "note: "), "tool %d names it once", id)
 	}
 
 	why, _ := rootMoveText(t, resps["1"])
@@ -140,20 +162,20 @@ func TestToolsKeepAnOlderSchemaOfAnotherDatabase(t *testing.T) {
 // finds nothing. A symbol can be missing only because the index is old,
 // so the error needs the note most of all.
 func TestToolsNoteAnEmptyAnswerOfAnIndexTheyCannotRefresh(t *testing.T) {
-	_, other, dbPath := rootMoveFixture(t)
+	origin, other, dbPath := rootMoveFixture(t)
 
 	resps := serveDB(t, other, dbPath, t.Logf, rootMoveCall(1, "why", `{"query":"noSuchSymbol"}`))
 
 	text, isError := rootMoveText(t, resps["1"])
 	assert.True(t, isError)
-	assert.True(t, strings.HasPrefix(text, staleNote), text)
+	assert.True(t, strings.HasPrefix(text, refusedText(origin)), text)
 	assert.Contains(t, text, "noSuchSymbol")
 }
 
 // TestResourcesNoteAnIndexTheyCannotRefresh covers the two resources.
 // They read the same store, so they carry the same note.
 func TestResourcesNoteAnIndexTheyCannotRefresh(t *testing.T) {
-	_, other, dbPath := rootMoveFixture(t)
+	origin, other, dbPath := rootMoveFixture(t)
 
 	for id, uri := range map[int]string{1: orientURI, 2: statusURI} {
 		resps := serveDB(t, other, dbPath, t.Logf,
@@ -168,7 +190,8 @@ func TestResourcesNoteAnIndexTheyCannotRefresh(t *testing.T) {
 		require.Nil(t, resps[strconv.Itoa(id)].Error)
 		require.NoError(t, json.Unmarshal(resps[strconv.Itoa(id)].Result, &res))
 		require.Len(t, res.Contents, 1)
-		assert.True(t, strings.HasPrefix(res.Contents[0].Text, staleNote), uri)
+		assert.True(t, strings.HasPrefix(res.Contents[0].Text, refusedText(origin)), uri)
+		assert.Equal(t, 1, strings.Count(res.Contents[0].Text, "note: "), uri)
 	}
 }
 
@@ -285,8 +308,10 @@ func TestCheckRefusesAnIndexItCannotRefresh(t *testing.T) {
 		assert.Contains(t, text, "proc:exec")
 	})
 
-	t.Run("a check at one commit keeps its verdict and needs no note", func(t *testing.T) {
-		_, tree := rootMoveLinked(t, true)
+	// A skip is current, so the verdict stays. The index still records
+	// main, so each answer names it once.
+	t.Run("a check at one commit keeps its verdict and names the root", func(t *testing.T) {
+		origin, tree := rootMoveLinked(t, true)
 
 		resps := serveDB(t, tree, store.DefaultPath(tree), t.Logf,
 			rootMoveCall(1, "check", `{}`), rootMoveCall(2, "why", `{"query":"helper"}`))
@@ -294,11 +319,13 @@ func TestCheckRefusesAnIndexItCannotRefresh(t *testing.T) {
 		text, isError := rootMoveText(t, resps["1"])
 		assert.False(t, isError, text)
 		assert.Contains(t, text, "verdict")
-		assert.NotContains(t, text, staleNote, "a skip is current")
+		assert.True(t, strings.HasPrefix(text, matchText(origin)), text)
+		assert.Equal(t, 1, strings.Count(text, matchText(origin)), text)
 
 		why, isError := rootMoveText(t, resps["2"])
 		assert.False(t, isError, why)
-		assert.NotContains(t, why, staleNote, "a skip is current")
+		assert.True(t, strings.HasPrefix(why, matchText(origin)), why)
+		assert.NotContains(t, why, "did not refresh", "a skip is current")
 	})
 }
 
@@ -327,9 +354,10 @@ func TestToolsKeepRefreshingTheirOwnDatabase(t *testing.T) {
 }
 
 // TestToolsKeepARootOnADetachedDisk covers a recorded root that is gone
-// with a file outside this workspace. A skip keeps its answer with no
-// note. After an edit a refresh would take the root, so it refuses, and
-// the read carries the note.
+// with a file outside this workspace. A skip keeps its answer, and the
+// note says that the index records that root. After an edit a refresh
+// would take the root, so it refuses, and the read carries the note of
+// the refusal.
 func TestToolsKeepARootOnADetachedDisk(t *testing.T) {
 	origin, err := filepath.EvalSymlinks(writeFixture(t))
 	require.NoError(t, err)
@@ -351,7 +379,8 @@ func TestToolsKeepARootOnADetachedDisk(t *testing.T) {
 
 	text, isError := rootMoveText(t, resps["1"])
 	assert.False(t, isError, text)
-	assert.NotContains(t, text, staleNote, "a skip is current")
+	assert.True(t, strings.HasPrefix(text, goneText(matchText(origin))), text)
+	assert.NotContains(t, text, "did not refresh", "a skip is current")
 
 	require.NoError(t, os.WriteFile(filepath.Join(sibling, "b.go"), []byte("package main\n"), 0o644))
 
@@ -359,7 +388,7 @@ func TestToolsKeepARootOnADetachedDisk(t *testing.T) {
 
 	text, isError = rootMoveText(t, resps["1"])
 	assert.False(t, isError, text)
-	assert.True(t, strings.HasPrefix(text, staleNote), text)
+	assert.True(t, strings.HasPrefix(text, goneText(refusedText(origin))), text)
 
 	_, isError = rootMoveText(t, resps["2"])
 	assert.True(t, isError, "a verdict needs a current graph")

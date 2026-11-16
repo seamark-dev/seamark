@@ -79,8 +79,11 @@ file or directory`, and the gate blocks it under `--enforce`.
 In a copied or moved checkout whose index still records the original
 root, `seamark status` reports on that root, as the console does. Its
 first line names that root and the `seamark index` run that records this
-workspace, and `--json` adds `recorded_root`. `seamark doctor` reads the
-`-C` workspace.
+workspace, and `--json` adds `recorded_root`. The MCP resource
+`seamark://status` prints the same first line, and every MCP answer from
+such an index opens with a note that names the recorded root (see
+[repository history](repository-history.md#how-much-can-the-answers-be-trusted)).
+`seamark doctor` reads the `-C` workspace.
 
 `seamark index` refuses a `--db` that records another repository, also
 with `--force`, because that repository would lose its pins and

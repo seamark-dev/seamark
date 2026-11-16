@@ -457,6 +457,17 @@ model-boundary delivery.
   the same transaction as the graph, so overlapping runs cannot pair a
   newer fingerprint with an older graph. An edit during a run costs one
   extra rebuild on the next call, and the run logs a note that says so.
+- **MCP answers name the repository that their index records.** Under a
+  database that records another repository, every MCP read (`orient`,
+  `why`, `expand`, `change_set` and both resources) opens with one note
+  that names that root, both when the index matches the workspace and
+  when the server refuses to refresh it. The `seamark://status` resource
+  prints the same `root` line as `seamark status`, `check` keeps its
+  verdict at a matching fingerprint and carries the note, and the
+  `orient` title names the recorded root. Where a plain `seamark index`
+  in this workspace would be refused, the stale status line and the
+  stale note of the CLI read commands print the route of that state
+  instead.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
