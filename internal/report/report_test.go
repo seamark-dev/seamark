@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -2158,7 +2159,8 @@ func TestWhyOrdersMixedOriginTiers(t *testing.T) {
 
 // TestWhyNamesMissingCallers proves that why says so when a function or a
 // method has no resolved callers. Silence read as "nothing calls this",
-// but the index gives no edge to an ambiguous call.
+// but the index gives no edge to an ambiguous call. The Go rules print
+// only for a symbol in a Go file.
 func TestWhyNamesMissingCallers(t *testing.T) {
 	why := func(t *testing.T, target model.Symbol, callers []store.CallEdge) string {
 		t.Helper()
@@ -2193,6 +2195,27 @@ func TestWhyNamesMissingCallers(t *testing.T) {
 		})
 	}
 
+	// The Go rules are noise for another language, so a Python or a
+	// TypeScript symbol keeps only the language-neutral line.
+	for _, target := range []model.Symbol{
+		{
+			FQN: "app/jobs.run_audit", Name: "run_audit", Kind: model.KindFunction,
+			File: "app/jobs.py", Span: model.Span{StartLine: 3, EndLine: 9},
+		},
+		{
+			FQN: "web/src/api/client.Client.fetch", Name: "fetch", Kind: model.KindMethod,
+			File: "web/src/api/client.ts", Span: model.Span{StartLine: 11, EndLine: 15},
+		},
+	} {
+		t.Run(target.File+" gets no Go lines", func(t *testing.T) {
+			out := why(t, target, nil)
+
+			assert.Contains(t, out, "\ncallers (0)  — none resolved\n"+
+				"  a call by a method name that several methods share, or through a function value, gets no edge\n")
+			assert.NotContains(t, out, "in Go, ")
+		})
+	}
+
 	t.Run("type gets no callers line", func(t *testing.T) {
 		out := why(t, model.Symbol{
 			FQN: "delivery.HookDeliveryLease", Name: "HookDeliveryLease", Kind: model.KindType,
@@ -2212,6 +2235,62 @@ func TestWhyNamesMissingCallers(t *testing.T) {
 		assert.NotContains(t, out, "none resolved")
 		assert.NotContains(t, out, "in Go, ", "the three note lines stay under callers (0)")
 	})
+}
+
+// TestWhyCutsALongSignature proves that the sig line of why <symbol> is
+// one bounded line: a JS/TS or Python value stores its whole initializer
+// as its signature, and a 10,000-rune object literal must not become the
+// answer. The cut keeps whySigCap runes with the ellipsis. A function
+// signature that fits keeps its bytes.
+func TestWhyCutsALongSignature(t *testing.T) {
+	why := func(t *testing.T, target model.Symbol) string {
+		t.Helper()
+
+		st := seedCallGraph(t, target, nil, nil)
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, t.TempDir(), target.FQN))
+
+		return b.String()
+	}
+
+	sigLine := func(t *testing.T, out string) string {
+		t.Helper()
+
+		for _, line := range strings.Split(out, "\n") {
+			if rest, ok := strings.CutPrefix(line, "  sig      "); ok {
+				return rest
+			}
+		}
+
+		require.Fail(t, "no sig line", out)
+
+		return ""
+	}
+
+	long := "export const api = { " + strings.Repeat("getUser: (id) => client.get(`/users/${id}`), ", 250) + "}"
+	require.Greater(t, len(long), 10000)
+
+	out := why(t, model.Symbol{
+		FQN: "web/src/api/client.api", Name: "api", Kind: model.KindVar,
+		File: "web/src/api/client.ts", Sig: long, Span: model.Span{StartLine: 1, EndLine: 170},
+	})
+
+	sig := sigLine(t, out)
+	assert.Equal(t, whySigCap, utf8.RuneCountInString(sig), sig)
+	assert.True(t, strings.HasPrefix(sig, "export const api = { getUser: (id) => "), sig)
+	assert.True(t, strings.HasSuffix(sig, "…"), sig)
+	assert.Less(t, len(out), 2000, "the answer stays short")
+
+	const fits = "func NewCheckLessonsEnvelope(policy *gate.Decision, lessons *lessoncheck.Verification, " +
+		"policyInput string, diffPaths []string) CheckLessonsEnvelope"
+	require.Less(t, len(fits), whySigCap)
+
+	out = why(t, model.Symbol{
+		FQN: "report.NewCheckLessonsEnvelope", Name: "NewCheckLessonsEnvelope", Kind: model.KindFunction,
+		File: "report/check_lessons.go", Sig: fits, Span: model.Span{StartLine: 1, EndLine: 9},
+	})
+	assert.Equal(t, fits, sigLine(t, out))
 }
 
 // TestWhyQualifiesANonEmptyCallerList proves that the header of a

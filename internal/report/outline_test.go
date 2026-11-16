@@ -463,9 +463,11 @@ func TestWhySymbolSigIsRedacted(t *testing.T) {
 	out = whyFile(t, st, root, "pkg.multiLine")
 	assert.Contains(t, out, "  sig      func multiLine( a int, b int, )\n")
 
-	// The symbol report is the full view, so it does not cut the signature.
+	// A value can store its whole initializer as its signature, so the
+	// symbol report cuts the line at whySigCap runes, after the scrub.
 	out = whyFile(t, st, root, "pkg.longValue")
-	assert.Contains(t, out, "  sig      "+long+"\n")
+	assert.Contains(t, out, "  sig      "+long[:whySigCap-1]+"…\n")
+	assert.NotContains(t, out, long)
 }
 
 func TestExpandSymbolRespectsHalfOpenEnd(t *testing.T) {

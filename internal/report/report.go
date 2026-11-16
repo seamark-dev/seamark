@@ -49,7 +49,12 @@ func Why(w io.Writer, st *store.Store, root, query string) error {
 	if len(syms) > 1 {
 		fmt.Fprintf(w, "\nalso matched\n")
 		for _, s := range syms[1:] {
-			fmt.Fprintf(w, "  %-40s %s\n", s.FQN, location(s))
+			loc, err := whyLocation(st, s, false)
+			if err != nil {
+				return err
+			}
+
+			fmt.Fprintf(w, "  %-40s %s\n", s.FQN, loc)
 		}
 	}
 
@@ -100,15 +105,27 @@ func asIndexedFile(st *store.Store, root, query string) (string, bool) {
 	return candidates[0], false
 }
 
+// whySigCap is the largest number of runes on the sig line of why
+// <symbol>. A JS/TS binding or a Python module-level value stores its
+// whole initializer as its signature, which can run to thousands of
+// runes, while expand gives the source. 200 runes keep a long Go
+// function header whole.
+const whySigCap = 200
+
 func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string, sym model.Symbol) error {
+	loc, err := whyLocation(st, sym, true)
+	if err != nil {
+		return err
+	}
+
 	fmt.Fprintf(w, "%s  (%s)\n", sym.FQN, sym.Kind)
-	fmt.Fprintf(w, "  defined  %s\n", location(sym))
+	fmt.Fprintf(w, "  defined  %s\n", loc)
 
 	if sym.Sig != "" {
 		// Signatures come from source text. A var initializer can carry
 		// control bytes or a secret, so the line gets the scrub of the file
-		// outline. It is not cut, because this report is the full view.
-		fmt.Fprintf(w, "  sig      %s\n", scrubSource(sym.Sig))
+		// outline, and the cap keeps it to one line.
+		fmt.Fprintf(w, "  sig      %s\n", render.Truncate(scrubSource(sym.Sig), whySigCap))
 	}
 
 	effects, err := st.EffectsForSymbol(sym.ID)
@@ -142,8 +159,12 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string
 		// a real call site against them.
 		fmt.Fprintf(w, "\ncallers (0)  — none resolved\n")
 		fmt.Fprintf(w, "  a call by a method name that several methods share, or through a function value, gets no edge\n")
-		fmt.Fprintf(w, "  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares the method's directory nor imports its package\n")
-		fmt.Fprintf(w, "  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
+
+		// The Go rules say nothing about a symbol of another language.
+		if strings.HasSuffix(sym.File, ".go") {
+			fmt.Fprintf(w, "  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares the method's directory nor imports its package\n")
+			fmt.Fprintf(w, "  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
+		}
 	}
 
 	if len(callees) > 0 {
@@ -1619,6 +1640,27 @@ func effectLine(effects []store.Effect) string {
 	}
 
 	return strings.Join(parts, " · ")
+}
+
+// whyLocation labels where why finds sym. A package grouping symbol has
+// no file, but a package of this repository is not external, so it says
+// what it is: the long form on the definition line names the routes to
+// its content, the short form fits a list. The texts are fixed.
+func whyLocation(st *store.Store, sym model.Symbol, long bool) (string, error) {
+	if sym.File != "" || sym.Kind != model.KindPackage {
+		return location(sym), nil
+	}
+
+	ours, err := st.PackageInRepository(sym)
+	if err != nil || !ours {
+		return location(sym), err
+	}
+
+	if long {
+		return "(package of this repository; `why <file>` or `why <symbol>` for content)", nil
+	}
+
+	return "(package)", nil
 }
 
 func location(s model.Symbol) string {

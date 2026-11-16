@@ -49,10 +49,13 @@ edge declares how it was derived (`[qualified]`, `[same-package]`,
 know how much to trust an edge. Edges of the `[qualified]`,
 `[same-package]`, and `[same-class]` tiers lead each list, and
 `[unique-name]` guesses follow, so the 15-line cut drops guesses first.
+The `sig` line is cut at 200 characters with `…`: a JS/TS binding or a
+Python module-level value keeps its whole initializer as its signature,
+and `seamark expand <symbol>` gives the source.
 A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
-several methods share, or through a function value, gets no edge, and
-in Go neither does a common method name (`Close`, `Err`, …) from a file
+several methods share, or through a function value, gets no edge, and,
+for a symbol in a Go file only, in Go neither does a common method name (`Close`, `Err`, …) from a file
 that neither shares the method's directory nor imports its package, a
 call whose operand
 starts at a package outside the repository, or an unexported method of
@@ -72,6 +75,19 @@ diff leaves out; when it lists none, one `companions` line says why:
 every partner is in the diff, the index holds no partner, or the read
 failed. On a repo with real history, this section is where the
 surprises live.
+
+`why` reads a query as a file path first, then as a symbol: an exact
+FQN or name, then an FQN suffix, then a prefix search. It reports the
+first match and lists up to four others under `also matched`; `expand`
+takes the same first match. Among exact matches a symbol defined in the
+repository comes before a package grouping symbol, and an exact FQN
+before a name; among suffix matches one at a component boundary (`.` or
+`/` before the query) comes before a raw string suffix. When definitions
+of the same name fill the list, a package of exactly that name takes its
+last line, so it is never cut. A package of
+this repository prints `defined  (package of this repository; …)` and
+`(package)` in lists; only a package the code imports from outside
+prints `(external)`.
 
 `change_set` prints each partner once. A partner that the plan leaves
 out and that the closing `history suggests also reviewing` list shows

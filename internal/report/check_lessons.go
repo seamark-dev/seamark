@@ -55,7 +55,7 @@ type CombinedResult struct {
 	// DiffPathsOutsideSnapshot lists the changed paths of a supplied diff
 	// that the verified snapshot does not hold, in diff order. The lesson
 	// checks read the working tree, so they did not verify these paths.
-	// It is empty for git diff HEAD.
+	// It is empty for git diff HEAD, and when no executable check exists.
 	DiffPathsOutsideSnapshot []string `json:"diff_paths_outside_snapshot,omitempty"`
 }
 
@@ -69,9 +69,12 @@ func NewCheckLessonsEnvelope(policy *gate.Decision, lessons *lessoncheck.Verific
 	combined := lessoncheck.Combine(lessons.Summary.State, policy.Blocking())
 
 	// Only a supplied diff can name a path that the working tree does not
-	// change. git diff HEAD reads the same tree as the snapshot.
+	// change. git diff HEAD reads the same tree as the snapshot. Without
+	// an executable pin no check read anything, so the fact would warn
+	// about nothing. No applicable check keeps it: the supplied diff can
+	// hold the change that a check would apply to.
 	var outside []string
-	if policyInput == PolicyInputStdinDiff {
+	if policyInput == PolicyInputStdinDiff && lessons.Summary.State != lessoncheck.SummaryNoExecutableChecks {
 		outside = pathsOutsideSnapshot(diffPaths, lessons.Changes)
 	}
 

@@ -583,6 +583,33 @@ model-boundary delivery.
   repository. `status --json` keeps `"freshness": "stale"` and adds
   `stale_reason` (`other-version` or `workspace-changed`), and the
   preparation document adds `mined_stale_reason`.
+- **No supplied-diff note when no lesson check exists.** `check
+  --lessons` and MCP `check` with lesson checks no longer print the note
+  that the lesson checks read the working tree, or
+  `diff_paths_outside_snapshot`, when the lesson state is
+  `no-executable-checks`. No check ran, so the note warned about
+  nothing. Every other state keeps it, including `no-applicable-checks`.
+- **`why` bounds its signature line.** `why <symbol>` cuts its `sig`
+  line at 200 characters with `…`. A JS/TS binding or a Python
+  module-level value stores its whole initializer as its signature, so
+  one answer could run past 10 KB. The stored signature does not change,
+  and `expand` still gives the source.
+- **`why` prints the Go caller rules only for Go symbols.** `why` on a
+  function or a method with no resolved caller prints the two lines that
+  start with `in Go` only when the file of the symbol is a Go file.
+  Every language keeps the first line, which names the rules of all
+  languages.
+- **`why` and `expand` prefer a defined symbol over a package.** A query
+  that named both a package and a symbol defined in the repository
+  resolved to the package, which has no content, and `expand` failed
+  with "is external". The exact and suffix stages now order their
+  matches before the limit: a defined symbol before a package, an exact
+  FQN before a name, and a suffix that starts a whole component before a
+  raw suffix. When definitions of the same name fill the result, a
+  package of exactly that name takes its last line, so `why` and
+  `expand` still mention it. Which symbols match does not change. `why`
+  no longer calls a package of this repository external: it says that it
+  is a package of this repository and lists it as `(package)`.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

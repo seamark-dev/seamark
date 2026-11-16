@@ -1524,8 +1524,9 @@ func (s *Store) querySymbols(q string, args ...any) ([]model.Symbol, error) {
 }
 
 // FindSymbols resolves a user query to symbols, best matches first. It tries
-// exact FQN, exact name, FQN suffix, then FTS prefix search, deduplicating
-// across stages.
+// exact FQN or name, FQN suffix, then FTS prefix search, deduplicating
+// across stages. Each stage orders its rows before its LIMIT, so the cut
+// is deterministic and keeps the best candidates.
 func (s *Store) FindSymbols(query string, limit int) ([]model.Symbol, error) {
 	if limit <= 0 {
 		limit = 10
@@ -1548,13 +1549,27 @@ func (s *Store) FindSymbols(query string, limit int) ([]model.Symbol, error) {
 		return nil, err
 	}
 
+	// Definitions come first, so same-named definitions can fill the
+	// limit and cut a package of that name, the one hint that the name
+	// is also a package. The best such package takes the last slot. The
+	// lookup runs only when that cut can have happened.
+	if limit >= 2 && len(exact) == limit && !slices.ContainsFunc(exact, isPackage) {
+		pkgs, err := s.querySymbols(exactPackageSQL, query, query, string(model.KindPackage), query)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(pkgs) > 0 {
+			exact[limit-1] = pkgs[0]
+		}
+	}
+
 	add(exact)
 
 	if len(out) < limit {
-		suffix, err := s.querySymbols(
-			`SELECT `+symbolCols+` FROM symbol WHERE fqn LIKE ? ESCAPE '\' LIMIT ?`,
-			"%"+escapeLike(query), limit,
-		)
+		q := escapeLike(query)
+
+		suffix, err := s.querySymbols(suffixSymbolsSQL, "%"+q, "%."+q, "%/"+q, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -1587,15 +1602,69 @@ func (s *Store) FindSymbols(query string, limit int) ([]model.Symbol, error) {
 	return out, nil
 }
 
+// exactSymbolsSQL finds the symbols whose FQN or name equals the query.
+// A package grouping symbol has no file and gets the lowest ids, so
+// without an order it stood before the symbol that has a definition.
+// The keys put a definition first, then an FQN match before a name
+// match, then id. The OR still reads the two indexes; only the matched
+// rows are sorted.
+const exactSymbolsSQL = `SELECT ` + symbolCols + ` FROM symbol
+	WHERE fqn = ? OR name = ?
+	ORDER BY file = '', fqn <> ?, id
+	LIMIT ?`
+
+// exactPackageSQL finds the best package grouping symbol whose FQN or
+// name equals the query: an FQN match first, then id. It reads the same
+// two indexes as exactSymbolsSQL.
+const exactPackageSQL = `SELECT ` + symbolCols + ` FROM symbol
+	WHERE (fqn = ? OR name = ?) AND kind = ?
+	ORDER BY fqn <> ?, id
+	LIMIT 1`
+
+func isPackage(sym model.Symbol) bool { return sym.Kind == model.KindPackage }
+
+// suffixSymbolsSQL finds the symbols whose FQN ends with the query. A
+// suffix at a component boundary ("." or "/" before it) names a whole
+// component, so it comes before a raw string suffix; then a definition
+// first, then id. The boundary keys use LIKE like the filter, so they
+// agree with it on case.
+const suffixSymbolsSQL = `SELECT ` + symbolCols + ` FROM symbol
+	WHERE fqn LIKE ? ESCAPE '\'
+	ORDER BY NOT (fqn LIKE ? ESCAPE '\' OR fqn LIKE ? ESCAPE '\'), file = '', id
+	LIMIT ?`
+
 // ExactSymbols returns at most limit symbols whose FQN or name equals
-// query. It is the first step of FindSymbols. A report that offers a why
-// route asks it whether why resolves the route to one symbol, so the
-// check and why use one predicate.
+// query, in the order of exactSymbolsSQL, with no package reserved:
+// FindSymbols reserves one after it. It is the first step of
+// FindSymbols. A report that offers a why route asks it whether why
+// resolves the route to one symbol, so the check and why use one
+// predicate.
 func (s *Store) ExactSymbols(query string, limit int) ([]model.Symbol, error) {
-	return s.querySymbols(
-		`SELECT `+symbolCols+` FROM symbol WHERE fqn = ? OR name = ? LIMIT ?`,
-		query, query, limit,
-	)
+	return s.querySymbols(exactSymbolsSQL, query, query, query, limit)
+}
+
+// PackageInRepository reports whether the package grouping symbol pkg
+// groups code of this repository rather than only an import target. The
+// indexer writes a DEFINES edge from a package to each symbol of each
+// parsed file that has its key (a Go directory, a Python module, a JS/TS
+// module), and never from an import target. A Python package with an
+// empty __init__.py, or a Go directory that holds only subdirectories,
+// has no members of its own, but its submodules are under its key and
+// "/". So some symbol with a file under pkg.FQN+"/" counts too. The "."
+// separator would not do: a JS/TS file "next.config.ts" has the key
+// "next.config", and the import target "next" is not this repository's.
+func (s *Store) PackageInRepository(pkg model.Symbol) (bool, error) {
+	var found bool
+
+	// "0" is the byte after "/", so the range holds exactly the FQNs
+	// that start with pkg.FQN+"/".
+	err := s.db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM edge WHERE src = ? AND kind = ?)
+		     OR EXISTS (SELECT 1 FROM symbol WHERE fqn >= ? AND fqn < ? AND file != '')`,
+		pkg.ID, string(model.EdgeDefines), pkg.FQN+"/", pkg.FQN+"0",
+	).Scan(&found)
+
+	return found, err
 }
 
 // escapeLike escapes LIKE wildcards in user input.
