@@ -148,11 +148,16 @@ The index freshness check, the `check` fallback, the console
 only, such as `touch`, then leaves the git index as it was, so a
 concurrent git command does not meet `.git/index.lock`.
 
-An index run records the workspace state that it observes before it
-reads any file, and it writes that record in the same transaction as
-the graph. A file that changes during the run therefore makes the next
-run, `check`, or MCP call rebuild, and the index never reads as current
-for content that it did not parse.
+An index run observes the workspace state before it reads any file and
+again after its last read. When the two states are equal, the run
+records that state in the same transaction as the graph. When they
+differ, the run records a mark that equals no workspace state. So a
+file that changes between the two observations makes `status` call the
+index stale, and the next run, `check`, or MCP call rebuilds. This
+holds also when the file goes back to its first content later, as after
+`git stash` and `git stash pop`. The run compares only these two
+states, so a change that goes back before the second observation is not
+seen.
 
 ## How much can the answers be trusted?
 

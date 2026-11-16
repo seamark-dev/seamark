@@ -1,6 +1,7 @@
 package index
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -74,12 +76,12 @@ func racedSymbols(t *testing.T, dbPath string) []string {
 	return fqns
 }
 
-// TestIndexEditDuringRunRebuildsNextRun proves that Run records the
-// workspace state it observed before its reads. An edit after the read
-// loop adds a function that the run did not parse. The next run must not
-// skip, because the recorded state is older than the workspace, and it
-// indexes the function. Before the fix Run recorded the state after the
-// edit, so every later run skipped and the function stayed unindexed.
+// TestIndexEditDuringRunRebuildsNextRun proves that Run never records
+// the workspace state from after its reads. An edit after the read loop
+// adds a function that the run did not parse. The next run must not skip,
+// because the record does not match the workspace, and it indexes the
+// function. Before the fix Run recorded the state after the edit, so
+// every later run skipped and the function stayed unindexed.
 func TestIndexEditDuringRunRebuildsNextRun(t *testing.T) {
 	root := racedRepo(t)
 
@@ -151,6 +153,128 @@ func TestIndexOlderRunCommittingLastRebuildsNextRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, next.Skipped, "an older graph must not read as current")
 	assert.Equal(t, []string{"internal/util.Raced"}, racedSymbols(t, outer.DBPath))
+}
+
+// racedHealth reads the index health as status reads it: with the
+// workspace fingerprint that leaves out the database file it reads.
+func racedHealth(t *testing.T, root, dbPath string) indexhealth.Health {
+	t.Helper()
+
+	st, err := store.OpenReadOnly(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	health, err := indexhealth.Read(st, root, func(root string) string { return WorkspaceState(root, st.Path()) },
+		OtherVersion)
+	require.NoError(t, err)
+
+	return health
+}
+
+// TestIndexEditRevertedAfterRunRebuildsNextRun covers an edit that lands
+// after the run observes the workspace and before the run reads the file.
+// The user takes the edit back after the run, as with git stash and git
+// stash pop. The run parses the edit, so its graph holds content that no
+// file holds after the revert, although the workspace state equals the
+// first observation again. The run must leave a record that every reader
+// calls stale, so the next run rebuilds and drops the edit.
+func TestIndexEditRevertedAfterRunRebuildsNextRun(t *testing.T) {
+	root := racedRepo(t)
+
+	p := filepath.Join(root, racedFile)
+	orig, err := os.ReadFile(p)
+	require.NoError(t, err)
+
+	// The scan phase comes after the first observation and before the
+	// read loop, so the run reads the edited file.
+	edited := false
+
+	var logs []string
+
+	first, err := Run(Options{
+		Root: root,
+		Logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) },
+		Progress: func(phase string, _, _ int) {
+			if phase != "scan" || edited {
+				return
+			}
+
+			edited = true
+
+			addRacedFunc(t, root)
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, edited, "the edit ran during the run")
+	require.False(t, first.Skipped)
+	assert.Equal(t, []string{"internal/util.Raced"}, racedSymbols(t, first.DBPath), "the run read the edited file")
+	assert.Contains(t, logs, racedNote)
+
+	require.NoError(t, os.WriteFile(p, orig, 0o644))
+
+	health := racedHealth(t, first.Root, first.DBPath)
+	assert.Equal(t, indexhealth.FreshStale, health.Freshness, "the graph holds an edit that no file holds")
+	assert.Equal(t, indexhealth.StaleWorkspaceChanged, health.StaleReason)
+
+	second, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, second.Skipped, "a run that saw the workspace change must make the next run rebuild")
+	assert.Empty(t, racedSymbols(t, first.DBPath), "the rebuild drops the reverted edit")
+
+	third, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.True(t, third.Skipped, "an unchanged workspace skips again")
+	assert.Equal(t, indexhealth.FreshCurrent, racedHealth(t, first.Root, first.DBPath).Freshness)
+}
+
+// TestIndexUnchangedRunRecordsItsState covers a run that sees no change
+// during its reads. It records the workspace state and logs no note, the
+// health reader calls the index current, and the next run skips.
+func TestIndexUnchangedRunRecordsItsState(t *testing.T) {
+	root := racedRepo(t)
+
+	var logs []string
+
+	first, err := Run(Options{Root: root, Logf: func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}})
+	require.NoError(t, err)
+	require.False(t, first.Skipped)
+	assert.NotContains(t, logs, racedNote)
+
+	st, err := store.OpenReadOnly(first.DBPath)
+	require.NoError(t, err)
+
+	stored, err := st.GetMeta(store.MetaIndexedState)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+
+	assert.Equal(t, WorkspaceState(first.Root, first.DBPath), stored)
+	assert.Equal(t, indexhealth.FreshCurrent, racedHealth(t, first.Root, first.DBPath).Freshness)
+
+	second, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.True(t, second.Skipped, "an unchanged workspace skips")
+}
+
+// TestChangedDuringRunMatchesNoWorkspaceState proves that the mark of a
+// run that saw the workspace change reads as stale against every current
+// state. WorkspaceState gives hex digits or "", and the mark holds other
+// letters.
+func TestChangedDuringRunMatchesNoWorkspaceState(t *testing.T) {
+	state := WorkspaceState(racedRepo(t), "")
+	require.NotEmpty(t, state)
+
+	_, err := hex.DecodeString(state)
+	require.NoError(t, err, "a workspace state is a hex string")
+
+	_, err = hex.DecodeString(changedDuringRun)
+	require.Error(t, err, "the mark is no hex string")
+
+	assert.Equal(t, indexhealth.FreshStale, indexhealth.Freshness(changedDuringRun, state))
+	assert.Equal(t, indexhealth.FreshStale, indexhealth.Freshness(changedDuringRun, ""),
+		"a workspace without git does not make the mark current")
 }
 
 // TestIndexOwnDatabaseInTheWorkspaceKeepsTheSkip covers a database that

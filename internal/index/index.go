@@ -180,8 +180,16 @@ func buildRefusal(s ownership.State, d ownership.Decision) error {
 
 // afterRead runs after the read loop and before the write when it is
 // not nil. Only tests set it: it is the one point where a test can change
-// a file after its read and before the run records the workspace state.
+// a file after its read and before the run observes the workspace again.
 var afterRead func()
+
+// changedDuringRun is the workspace state that a run records when the
+// workspace changed between its two observations. The graph can then
+// hold content that no workspace state describes, also after the files go
+// back to their first content. WorkspaceState returns hex digits or "",
+// so this value never equals a current state. Every reader then calls the
+// index stale, and the next run rebuilds.
+const changedDuringRun = "changed"
 
 // Run executes a full indexing pass.
 func Run(opts Options) (*Summary, error) {
@@ -211,10 +219,9 @@ func Run(opts Options) (*Summary, error) {
 	refusal := buildRefusal(state, decision)
 
 	// The workspace state is observed before any file is read, and the
-	// run records this state. A file that changes during the run then
-	// makes the record differ from the workspace, so the next run
-	// rebuilds. A state observed after the reads would mark an older parse
-	// as current. The fast path compares the same observation.
+	// run records this state when the workspace still has it after the
+	// reads. A state observed only after the reads would mark an older
+	// parse as current. The fast path compares the same observation.
 	observed := WorkspaceState(root, dbPath)
 
 	// Fast path: an unchanged workspace needs no work. This makes
@@ -410,6 +417,20 @@ func Run(opts Options) (*Summary, error) {
 
 	g := buildGraph(results, readGoModules(root, files), catalog)
 
+	// The second observation comes after the last read of the workspace,
+	// the go.mod files in buildGraph. When the state differs, the reads can
+	// hold content that the first state does not describe. So the run
+	// records the mark that matches no state. A change after this point
+	// does no harm: the graph matches the recorded state, and the next run
+	// sees the change. The git calls run outside the transaction, so they
+	// do not hold the write lock.
+	recorded := observed
+	changed := observed != "" && WorkspaceState(root, dbPath) != observed
+
+	if changed {
+		recorded = changedDuringRun
+	}
+
 	err = st.Rebuild(func(tx *store.Tx) error {
 		if err := g.write(tx); err != nil {
 			return err
@@ -453,7 +474,7 @@ func Run(opts Options) (*Summary, error) {
 		for k, v := range map[string]string{
 			store.MetaRepoRoot:          root,
 			store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
-			store.MetaIndexedState:      observed,
+			store.MetaIndexedState:      recorded,
 			store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
 			store.MetaParseCacheVersion: parseCacheVersion,
 			store.MetaIndexSummary:      string(coverage),
@@ -469,9 +490,9 @@ func Run(opts Options) (*Summary, error) {
 		return nil, err
 	}
 
-	// A change during the run leaves the record behind the workspace, so
-	// the next run rebuilds. The note says why that run is not skipped.
-	if observed != "" && WorkspaceState(root, dbPath) != observed {
+	// The mark is committed now, so the claim of the note is true. The
+	// note says why the next run is not skipped.
+	if changed {
 		logf("note: the workspace changed during indexing; the next run rebuilds")
 	}
 
@@ -1190,7 +1211,8 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 // freshSummary returns a Skipped summary when the index at dbPath was
 // built from the current workspace state; nil when a rebuild is needed.
 // current is the WorkspaceState that Run observed before its reads; a
-// rebuild records the same value. open is the opener of the database, so
+// rebuild records the same value when the reads leave it unchanged, else
+// changedDuringRun. open is the opener of the database, so
 // a caller decides whether an older schema migrates. state and decision
 // say whether a rebuild must record root.
 func freshSummary(root, dbPath, current string, start time.Time, open func(string) (*store.Store, error),

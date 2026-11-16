@@ -452,11 +452,14 @@ model-boundary delivery.
   indexing.** An index run recorded the workspace fingerprint after it
   had parsed the files, so a file edited during the run was recorded but
   never parsed. Every later run, `status`, `orient` and `check` then
-  trusted that stale index until a forced rebuild. The run now records
-  the state it saw before reading any file, and it writes that record in
-  the same transaction as the graph, so overlapping runs cannot pair a
-  newer fingerprint with an older graph. An edit during a run costs one
-  extra rebuild on the next call, and the run logs a note that says so.
+  trusted that stale index until a forced rebuild. The run now observes
+  the state before it reads any file and again after its last read, and
+  it writes the record in the same transaction as the graph, so
+  overlapping runs cannot pair a newer fingerprint with an older graph.
+  When the two states differ, the run records a mark that equals no
+  state, so the index reads as stale and the next call rebuilds, also
+  after the edit is taken back, as with `git stash` and `git stash pop`.
+  Such a run logs a note that the next run rebuilds.
 - **MCP answers name the repository that their index records.** Under a
   database that records another repository, every MCP read (`orient`,
   `why`, `expand`, `change_set` and both resources) opens with one note
