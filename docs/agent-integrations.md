@@ -208,7 +208,7 @@ implemented handlers, not verified native prevention:
 
 | Client / tool | Pre-write | Post-edit | Contexts and current evidence |
 | --- | --- | --- | --- |
-| Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offered no MultiEdit tool in the recording. Post-edit reply: seen in the recording, still unverified in the report |
+| Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offers no MultiEdit tool. The model's replies in the 2.1.319 recording say so, and the model-free check of `make agents-native-check CLIENT=claude` shows that 2.1.325 offers none, inline or deferred, and refuses a MultiEdit call. Post-edit reply: seen in the recording, still unverified in the report |
 | Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; reply seen in the next model request on Claude Code 2.1.319, still unverified in the report; main-context repeats reset at compaction, child reminders repeat |
 | Claude Code `NotebookEdit`, `Bash` | No lesson-check hook | No lesson-check hook | Uncovered writers in both contexts; a shell command can write files |
 | Codex `apply_patch` | Baseline or guard; Add, Delete, move, and Update content projection; an Update outside the verified rules reads unknown | `PostToolUse` verification; the handler reads a failed exit status, but no recording shows a hook after a failed patch | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply: seen in the thread, still unverified in the report. Child call and lane attribution: unsupported |
@@ -297,8 +297,10 @@ validates it for `apply_patch` in the root and child contexts in the
 same way: it waits about 7 seconds for a slow deny and honors it. A
 root patch case also shows that it stops a hook at 10 seconds and lets
 the patch run, without a message. No child case of either client
-records the stop at 10 seconds. `MultiEdit` and the post-edit timeout
-remain candidates.
+records the stop at 10 seconds. The post-edit timeout and the
+`MultiEdit` pre-edit timeout remain candidates. No recording can
+validate the second while the client offers no MultiEdit tool, as on
+Claude Code 2.1.319 and 2.1.325.
 
 ### Installed, active, and verified are different
 
@@ -334,7 +336,14 @@ and `Edit` in the root and child contexts. Status prints these paths as
 its 10 s hook timeout)`. The baseline paths of check mode read the same,
 because the recording shows that the client waits for a slow pre-edit
 hook. `MultiEdit` has no recorded call, so its paths stay
-`active-unverified`. In enforce mode its guard paths also name
+`active-unverified`. In the Claude Code 2.1.319 recording, the model's
+replies say that the client offered no MultiEdit tool.
+`make agents-native-check CLIENT=claude` shows without a model that
+2.1.325 offers none either: no request offers it, inline or
+deferred, `ToolSearch` finds no such tool, and a scripted call gets the
+error `No such tool available: MultiEdit`. So no recording can show a
+native MultiEdit deny on these versions. The paths stay pending, not
+`unsupported`. In enforce mode its guard paths also name
 `native-deny-unverified` and `native-timeout-unverified`, and a Claude
 Code enforce pin reads `enforced-unverified`. In check mode its baseline
 path reads `active-unverified` with no reason.
@@ -849,6 +858,7 @@ tool wrote.
 | `make agents-test` | Go and the repository's build prerequisites; no agent CLI or credentials | adapter contracts, setup, hooks, delivery, gates, diagnostics, and fake subprocesses; also covered by `make test` and CI |
 | `make smoke` | the built binary | the generated Claude Code and Codex configuration in a fresh repository, the hook commands it wrote running as written, and no credential in a generated file; part of CI and of every release |
 | `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case and path-control case, when the installed version is the recorded one (else it skips with the reason); the Codex Update projection against the installed applier on 500 seeded patches, with no difference and no content for a refused patch; on any version, that the guard decoder refuses each path-control patch or names every file that the applier changed, over the recorded cases and a generated sweep of control and space characters in header paths; the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
+| `make agents-native-check CLIENT=claude` | the client CLI on PATH; no model, no credentials | the generated configuration, the hook commands it wrote, the offline diagnostics, and no credential in a generated file; the replay of the reviewed Claude Code recordings; the tools that the installed client offers to a scripted loopback Messages API, with no `MultiEdit` tool, and its refusal of a `MultiEdit` call |
 | `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json` and of the path-control cases into `internal/integration/testdata/codex/apply_patch_path_control_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
 | `make agents-native-smoke CLIENT=codex` | the client CLI and operator authentication; costs tokens | one distillation group read through the client preset with no failed group and a proposed pin, the pin's client provenance in the ledger, the command disclosed by `--dry-run`, trigger extraction in dry-run only, and the workspace unchanged afterwards |
 | `make native-replay CLIENT=<client>` | Go and the repository's build prerequisites; no client CLI, no model, no credentials | the replay of the reviewed timing and guard recordings in `internal/integration/testdata/<client>/timing` and `.../guard`, and the offline tests of the recording script for that client; a replay without a reviewed recording skips as pending, and a skip gives no evidence |
@@ -864,9 +874,13 @@ provides no compatibility evidence.
 The Codex offline checks use a scratch `CODEX_HOME`. They configure trust
 only for the disposable test repository, leaving your project's trust
 unchanged. Scripted responses come from a local test server, not a model.
-`CLIENT=claude` runs the shell configuration checks and the Go tests
-that replay the reviewed Claude Code timing and guard recordings. The
-other Go native tests are Codex-only.
+`CLIENT=claude` runs the shell configuration checks, the Go tests
+that replay the reviewed Claude Code timing and guard recordings, and
+one tool check. That check runs the installed Claude Code against a
+scripted Messages API on the loopback interface, with a dummy key and a
+scratch `CLAUDE_CONFIG_DIR`, so no model runs. It records the tools that
+the client offers and checks that the client refuses a `MultiEdit`
+call. The other Go native tests are Codex-only.
 
 The credential canary belongs to the offline check only; the smoke
 leaves the operator's environment as it is. The smoke's distillation
@@ -900,7 +914,10 @@ Before release:
   never generalize a successful path to the rest. Claude Code: the
   timing and guard recordings of 2.1.319 are reviewed and committed in
   `internal/integration/testdata/claude/timing` and `.../guard`;
-  `MultiEdit` has no recorded call. Codex: the timing and guard
+  `MultiEdit` has no recorded call, because the client offers no
+  MultiEdit tool: the model's replies in the 2.1.319 recording say so,
+  and `make agents-native-check CLIENT=claude` shows it without a model
+  on 2.1.325. Its paths stay pending. Codex: the timing and guard
   recordings of codex-cli 0.169.0 are reviewed and committed in
   `internal/integration/testdata/codex/timing` and `.../guard`; that
   client refuses a pure move before any hook, no recording shows a hook

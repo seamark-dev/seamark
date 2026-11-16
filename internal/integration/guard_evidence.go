@@ -82,8 +82,9 @@ const codexEvidenceVersion = "codex-cli 0.169.0"
 // timeout, and the client waits for it and honors the deny. Claude
 // Code stops a slower hook at the timeout and lets the write run
 // (timeoutRecorded), so no Claude Code path has a slowPastTimeout
-// proof. MultiEdit has no entry, because the client offered no
-// MultiEdit tool to the model.
+// proof. MultiEdit has no entry, because the client offers no
+// MultiEdit tool. The model's replies in the 2.1.319 recording say so,
+// and TestNativeClaudeOffersNoMultiEditTool shows it on 2.1.325.
 //
 // The Codex recording shows a blocked deny of apply_patch in the root
 // and the child context, and an in-budget slow deny of each. Codex also

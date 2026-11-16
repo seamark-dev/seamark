@@ -40,7 +40,10 @@ Files:
   `old_string` creates an absent file with `new_string`, so the guard
   projects such an edit as an add. No native run made a `MultiEdit`
   call, so a first `MultiEdit` step with an empty `old_string` follows
-  the `Edit` result by analogy.
+  the `Edit` result by analogy. Claude Code offers no MultiEdit tool:
+  the model's replies in the 2.1.319 guard recording say so, and the
+  model-free check of `make agents-native-check CLIENT=claude` shows it
+  on 2.1.325.
 - `pre_tool_use_bash.json`: the shell event the gate hook matches.
 - `post_compact.json`: the lifecycle event the reset hook matches.
 - `post_compact_subagent.json`: a PostCompact with `agent_id`. The

@@ -99,7 +99,12 @@ assistant record of its transcript.
   MultiEdit call. The negative reply word is the plain word `absent`,
   which the model spells reliably. In run 22 only the last text of the
   child holds `absent`, so the recorded reply is empty. The MultiEdit
-  path keeps no native evidence.
+  path keeps no native evidence. Claude Code 2.1.325 has no MultiEdit
+  tool either. `TestNativeClaudeOffersNoMultiEditTool`
+  (`make agents-native-check CLIENT=claude`) runs that client against a
+  scripted loopback Messages API, with no model. It offers no MultiEdit
+  tool, inline or deferred, and answers a scripted MultiEdit call with
+  `No such tool available: MultiEdit`.
 - An Edit that fails (runs 5 and 11): the client refuses the call in
   its input validation, before any hook, so no PreToolUse or
   PostToolUseFailure payload exists. The Write failure path has its own
