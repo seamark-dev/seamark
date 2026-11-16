@@ -132,6 +132,14 @@ model-boundary delivery.
   no execute bit. It names the setup run that rewrites the command, or
   the hand edit for `.claude/settings.local.json`. The status gate line
   says that no gate hook runs, in place of "no gate hook installed".
+- **Hooks of a renamed binary.** `seamark init` through a binary whose
+  file name is not `seamark`, such as `seamark-1.2` or a link named
+  `seamark` to such a file, wrote hooks that doctor and status did not
+  see. Each re-run added another hook set, and `--gate-mode warn` after
+  `--gate-mode enforce` printed "nothing blocks" while the enforce hook
+  stayed. Init, doctor, and status now also own a hook command that
+  names the path of the running binary, for Claude Code and Codex. A
+  hook that another binary wrote under another name stays foreign.
 - **Codex gate in the Claude Code form.** A `gate --hook` or
   `gate --enforce --hook` handler without `--client codex` in
   `.codex/hooks.json` runs and blocks in Codex. Doctor and status now

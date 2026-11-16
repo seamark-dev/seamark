@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/history"
-	"github.com/seamark-dev/seamark/internal/scaffold"
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/tui"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -109,7 +109,7 @@ the plain commands stay the stable interface.`,
 			}
 
 			return tui.Run(tui.Options{
-				Services: services.New(ws, version, scaffold.BinaryPath()),
+				Services: services.New(ws, version, hooks.BinaryPath()),
 				ASCII:    ascii,
 				In:       in,
 				Out:      out,

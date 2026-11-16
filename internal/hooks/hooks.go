@@ -3,7 +3,9 @@
 // rule, and gate-mode detection live here once — init writes hooks,
 // status reads them, and two copies of the matching logic would drift.
 // The merge that installs the hooks lives here too (merge.go), so init
-// and the client setup adapters share one implementation.
+// and the client setup adapters share one implementation. The binary
+// path that a hook command names lives in binary.go, beside the
+// ownership rule that reads it back.
 package hooks
 
 import (
@@ -81,7 +83,9 @@ func ForEachCommand(pre []any, fn func(matcher string, h map[string]any, cmd str
 //
 // The binary check keeps the marker from claiming someone else's hook:
 // `company-security gate --hook` (or a lookalike such as `seamark2`)
-// is not ours. The one-word check keeps setup from destroying a wrapper:
+// is not ours. The word names the seamark binary by its basename, or it
+// is the exact path of the running binary (see ownsHookBinary). The
+// one-word check keeps setup from destroying a wrapper:
 // `/opt/wrapper /usr/local/bin/seamark gate --hook` ends like our command,
 // and a rewrite to the bare command removes the wrapper without a word.
 func OwnedBySeamark(cmd string, markers []string) bool {
@@ -102,7 +106,7 @@ func OwnedCommand(cmd string, markers []string) (binary, marker string, ok bool)
 		}
 
 		word, isWord := shellWord(rest)
-		if !isWord || !IsSeamarkBinary(word) {
+		if !isWord || !ownsHookBinary(word) {
 			return "", "", false
 		}
 
@@ -142,7 +146,9 @@ func shellWord(s string) (string, bool) {
 // IsSeamarkBinary reports whether a command path names the seamark
 // binary: exact basename "seamark", tolerating the Windows suffix. The
 // hook owner, the Claude Code registration, and the Codex registration
-// all use this one rule, so they agree on what is seamark's.
+// all use this rule, so they agree on a binary named seamark. The hook
+// owner also accepts the path of the running binary, because setup
+// writes that path into each hook command.
 func IsSeamarkBinary(command string) bool {
 	return strings.TrimSuffix(filepath.Base(command), ".exe") == "seamark"
 }

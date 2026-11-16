@@ -90,6 +90,16 @@ another machine is one example. For the file that setup manages, the
 fix is a setup run, which rewrites the command to the running binary;
 Codex then asks for a new review in `/hooks`.
 
+Setup writes the absolute path of the running binary into each hook
+command, with symbolic links resolved. Init, doctor, and status read a
+hook as seamark's when that path has the basename `seamark`, or when it
+is the path of the binary that runs them. So a renamed build, such as
+`seamark-1.2`, or a link named `seamark` to such a file, keeps one hook
+set across re-runs, and doctor and status run through that binary report
+it. Run through another binary, such as `seamark` on your PATH, they
+read the renamed build's hooks as another program's, and a setup run
+adds its own hooks beside them.
+
 Setup keeps the matcher of an existing hook, because a narrow matcher can
 be your choice. When the matcher of a seamark hook in the file that setup
 manages never fires for the hook's tools, init, doctor, and status warn
@@ -603,7 +613,9 @@ The rules that hold every adapter to the same behavior:
 
 - **Ownership is by marker, and setup edits only what it owns.** A
   hook command is seamark's when it is one executable word followed by
-  the marker (`gate --hook --client codex`). A wrapper, a shell
+  the marker (`gate --hook --client codex`). The word names seamark:
+  its basename is `seamark`, or it is exactly the path of the running
+  binary (`hooks.BinaryPath`), which setup writes. A wrapper, a shell
   condition, or an environment prefix is someone else's definition:
   keep it as written, report it, and install
   no second handler when it certainly runs the hook. For a lesson-check

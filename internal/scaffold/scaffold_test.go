@@ -1,7 +1,6 @@
 package scaffold
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,89 +217,4 @@ func TestStarterPolicyEnforceVariant(t *testing.T) {
 	assert.NotEqual(t, starterPolicy, StarterPolicy(hooks.ModeEnforce),
 		"the mode-line swap must actually change the template")
 	assert.Equal(t, starterPolicy, StarterPolicy(hooks.ModeWarn))
-}
-
-// brewFixture builds a fake Homebrew prefix with a Cellar keg and,
-// optionally, the opt symlink target. It returns the Cellar binary path
-// and the opt binary path. The prefix has no symbolic link in it, so
-// BinaryPath resolves it to itself.
-func brewFixture(t *testing.T, withOpt bool) (cellarBin, optBin string) {
-	t.Helper()
-
-	prefix, err := filepath.EvalSymlinks(t.TempDir())
-	require.NoError(t, err)
-
-	cellarBin = filepath.Join(prefix, "Cellar", "seamark", "0.5.3", "bin", "seamark")
-	optBin = filepath.Join(prefix, "opt", "seamark", "bin", "seamark")
-
-	require.NoError(t, os.MkdirAll(filepath.Dir(cellarBin), 0o755))
-	require.NoError(t, os.WriteFile(cellarBin, nil, 0o755))
-
-	if withOpt {
-		require.NoError(t, os.MkdirAll(filepath.Dir(optBin), 0o755))
-		require.NoError(t, os.WriteFile(optBin, nil, 0o755))
-	}
-
-	return cellarBin, optBin
-}
-
-// runningAs makes BinaryPath see path as the running binary for the
-// rest of the test.
-func runningAs(t *testing.T, path string, err error) {
-	t.Helper()
-
-	saved := executable
-	executable = func() (string, error) { return path, err }
-
-	t.Cleanup(func() { executable = saved })
-}
-
-func TestBinaryPathMapsAHomebrewCellarPath(t *testing.T) {
-	// Homebrew deletes the versioned Cellar directory on upgrade; hooks
-	// must record the opt symlink, which survives upgrades.
-	cellarBin, optBin := brewFixture(t, true)
-	runningAs(t, cellarBin, nil)
-
-	assert.Equal(t, optBin, BinaryPath())
-}
-
-func TestBinaryPathResolvesALinkToTheBinary(t *testing.T) {
-	// A link on PATH must not end up in a hook: the hook must survive a
-	// change of the link.
-	cellarBin, optBin := brewFixture(t, true)
-	link := filepath.Join(t.TempDir(), "seamark")
-	require.NoError(t, os.Symlink(cellarBin, link))
-	runningAs(t, link, nil)
-
-	assert.Equal(t, optBin, BinaryPath())
-}
-
-func TestBinaryPathFallsBackToTheBareName(t *testing.T) {
-	runningAs(t, "", errors.New("no executable path"))
-
-	assert.Equal(t, "seamark", BinaryPath())
-}
-
-func TestStableInstallPathRewritesHomebrewCellar(t *testing.T) {
-	cellarBin, optBin := brewFixture(t, true)
-
-	assert.Equal(t, optBin, stableInstallPath(cellarBin))
-}
-
-func TestStableInstallPathKeepsCellarWithoutOptLink(t *testing.T) {
-	// Without the opt symlink the Cellar path is the only one that
-	// works, so it must stay.
-	cellarBin, _ := brewFixture(t, false)
-
-	assert.Equal(t, cellarBin, stableInstallPath(cellarBin))
-}
-
-func TestStableInstallPathKeepsForeignPaths(t *testing.T) {
-	home := "/home/u/.local/bin/seamark"
-	assert.Equal(t, home, stableInstallPath(home))
-
-	// A Cellar-like fragment without the <version>/bin/seamark keg
-	// layout is not a Homebrew install and must stay untouched.
-	odd := "/x/Cellar/seamark/extra/0.1/bin/seamark"
-	assert.Equal(t, odd, stableInstallPath(odd))
 }
