@@ -167,6 +167,14 @@ only the model and reasoning overrides to the preset. The tested tree was
 uncommitted; its diff was saved with the run record. Trigger extraction
 was dry-run only, and trusted-hook isolation was not tested.
 
+The smoke passed again on 2026-11-16 with codex-cli 0.169.0 at release
+commit 4ab89dc, from a committed tree, with the operator's saved login
+and the CLI's configured default model (no override). One group produced
+a proposal with Codex provenance, and all 11 script checks passed,
+including a byte-identical workspace and no lesson firing or gate record
+inside the run. Trigger extraction was dry-run only, and trusted-hook
+isolation was not tested.
+
 ## Lesson checks and exploration (Unreleased)
 
 v0.9.0 is the planned first release with lesson-check hook handlers. It
