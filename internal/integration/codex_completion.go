@@ -8,9 +8,12 @@ import (
 )
 
 // codexCompletions translates the Codex PostToolUse apply_patch event
-// for the post-edit verification. Codex has no separate failure event:
-// a failed tool reports a non-zero exit status in tool_response.
-// codex_events.go declares the event name (codexPostToolUse).
+// for the post-edit verification. Codex has no separate failure event,
+// so the decoder reads a failed tool from a non-zero exit status in
+// tool_response. No native recording shows a hook after a failed patch:
+// codex-cli 0.169.0 refused a patch without a hunk in its own patch
+// check, before any hook. codex_events.go declares the event name
+// (codexPostToolUse).
 type codexCompletions struct{}
 
 // DecodeCompletion reads the outcome and the paths of one apply_patch
@@ -74,13 +77,14 @@ func (codexCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completion
 
 // EncodeFindings wraps the findings in the additionalContext reply of
 // PostToolUse, on stdout with exit 0. Codex has no failure event, so a
-// failed patch gets the same event name. A native guard recording of
-// codex-cli 0.164.0 showed that PostToolUse text on stderr never reaches
-// the model. That binary embeds the PostToolUse output schema with
-// hookSpecificOutput and additionalContext. The advisory edit hook uses
-// the same form on PreToolUse, and Codex adds that context to the
-// thread. No reviewed recording shows yet that the PostToolUse context
-// reaches the model, so the post-edit path stays active-unverified.
+// failed patch that reaches the hook gets the same event name. A native
+// guard recording of codex-cli 0.164.0 showed that PostToolUse text on
+// stderr never reaches the model. That binary embeds the PostToolUse
+// output schema with hookSpecificOutput and additionalContext. The
+// advisory edit hook uses the same form on PreToolUse, and Codex adds
+// that context to the thread. No reviewed recording shows yet that the
+// PostToolUse context reaches the model, so the post-edit path stays
+// active-unverified.
 //
 // The text in the reply holds at most codexMaxFindingsBytes. A text
 // that fits keeps every byte, and a longer text loses its last lines.
