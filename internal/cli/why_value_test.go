@@ -39,5 +39,5 @@ func audit(p string) error {
 
 	out, err = run(t, "-C", root, "why", "audit")
 	require.NoError(t, err)
-	assert.Contains(t, out, fmt.Sprintf("\ncallers (1)\n  [same-package]  %-44s %s\n", "runners", "runners.go:5"))
+	assert.Contains(t, out, fmt.Sprintf("\ncallers (1)  — can be incomplete: a call through a function value or a shared method name gets no edge\n  [same-package]  %-44s %s\n", "runners", "runners.go:5"))
 }

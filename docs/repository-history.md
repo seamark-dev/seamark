@@ -26,7 +26,7 @@ internal/gate.EvalCommand  (function)
   sig      func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) (*Decision, error)
   effects  proc:exec [depth 1]
 
-callers (4)
+callers (4)  — can be incomplete: a call through a function value or a shared method name gets no edge
   [qualified]     internal/cli.newGateCmd                      internal/cli/gate.go:21
   (+3 in tests)
 
@@ -56,9 +56,13 @@ in Go neither does a common method name (`Close`, `Err`, …) from a file
 that neither shares the method's directory nor imports its package, a
 call whose operand
 starts at a package outside the repository, or an unexported method of
-another directory. When
+another directory. The same rules can drop a real caller from a list
+that is not empty, for example a function assigned to a package-level
+variable and called through it. So the header of a non-empty caller
+list of a function or a method ends with `can be incomplete: a call
+through a function value or a shared method name gets no edge`. When
 every caller edge is a guess, `why` lists them under
-`callers (N)  — N resolved by name match only`. The
+`callers (N)  — N resolved by name match only; can be incomplete: …`. The
 `usually changed with` lines carry **function grain**: `· mostly …`
 names the functions git's hunk headers show actually moved in the shared
 commits — a factual report, not a statistical claim. Hunk headers
@@ -288,8 +292,9 @@ table in [Data flow](data-flow.md).
   `errors.Unwrap(err).Error()`). Go compiles no call that the
   unexported-method rule drops. Effects never cross a dropped edge, so
   the callee's effects do not reach the caller. `why` names these rules
-  only under `callers (0)`, so a symbol that keeps other callers shows
-  no sign of a dropped one.
+  in full only under `callers (0)`. A non-empty caller list says on its
+  header only that it can be incomplete, so it does not show which
+  caller was dropped.
 - A package-level Go `var`, a module-level JS/TS `const`/`let`/`var`,
   and a module-level Python assignment carry the calls of their
   initializer, function literals and lambdas in it included. Such a value

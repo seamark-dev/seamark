@@ -82,5 +82,5 @@ func TestWhyOutlineCallerRouteRunsThroughWhy(t *testing.T) {
 	symbol, isErr := toolText(t, resps["1"])
 	require.False(t, isErr, symbol)
 	assert.True(t, strings.HasPrefix(symbol, "hot  (function)\n"), symbol)
-	assert.Contains(t, symbol, "\ncallers (5)\n")
+	assert.Contains(t, symbol, "\ncallers (5)  — can be incomplete: ")
 }

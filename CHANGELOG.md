@@ -482,6 +482,14 @@ model-boundary delivery.
   still get no edge. An index built by an older version is rebuilt once
   by the next index run or MCP call, except a database file that does
   not accept writes.
+- **`why` says that a caller list can be incomplete.** The header of a
+  non-empty caller list of a function or a method now ends with `can be
+  incomplete: a call through a function value or a shared method name
+  gets no edge`. The rules that leave a list empty can also drop a real
+  caller from a full one, for example a function that a package-level
+  variable holds and that is called through it. The header still starts
+  with `callers (N)`, and no line is added. The CLI and MCP both show
+  it.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
