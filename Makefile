@@ -144,10 +144,12 @@ report-bench: ## Measure the delivery report build over synthetic audit logs (of
 # skip under plain `go test`. `smoke` runs one bounded distillation with
 # the operator's own login, so it costs tokens and refuses to start
 # without a verified login. A blocked check exits 3, never 0: missing
-# evidence is not a pass. See docs/agent-integrations.md.
+# evidence is not a pass. For Codex, `check` also runs 500 seeded
+# Update patches through the installed apply_patch applier and the guard
+# projection, and fails on any difference. See docs/agent-integrations.md.
 CLIENT ?= codex
 
-agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI: version, exec surface, patch oracle, sandbox, generated setup
+agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI: version, exec surface, patch oracle, Update projection, sandbox, generated setup
 	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run '^TestNative' ./internal/integration
 	scripts/agent-integration-smoke.sh check $(CLIENT) $(BINARY)
 

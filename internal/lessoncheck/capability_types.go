@@ -27,8 +27,7 @@ type PathState string
 // "untrusted", "trust-unknown", "hooks-disabled", "other-binary",
 // "binary-missing", "capability-version-old", "capability-unknown",
 // "document-unreadable", "partial-install", "native-deny-unverified",
-// "native-timeout-unverified", "content-unprojectable",
-// "configuration-error", "tool-uncovered".
+// "native-timeout-unverified", "configuration-error", "tool-uncovered".
 type CapReason string
 
 // CapVerification has the same fields, JSON names, and level words as

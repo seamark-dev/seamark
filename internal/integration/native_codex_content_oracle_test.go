@@ -114,9 +114,10 @@ const tenLines = "l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nl10\n"
 // lessoncheck: the bytes of context lines, the line end of new lines,
 // the final newline, pure insertions, the order of the match passes,
 // anchors, the end-of-file marker, the retry without a trailing empty
-// line, the chunk order, line separators, and the normalized
-// characters. Each mapped character of a class stands in one case, so
-// a character that the applier stops mapping fails that case.
+// line, the chunk order, line separators, the normalized characters,
+// and change lines that end with carriage returns. Each mapped
+// character of a class stands in one case, so a character that the
+// applier stops mapping fails that case.
 var contentInputs = []contentInput{
 	{
 		name:   "01_one_hunk",
@@ -687,6 +688,12 @@ var contentInputs = []contentInput{
 		shape:  "@@ anchor with ASCII quotes where the file has Unicode quotes",
 		before: map[string]string{"f.txt": "func \u201cb\u201d\nx\n"},
 		patch:  "*** Begin Patch\n*** Update File: f.txt\n@@ func \"b\"\n-x\n+X\n*** End Patch",
+	},
+	{
+		name:   "96_change_lines_end_with_carriage_returns",
+		shape:  "context and added lines that end with two carriage returns before the line feed",
+		before: map[string]string{"f.txt": "a\nb\n"},
+		patch:  "*** Begin Patch\n*** Update File: f.txt\n@@\n a\r\r\n-b\n+B\r\r\n*** End Patch",
 	},
 }
 

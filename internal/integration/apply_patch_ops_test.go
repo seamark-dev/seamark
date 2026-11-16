@@ -78,7 +78,7 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 					assert.Nil(t, op.Content)
 					assert.Empty(t, op.MoveTo)
 				case lessoncheck.OpPatchUpdate, lessoncheck.OpPatchMove:
-					assert.Nil(t, op.Content, "update content has no verified projection")
+					assert.Nil(t, op.Content, "an update holds chunks, not content")
 				default:
 					t.Fatalf("an apply_patch section gave the kind %q", op.Kind)
 				}
@@ -172,8 +172,9 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 }
 
 // onlyAdds reports whether ops holds at least one operation and only
-// add operations. The oracle comparison reads add bytes only, because
-// the other kinds have no projected content.
+// add operations. The comparison here reads the add bytes of the
+// decoder alone; TestCodexPatchProjectionMatchesTheContentOracle
+// compares the projection of every kind.
 func onlyAdds(ops []lessoncheck.FileOp) bool {
 	for _, op := range ops {
 		if op.Kind != lessoncheck.OpPatchAdd {
@@ -182,4 +183,96 @@ func onlyAdds(ops []lessoncheck.FileOp) bool {
 	}
 
 	return len(ops) > 0
+}
+
+// TestCodexPatchChunksFollowTheVerifiedGrammar checks the chunk grammar
+// of an update section. A section in the grammar gives its chunks. Any
+// other section gives nil chunks, so the projection stays unknown.
+func TestCodexPatchChunksFollowTheVerifiedGrammar(t *testing.T) {
+	line := func(kind lessoncheck.PatchLineKind, text string) lessoncheck.PatchLine {
+		return lessoncheck.PatchLine{Kind: kind, Text: text}
+	}
+
+	ctx, del, add := lessoncheck.PatchContext, lessoncheck.PatchDelete, lessoncheck.PatchAdd
+
+	t.Run("a section in the grammar gives its chunks", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			body   string
+			chunks []lessoncheck.PatchChunk
+		}{
+			{"@@ alone opens a chunk without an anchor", "@@\n a\n-b\n+B",
+				[]lessoncheck.PatchChunk{{Lines: []lessoncheck.PatchLine{line(ctx, "a"), line(del, "b"), line(add, "B")}}}},
+			{"the first chunk may omit @@", " a\n-b\n+B",
+				[]lessoncheck.PatchChunk{{Lines: []lessoncheck.PatchLine{line(ctx, "a"), line(del, "b"), line(add, "B")}}}},
+			{"@@ with trailing spaces has no anchor", "@@  \n+z",
+				[]lessoncheck.PatchChunk{{Lines: []lessoncheck.PatchLine{line(add, "z")}}}},
+			{"an anchor drops its trailing spaces", "@@ func b  \n-x\n+X",
+				[]lessoncheck.PatchChunk{{Anchor: "func b", Lines: []lessoncheck.PatchLine{line(del, "x"), line(add, "X")}}}},
+			{"an anchor keeps its leading spaces", "@@   def f\n-x\n+X",
+				[]lessoncheck.PatchChunk{{Anchor: "  def f", Lines: []lessoncheck.PatchLine{line(del, "x"), line(add, "X")}}}},
+			{"change lines keep their text without a trim", "@@\n   \n-b \n+B   ",
+				[]lessoncheck.PatchChunk{{Lines: []lessoncheck.PatchLine{line(ctx, "  "), line(del, "b "), line(add, "B   ")}}}},
+			{"an empty line is empty context", "@@\n a\n\n-b",
+				[]lessoncheck.PatchChunk{{Lines: []lessoncheck.PatchLine{line(ctx, "a"), line(ctx, ""), line(del, "b")}}}},
+			{"the end-of-file line closes a chunk", "@@\n-a\n+A\n*** End of File  \n@@ x\n+z",
+				[]lessoncheck.PatchChunk{
+					{Lines: []lessoncheck.PatchLine{line(del, "a"), line(add, "A")}, EndOfFile: true},
+					{Anchor: "x", Lines: []lessoncheck.PatchLine{line(add, "z")}},
+				}},
+			{"header text after the first byte is content", "@@\n+*** End of File\n-@@",
+				[]lessoncheck.PatchChunk{{Lines: []lessoncheck.PatchLine{line(add, "*** End of File"), line(del, "@@")}}}},
+		} {
+			ops, err := applyPatchOps("*** Begin Patch\n*** Update File: f.txt\n" + tc.body + "\n*** End Patch")
+			require.NoError(t, err, tc.name)
+			require.Len(t, ops, 1, tc.name)
+			assert.True(t, ops[0].Hunks, tc.name)
+			assert.Equal(t, tc.chunks, ops[0].Chunks, tc.name)
+		}
+	})
+
+	t.Run("a section outside the grammar keeps its paths and gives no chunks", func(t *testing.T) {
+		for _, tc := range []struct{ name, body string }{
+			{"an @@ line without change lines", "@@"},
+			{"two anchor lines in a row", "@@ class B\n@@  def f\n-  x\n+  y"},
+			{"the end-of-file line opens the section", "*** End of File\n a"},
+			{"a change line after the end-of-file line", "@@\n a\n-b\n+B\n*** End of File\n+c"},
+			{"two end-of-file lines", "@@\n-a\n*** End of File\n*** End of File"},
+			{"an @@ line without a space before the anchor", "@@\n a\n@@x\n+z"},
+			{"a later chunk without @@", "@@\n-a\n*** End of File\n-b"},
+			{"a line of whitespace that is not a space", "@@\n a\n\t"},
+			{"an @@ line at the end", "@@\n a\n@@"},
+			{"an added line that ends with a carriage return", "@@\n a\n+B\r\r"},
+			{"a context line that ends with a carriage return", "@@\n a\r\r\n-b"},
+			{"a line of one carriage return", "@@\n a\n\r\r\n-b"},
+		} {
+			ops, err := applyPatchOps("*** Begin Patch\n*** Update File: f.txt\n" + tc.body + "\n*** End Patch")
+			require.NoError(t, err, tc.name)
+			require.Len(t, ops, 1, tc.name)
+			assert.Equal(t, "f.txt", ops[0].Path, tc.name)
+			assert.True(t, ops[0].Hunks, tc.name)
+			assert.Nil(t, ops[0].Chunks, tc.name)
+		}
+	})
+
+	t.Run("each update section gets its own chunks", func(t *testing.T) {
+		ops, err := applyPatchOps("*** Begin Patch\n*** Update File: a.txt\n@@\n+x\n*** Add File: b.txt\n+y\n" +
+			"*** Update File: c.txt\n*** Move to: d.txt\n@@\n-z\n*** Update File: e.txt\n@@\n*** End Patch")
+		require.NoError(t, err)
+		require.Len(t, ops, 4)
+
+		assert.Equal(t, []lessoncheck.PatchChunk{{Lines: []lessoncheck.PatchLine{line(add, "x")}}}, ops[0].Chunks)
+		assert.Nil(t, ops[1].Chunks, "an add section has content, not chunks")
+		assert.Equal(t, []lessoncheck.PatchChunk{{Lines: []lessoncheck.PatchLine{line(del, "z")}}}, ops[2].Chunks)
+		assert.Equal(t, "d.txt", ops[2].MoveTo)
+		assert.Nil(t, ops[3].Chunks, "an @@ line without change lines is outside the grammar")
+	})
+
+	t.Run("a move without hunks gives no chunks", func(t *testing.T) {
+		ops, err := applyPatchOps("*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n*** End Patch")
+		require.NoError(t, err)
+		require.Len(t, ops, 1)
+		assert.Equal(t, lessoncheck.OpPatchMove, ops[0].Kind)
+		assert.Nil(t, ops[0].Chunks)
+	})
 }

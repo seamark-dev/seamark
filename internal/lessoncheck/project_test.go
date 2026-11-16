@@ -666,13 +666,13 @@ func TestLessonCheckProjectPatchOps(t *testing.T) {
 		assert.Equal(t, OutcomeViolation, res.Outcome, "the target gains the source lines")
 	})
 
-	t.Run("an update with hunks has complete paths and unprojectable content", func(t *testing.T) {
+	t.Run("an update with hunks outside the verified grammar has complete paths and unprojectable content", func(t *testing.T) {
 		g := todoRepo(t)
 		snap := g.project(codexOp(FileOp{Kind: OpPatchUpdate, Path: "src/a.go", Hunks: true}))
 
 		ch := changeAt(t, snap, "src/a.go")
 		assert.Equal(t, ChangeModify, ch.Kind)
-		assert.Equal(t, "update hunks have no verified projection", ch.unprojectable)
+		assert.Equal(t, "the update hunks have a form without a verified projection", ch.unprojectable)
 		assert.True(t, snap.PathsComplete)
 
 		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
@@ -689,14 +689,14 @@ func TestLessonCheckProjectPatchOps(t *testing.T) {
 			"an update outside every pattern scope needs no content")
 	})
 
-	t.Run("an update with hunks and a move is an unprojectable move", func(t *testing.T) {
+	t.Run("an update with a move and hunks outside the verified grammar is an unprojectable move", func(t *testing.T) {
 		g := todoRepo(t)
 		snap := g.project(codexOp(FileOp{Kind: OpPatchUpdate, Path: "src/a.go", MoveTo: "src/b.go", Hunks: true}))
 
 		ch := changeAt(t, snap, "src/b.go")
 		assert.Equal(t, ChangeMove, ch.Kind)
 		assert.Equal(t, "src/a.go", ch.OldPath)
-		assert.Equal(t, "update hunks have no verified projection", ch.unprojectable)
+		assert.Equal(t, "the update hunks have a form without a verified projection", ch.unprojectable)
 	})
 
 	t.Run("an update of an absent file is an unprojectable add", func(t *testing.T) {
@@ -742,6 +742,151 @@ func TestLessonCheckProjectPatchOps(t *testing.T) {
 				assert.Equal(t, "the edit names the path more than once", ch.unprojectable)
 			}
 		}
+	})
+}
+
+func TestLessonCheckProjectPatchUpdate(t *testing.T) {
+	cfg := parseValid(t, projectTodoYAML)
+
+	t.Run("an update with chunks gives the bytes of the applier", func(t *testing.T) {
+		g := todoRepo(t)
+		snap := g.project(codexOp(updateOp("src/a.go", plainChunk(" package a", " ", "-func A() {}", "+func A() {} // TODO(x)"))))
+
+		ch := changeAt(t, snap, "src/a.go")
+		assert.Equal(t, ChangeModify, ch.Kind)
+		assert.Empty(t, ch.Limitations, "the projection is exact")
+		assert.Equal(t, "package a\n\nfunc A() {} // TODO(x)\n", projectedText(t, ch))
+		assert.Equal(t, "100644", ch.After.Mode)
+		assert.True(t, ch.ContentChanged)
+
+		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
+		assert.Equal(t, OutcomeViolation, res.Outcome)
+	})
+
+	t.Run("a clean update passes the pattern pin", func(t *testing.T) {
+		g := todoRepo(t)
+		snap := g.project(codexOp(updateOp("src/a.go", plainChunk("-func A() {}", "+func B() {}"))))
+
+		assert.Equal(t, "package a\n\nfunc B() {}\n", projectedText(t, changeAt(t, snap, "src/a.go")))
+		assert.Equal(t, OutcomePass, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Outcome)
+	})
+
+	t.Run("an update keeps the executable bit", func(t *testing.T) {
+		g := todoRepo(t)
+		require.NoError(t, os.Chmod(g.path("src/a.go"), 0o755))
+
+		ch := changeAt(t, g.project(codexOp(updateOp("src/a.go", plainChunk("+// end")))), "src/a.go")
+		assert.Equal(t, "100755", ch.After.Mode)
+		assert.False(t, ch.ModeChanged)
+	})
+
+	t.Run("an update whose hunk does not match is unprojectable", func(t *testing.T) {
+		g := todoRepo(t)
+		snap := g.project(codexOp(updateOp("src/a.go", plainChunk("-func Missing() {}", "+func Missing() { _ = 1 }"))))
+
+		ch := changeAt(t, snap, "src/a.go")
+		assert.Equal(t, "an update hunk does not match the current content", ch.unprojectable)
+		assert.Equal(t, ContentNotRead, ch.After.Content)
+
+		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
+		assert.Equal(t, OutcomeUnknown, res.Outcome)
+		assert.Equal(t, ReasonUnprojectableEdit, res.Reason)
+	})
+
+	t.Run("an update of a file with a lone carriage return is unprojectable", func(t *testing.T) {
+		g := newGitRepo(t)
+		g.write("src/cr.go", "a\rb\n")
+
+		ch := changeAt(t, g.project(codexOp(updateOp("src/cr.go", plainChunk("+c")))), "src/cr.go")
+		assert.Equal(t, "the current content has a carriage return without a line feed", ch.unprojectable)
+	})
+
+	t.Run("an update of binary content keeps the reason of the before side", func(t *testing.T) {
+		g := newGitRepo(t)
+		g.write("src/logo.bin", "a\x00b\n")
+
+		snap := g.project(codexOp(updateOp("src/logo.bin", plainChunk("+c"))))
+		assert.Equal(t, "the current content is not readable text", changeAt(t, snap, "src/logo.bin").unprojectable)
+		assert.Equal(t, ReasonUnsupportedContent, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Reason)
+	})
+
+	t.Run("an update of an absent file is unprojectable", func(t *testing.T) {
+		g := todoRepo(t)
+
+		ch := changeAt(t, g.project(codexOp(updateOp("src/gone.go", plainChunk("+c")))), "src/gone.go")
+		assert.Equal(t, ChangeAdd, ch.Kind)
+		assert.Equal(t, "the file does not exist", ch.unprojectable)
+	})
+
+	t.Run("an update of a symbolic link is unprojectable with the link detail", func(t *testing.T) {
+		g := todoRepo(t)
+		require.NoError(t, os.Symlink("a.go", g.path("src/link.go")))
+
+		ch := changeAt(t, g.project(codexOp(updateOp("src/link.go", plainChunk("+c")))), "src/link.go")
+		assert.Equal(t, "the path is a symbolic link", ch.unprojectable)
+	})
+
+	t.Run("a move with chunks writes the projection to the target", func(t *testing.T) {
+		g := todoRepo(t)
+		fop := updateOp("src/a.go", plainChunk("-func A() {}", "+func B() {}"))
+		fop.MoveTo = "src/b.go"
+
+		snap := g.project(codexOp(fop))
+
+		require.Len(t, snap.Changes, 1)
+		ch := snap.Changes[0]
+		assert.Equal(t, ChangeMove, ch.Kind)
+		assert.Equal(t, "src/a.go", ch.OldPath)
+		assert.Equal(t, "package a\n\nfunc B() {}\n", projectedText(t, ch))
+		assert.True(t, ch.ContentChanged, "the moved content changes")
+	})
+
+	t.Run("a move with chunks onto an existing file replaces it", func(t *testing.T) {
+		g := todoRepo(t)
+		g.write("src/b.go", "old\n")
+
+		fop := updateOp("src/a.go", plainChunk("+// end"))
+		fop.MoveTo = "src/b.go"
+
+		snap := g.project(codexOp(fop))
+
+		assert.Equal(t, []string{"delete src/a.go", "modify src/b.go"}, changeList(snap))
+		assert.Equal(t, "package a\n\nfunc A() {}\n// end\n", projectedText(t, changeAt(t, snap, "src/b.go")))
+	})
+
+	t.Run("a move onto itself stays unprojectable", func(t *testing.T) {
+		g := todoRepo(t)
+		fop := updateOp("src/a.go", plainChunk("+// end"))
+		fop.MoveTo = "src/a.go"
+
+		ch := changeAt(t, g.project(codexOp(fop)), "src/a.go")
+		assert.Equal(t, "the move target is the source path", ch.unprojectable)
+		assert.Equal(t, ContentNotRead, ch.After.Content, "no projected side replaces the mark")
+	})
+
+	t.Run("a path that two update sections name is unprojectable", func(t *testing.T) {
+		g := todoRepo(t)
+		snap := g.project(codexOp(updateOp("src/a.go", plainChunk("+// one")), updateOp("src/a.go", plainChunk("+// two"))))
+
+		require.Len(t, snap.Changes, 2)
+
+		for _, ch := range snap.Changes {
+			assert.Equal(t, "the edit names the path more than once", ch.unprojectable)
+			assert.Equal(t, ContentNotRead, ch.After.Content)
+		}
+	})
+
+	t.Run("a result above max-file-bytes is too large", func(t *testing.T) {
+		lim := DefaultLimits()
+		lim.MaxFileBytes = 32
+
+		g := todoRepo(t)
+		snap := g.projectWith(lim, codexOp(updateOp("src/a.go", plainChunk("+// "+strings.Repeat("x", 32)))))
+
+		ch := changeAt(t, snap, "src/a.go")
+		assert.Equal(t, ContentTooLarge, ch.After.Content)
+		assert.EqualValues(t, len("package a\n\nfunc A() {}\n")+len("// ")+32+len("\n"), ch.After.Size)
+		assert.Contains(t, snap.Limits, LimitHit{Name: LimitMaxFileBytes, Value: 32, Paths: 1})
 	})
 }
 
@@ -895,6 +1040,10 @@ func TestLessonCheckProjectBoundsAndDeadline(t *testing.T) {
 			"write with a move":  {Kind: OpWrite, Path: "src/a.go", MoveTo: "src/b.go", Content: new(string)},
 			"unknown kind":       {Kind: "chmod", Path: "src/a.go"},
 			"move to the parent": {Kind: OpPatchMove, Path: "src/a.go", MoveTo: "../b.go"},
+			"add with chunks":    {Kind: OpPatchAdd, Path: "src/a.go", Content: new(string), Chunks: []PatchChunk{plainChunk("+x")}},
+			"chunks, no hunks":   {Kind: OpPatchUpdate, Path: "src/a.go", Chunks: []PatchChunk{plainChunk("+x")}},
+			"empty chunk":        updateOp("src/a.go", PatchChunk{}),
+			"unknown line kind":  updateOp("src/a.go", PatchChunk{Lines: []PatchLine{{Kind: '@', Text: "x"}}}),
 		} {
 			_, err := ProjectOperation(context.Background(), g.root, codexOp(op), DefaultLimits())
 			assert.Error(t, err, name)

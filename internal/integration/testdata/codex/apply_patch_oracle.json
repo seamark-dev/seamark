@@ -1629,6 +1629,20 @@
         "after": {
           "f.txt": "func “b”\nX\n"
         }
+      },
+      {
+        "name": "96_change_lines_end_with_carriage_returns",
+        "shape": "context and added lines that end with two carriage returns before the line feed",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\r\r\n-b\n+B\r\r\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nB\n"
+        }
       }
     ]
   }

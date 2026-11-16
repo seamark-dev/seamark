@@ -527,19 +527,13 @@ func (r *pathReader) stageEntries(stage lessoncheck.HookStage) []LessonHookEntry
 // preWrite fills one pre-write path from the pre-write entries. A
 // definition that discards the exit status, or that the client runs in
 // the background, keeps every pre-write path inactive, even beside an
-// owned entry. The guard cannot project a Codex
-// update with hunks yet. The report keeps that reason only while an
-// enforce pattern pin exists.
+// owned entry.
 func (r *pathReader) preWrite(p *lessoncheck.InstalledPath, entries []LessonHookEntry, partial bool) {
 	r.install(p, entries)
 	r.shared(p, partial)
 
 	if len(r.lessons.ReportOnly) > 0 {
 		p.Reasons = append(p.Reasons, lessoncheck.CapReportOnlyWrapper)
-	}
-
-	if p.Tool == r.client.patchTool {
-		p.Reasons = append(p.Reasons, lessoncheck.CapContentUnprojectable)
 	}
 }
 

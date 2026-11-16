@@ -175,7 +175,10 @@ evidence registries of the current tree read this copy: the evidence of
 both paths reads verified, with the limit "the client lets the write
 run after its 10 s hook timeout". `trust-unknown` stays, because
 Seamark cannot read the Codex trust record, so no Codex path reads
-`active`.
+`active`. The current tree projects the content of an Update, so its
+reports no longer carry `content-unprojectable`, and the replay projects
+the patch of run 7 exactly. The deny of run 7 stays the evidence of the
+binary of the recording.
 
 ## Sanitization
 

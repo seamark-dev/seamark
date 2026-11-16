@@ -1052,13 +1052,16 @@ Claude Code `Write` and `Edit` (Claude Code 2.1.319) and of Codex
 one limit: the client lets the write run after its 10 s hook timeout.
 Seamark cannot read the Codex trust record, so a Codex path still reads
 `active-unverified`. Native denial of `MultiEdit` and the post-edit
-reply remain unverified. Codex Update content is
-currently unprojectable for a content predicate, so an armed guard denies that
-unknown result. A Codex patch header path with a tab or a carriage
-return gets `incomplete-paths`, so an armed guard denies it and the
-post-edit check reports every pin as unknown: codex-cli 0.169.0 writes
-such a path without that character. Verified Update projection and
-native evidence are required before v0.9.0 can ship. See the
+reply remain unverified. The guard projects Codex Update content by the
+rules of the codex-cli 0.169.0 applier. A hunk that does not match the
+current file, a hunk form outside the verified grammar, a file with a
+lone carriage return, and a file that the patch names twice give
+`unknown`, so an armed guard denies them. A Codex patch header path with
+a tab or a carriage return gets `incomplete-paths`, so an armed guard
+denies it and the post-edit check reports every pin as unknown:
+codex-cli 0.169.0 writes such a path without that character. Reviewed
+native evidence and the remaining fixes are required before v0.9.0 can
+ship. See the
 [integration guide](agent-integrations.md#lesson-checks-and-exploration-unreleased).
 
 ## Lesson delivery: lessons --delivery

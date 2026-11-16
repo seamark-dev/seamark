@@ -232,21 +232,15 @@ func TestLessonCheckCapabilityReportPathStates(t *testing.T) {
 		assert.Contains(t, pathOf(t, r, "claude", "Edit", StagePreWrite, ContextRoot).Reasons, CapPartialInstall)
 	})
 
-	t.Run("content-unprojectable holds only for an installed guard and an enforce pattern pin", func(t *testing.T) {
+	t.Run("an enforce pattern pin adds no reason to an installed guard", func(t *testing.T) {
 		guard := one(InstalledPath{Installed: true, Marker: testGuard, BinaryState: BinaryCurrent,
-			Verification: CapVerification{Level: "pending"}, Reasons: []CapReason{CapContentUnprojectable}})
-
-		got := pathOf(t, report(nil, guard), "claude", "Edit", StagePreWrite, ContextRoot)
-		assert.NotContains(t, got.Reasons, CapContentUnprojectable, "the enforce pin of the fixture binds a forbid check")
+			Verification: CapVerification{Level: "pending"}})
 
 		pattern := capabilityConfig(t, capabilityYAML+"  - rule: no-todo-enforced\n    region: src/\n    mode: enforce\n    check: no-todo\n")
-		got = pathOf(t, CapabilityReportOf(pattern, nil, []InstalledPath{guard}, nil), "claude", "Edit", StagePreWrite, ContextRoot)
+		got := pathOf(t, CapabilityReportOf(pattern, nil, []InstalledPath{guard}, nil), "claude", "Edit", StagePreWrite, ContextRoot)
 		assert.Equal(t, PathActiveUnverified, got.State)
-		assert.Equal(t, []CapReason{CapContentUnprojectable, CapNativeDenyUnverified, CapNativeTimeoutUnverified}, got.Reasons)
-
-		baseline := one(withReasons(installedBaseline, CapContentUnprojectable))
-		got = pathOf(t, CapabilityReportOf(pattern, nil, []InstalledPath{baseline}, nil), "claude", "Edit", StagePreWrite, ContextRoot)
-		assert.NotContains(t, got.Reasons, CapContentUnprojectable, "a baseline denies nothing")
+		assert.Equal(t, []CapReason{CapNativeDenyUnverified, CapNativeTimeoutUnverified}, got.Reasons,
+			"the content of each edit decides unknown, not the path")
 	})
 
 	t.Run("configuration-error makes every pre-write and post-edit path inactive", func(t *testing.T) {

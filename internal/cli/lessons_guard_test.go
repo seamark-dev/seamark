@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -1002,11 +1004,24 @@ func TestLessonsGuardHookCodexApplyPatch(t *testing.T) {
 			reasons: forbidHead + "apply_patch would change generated/a.txt -> docs/a.txt",
 		},
 		{
-			name:  "an Update with hunks in a pattern scope",
-			body:  "*** Update File: src/handler.go\n@@\n-func Handle() {}\n+func Handle() { _ = 1 }\n",
+			name:    "an Update that adds a TODO line",
+			body:    "*** Update File: src/handler.go\n@@\n-func Handle() {}\n+func Handle() {} // TODO(owner): x\n",
+			cause:   lessoncheck.GuardCauseViolation,
+			reasons: patternHead + "apply_patch adds a line matching the pattern at src/handler.go:3: func Handle() {} // TODO(owner): x",
+		},
+		{
+			name:  "an Update whose hunk does not match in a pattern scope",
+			body:  "*** Update File: src/handler.go\n@@\n-func Missing() {}\n+func Missing() { _ = 1 }\n",
 			cause: lessoncheck.GuardCauseUnknown,
 			reasons: "lesson check no-todo (no-added-pattern/1) of pin " + pins["no-todo"].Ref +
-				" cannot evaluate src/handler.go: unprojectable-edit; update hunks have no verified projection",
+				" cannot evaluate src/handler.go: unprojectable-edit; an update hunk does not match the current content",
+		},
+		{
+			name:  "an Update outside the verified hunk grammar in a pattern scope",
+			body:  "*** Update File: src/handler.go\n*** End of File\n",
+			cause: lessoncheck.GuardCauseUnknown,
+			reasons: "lesson check no-todo (no-added-pattern/1) of pin " + pins["no-todo"].Ref +
+				" cannot evaluate src/handler.go: unprojectable-edit; the update hunks have a form without a verified projection",
 		},
 		{
 			name:    "a relative path starts at the event directory",
@@ -1085,8 +1100,23 @@ func TestLessonsGuardHookCodexApplyPatch(t *testing.T) {
 		assert.True(t, strings.HasPrefix(requireDenied(t, err), "lesson check guard cannot read this apply_patch request: "))
 	})
 
-	t.Run("an Update with hunks in a check scope allows without projection", func(t *testing.T) {
+	t.Run("an Update with hunks in a check scope allows with its projection", func(t *testing.T) {
 		payload := codexPatchEvent(t, root, "*** Update File: docs/readme.md\n@@\n-readme\n+readme TODO(x)\n")
+
+		_, _, err := guardHook(t, root, payload, "--client", "codex")
+		require.NoError(t, err)
+
+		p := pendingOf(t, root, integration.CodexID)
+		assert.Empty(t, p.Limitations)
+		require.Len(t, p.Paths, 1)
+
+		sum := sha256.Sum256([]byte("readme TODO(x)\n"))
+		assert.Equal(t, hex.EncodeToString(sum[:]), p.Paths[0].ProjectedAfterSHA256, "the pending record holds the bytes that Codex writes")
+		require.NoError(t, lessoncheck.DeletePending(root, integration.CodexID, p.MatchSHA))
+	})
+
+	t.Run("an Update whose hunk does not match in a check scope allows without projection", func(t *testing.T) {
+		payload := codexPatchEvent(t, root, "*** Update File: docs/readme.md\n@@\n-missing\n+missing TODO(x)\n")
 
 		_, _, err := guardHook(t, root, payload, "--client", "codex")
 		require.NoError(t, err)

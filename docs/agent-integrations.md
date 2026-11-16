@@ -211,15 +211,43 @@ implemented handlers, not verified native prevention:
 | Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offered no MultiEdit tool in the recording. Post-edit reply: seen in the recording, still unverified in the report |
 | Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; reply seen in the next model request on Claude Code 2.1.319, still unverified in the report; main-context repeats reset at compaction, child reminders repeat |
 | Claude Code `NotebookEdit`, `Bash` | No lesson-check hook | No lesson-check hook | Uncovered writers in both contexts; a shell command can write files |
-| Codex `apply_patch` | Baseline or guard; Add/Delete and move metadata supported; Update before/after content projection not yet supported | `PostToolUse` verification; the handler reads a failed exit status, but no recording shows a hook after a failed patch | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply: seen in the thread, still unverified in the report. Child call and lane attribution: unsupported |
+| Codex `apply_patch` | Baseline or guard; Add, Delete, move, and Update content projection; an Update outside the verified rules reads unknown | `PostToolUse` verification; the handler reads a failed exit status, but no recording shows a hook after a failed patch | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply: seen in the thread, still unverified in the report. Child call and lane attribution: unsupported |
 | Codex structured `Read` | Unsupported | No exploration hook | Setup prints the no-Read notice and installs nothing for exploration; use preparation |
 | Codex `shell` | No lesson-check hook | No lesson-check hook | Uncovered writer in both contexts |
 
-For Codex Update hunks, a content check currently gets
-`unknown/unprojectable-edit`; an armed guard requests denial instead of
-guessing the after-content. Path-only checks can still inspect complete
-path metadata. Verified before/after projection is **required before
-release**, not an accepted omission from v0.9.0. Post-edit findings and
+For a Codex Update, the guard projects the bytes that the Codex
+applier writes: it applies the hunks of each section to the current
+file by the rules of the codex-cli 0.169.0 applier. Each rule follows
+a recorded case of the content oracle (see
+[Fixtures and evidence](#fixtures-and-evidence)), and
+a seeded differential in `make agents-native-check CLIENT=codex`
+compares the projection with the installed applier. The rules cover
+the line ends of new lines, a missing final newline, fuzzy context
+(trailing and leading whitespace and a fixed table of Unicode dashes,
+quotes, and spaces), anchors, `*** End of File`, and the order of
+several hunks. Where the projection is not exact by those rules, a
+content check gets `unknown/unprojectable-edit` and an armed guard
+requests denial instead of guessing the after-content:
+
+- a hunk form outside the verified grammar, for example
+  `*** End of File` as the first line of a section, or a change line
+  that ends with a carriage return;
+- a hunk whose lines or anchor do not match the current file, as when
+  the applier refuses the patch;
+- a current file with a carriage return that no line feed follows;
+- a file that two sections of one patch name;
+- a move onto its own path, a source that is absent, not a regular
+  file, or a symbolic link, and current content that is binary, not
+  UTF-8, or too large;
+- a result above `max-file-bytes`, and the guard budget ending during
+  the projection (`unknown/resource-limit`).
+
+Path-only checks decide an Update on its complete path metadata, as
+before. The projection runs on whatever Codex version is installed. The
+hook cannot read that version cheaply, so a later Codex release that
+changes the applier rules shows up in the differential of
+`make agents-native-check`, in the version-pinned oracle replay, and as
+`projection-differs` in the post-edit record. Post-edit findings and
 explicit working-tree verification do not prove pre-write projection.
 
 A Codex patch whose header path (Add, Update, Delete, or Move to) holds
@@ -318,8 +346,7 @@ these paths lose `native-deny-unverified` and
 and the JSON report carries the limit in `verification.limit`. Seamark
 cannot read the Codex trust record, so every installed Codex path keeps
 `trust-unknown` and reads `active-unverified`, and a Codex enforce pin
-reads `enforced-unverified`. An enforce pattern pin also keeps
-`content-unprojectable` (see the Update projection above). Status,
+reads `enforced-unverified`. Status,
 doctor, and the TUI print a limit only beside an `active` path, so for
 Codex the setup line and the JSON report show it.
 
@@ -801,12 +828,19 @@ cases come from codex-cli 0.154.0: they record which paths a patch
 names. The decoder is tested against them, and the native check reruns
 them on the installed version to catch parser drift. Its content cases
 come from codex-cli 0.169.0, the version of the native Codex
-recordings: they record the exact before and after bytes of 95 patch
+recordings: they record the exact before and after bytes of 96 patch
 shapes, and the native check replays them when the installed version
 is the recorded one. A recording of the first 29 cases on codex-cli
-0.164.0 gave identical results. The guard recording of 0.169.0 holds
-one live Update (case `update-permitted`) with the one-hunk shape of
-the content case `01_one_hunk`.
+0.164.0 gave identical results. The Update projection is tested
+against every content case offline in `make test`: it gives the bytes
+that the applier wrote, or unknown where the applier refused the patch
+and for five listed cases that it keeps unknown on purpose: a lone
+carriage return in the file, one path in two sections, and change
+lines that end with a carriage return. The
+guard recording of 0.169.0 holds one live Update (case
+`update-permitted`) with the one-hunk shape of the content case
+`01_one_hunk`, and the replay projects it to the bytes that the live
+tool wrote.
 
 ### Tests and checks
 
@@ -814,7 +848,7 @@ the content case `01_one_hunk`.
 | --- | --- | --- |
 | `make agents-test` | Go and the repository's build prerequisites; no agent CLI or credentials | adapter contracts, setup, hooks, delivery, gates, diagnostics, and fake subprocesses; also covered by `make test` and CI |
 | `make smoke` | the built binary | the generated Claude Code and Codex configuration in a fresh repository, the hook commands it wrote running as written, and no credential in a generated file; part of CI and of every release |
-| `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case and path-control case, when the installed version is the recorded one (else it skips with the reason); on any version, that the guard decoder refuses each path-control patch or names every file that the applier changed, over the recorded cases and a generated sweep of control and space characters in header paths; the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
+| `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case and path-control case, when the installed version is the recorded one (else it skips with the reason); the Codex Update projection against the installed applier on 500 seeded patches, with no difference and no content for a refused patch; on any version, that the guard decoder refuses each path-control patch or names every file that the applier changed, over the recorded cases and a generated sweep of control and space characters in header paths; the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
 | `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json` and of the path-control cases into `internal/integration/testdata/codex/apply_patch_path_control_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
 | `make agents-native-smoke CLIENT=codex` | the client CLI and operator authentication; costs tokens | one distillation group read through the client preset with no failed group and a proposed pin, the pin's client provenance in the ledger, the command disclosed by `--dry-run`, trigger extraction in dry-run only, and the workspace unchanged afterwards |
 | `make native-replay CLIENT=<client>` | Go and the repository's build prerequisites; no client CLI, no model, no credentials | the replay of the reviewed timing and guard recordings in `internal/integration/testdata/<client>/timing` and `.../guard`, and the offline tests of the recording script for that client; a replay without a reviewed recording skips as pending, and a skip gives no evidence |
@@ -879,14 +913,17 @@ Before release:
   `Write` and `Edit` in both contexts, and codex-cli 0.169.0 for
   `apply_patch` in both contexts, each with a fail-open limit at 10
   seconds.
-- Implement and test the content projection of a Codex Update patch.
-  The before/after oracle that it needs is recorded: 95 content cases
-  from codex-cli 0.169.0 in
-  `internal/integration/testdata/codex/apply_patch_oracle.json`; the
-  first 29 gave identical results on codex-cli 0.164.0. The check
-  replays them only on the recorded version, 0.169.0; the guard
-  recording of codex-cli 0.169.0 adds one live Update sample. The current conservative unknown/deny behavior
-  is not sufficient for the planned release.
+- **Done:** Implement and test the content projection of a Codex
+  Update patch. The oracle holds 96 content cases from codex-cli
+  0.169.0 in `internal/integration/testdata/codex/apply_patch_oracle.json`;
+  the first 29 gave identical results on codex-cli 0.164.0. The
+  projection gives the applier bytes for every accepted case except five
+  listed cases that it keeps unknown on purpose, and unknown for every
+  refused update, offline in `make test`. On codex-cli 0.169.0
+  the seeded differential of `make agents-native-check CLIENT=codex`
+  found no difference in 500 cases, and the replay projects the live
+  Update of the guard recording to the recorded bytes. Shapes outside
+  the verified rules stay unknown, so an armed guard denies them.
 - **Done:** Refuse conflicting duplicate lesson-check handlers consistently
   across clients. Retain Codex strict refusal and add equivalent Claude
   handling.

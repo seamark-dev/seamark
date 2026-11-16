@@ -44,8 +44,11 @@ import (
 //     hook, because the section has no hunk. No recording shows that the
 //     native tool applies such a section.
 //   - Every other update section gives OpPatchUpdate. Any line below
-//     the header, a move line excepted, sets Hunks, because the content
-//     of a hunk has no verified projection yet.
+//     the header, a move line excepted, sets Hunks. When every such line
+//     follows the verified chunk grammar (patchChunks), the section also
+//     gets its Chunks, so the guard can project its content. Another form
+//     keeps Chunks nil and adds no error, because the paths of the
+//     section are complete either way.
 //
 // The function never runs the patch and never reads a file.
 func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
@@ -57,24 +60,31 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 	var (
 		ops     []lessoncheck.FileOp
 		added   []string // the lines of the open add section, without "+"
+		changes []string // the raw lines of the open update section below its header and move
 		hunk    string   // the marker of the open section, or "" before the first
 		movable bool     // true directly after an update header
 	)
 
 	// flush sets the content of the open section when it is an add
-	// section. The caller runs it before a new section and at the end.
-	// An empty section stays "", because Codex then writes an empty file.
+	// section, and the chunks when it is an update section with hunks.
+	// The caller runs it before a new section and at the end. An empty
+	// add section stays "", because Codex then writes an empty file.
 	flush := func() {
-		if n := len(ops); n > 0 && ops[n-1].Kind == lessoncheck.OpPatchAdd {
-			content := ""
-			if len(added) > 0 {
-				content = strings.Join(added, "\n") + "\n"
-			}
+		if n := len(ops); n > 0 {
+			switch last := &ops[n-1]; {
+			case last.Kind == lessoncheck.OpPatchAdd:
+				content := ""
+				if len(added) > 0 {
+					content = strings.Join(added, "\n") + "\n"
+				}
 
-			ops[n-1].Content = &content
+				last.Content = &content
+			case last.Hunks:
+				last.Chunks = patchChunks(changes)
+			}
 		}
 
-		added = nil
+		added, changes = nil, nil
 	}
 
 	for _, raw := range lines {
@@ -104,7 +114,7 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 
 			markHunks(&ops[len(ops)-1])
 
-			movable = false
+			changes, movable = append(changes, raw), false
 		case isHeader:
 			flush()
 
@@ -126,7 +136,7 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 		default:
 			markHunks(&ops[len(ops)-1])
 
-			movable = false
+			changes, movable = append(changes, raw), false
 		}
 	}
 
@@ -179,6 +189,86 @@ func guardPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 	}
 
 	return ops, nil
+}
+
+// patchChunks reads the chunks of one update section from its raw lines
+// below the header and the move line. It returns nil when a line breaks
+// the chunk grammar that the content oracle verifies:
+//
+//   - The first chunk may start without an "@@" line. Every later chunk
+//     starts with one.
+//   - "@@" alone, after a right trim, opens a chunk without an anchor.
+//     "@@ <text>" opens a chunk whose anchor is the right-trimmed text:
+//     leading spaces stay and trailing spaces go, as in the applier.
+//   - A line that starts with " ", "-", or "+" is a context, deleted, or
+//     added line. Its text is the rest of the raw line, with no trim.
+//   - An empty raw line is an empty context line.
+//   - "*** End of File", after a right trim, closes a chunk that holds a
+//     line. Only an "@@" line may follow it.
+//   - A chunk holds at least one line.
+//   - No change line ends with a carriage return. patchBody removes one
+//     carriage return at each line end, and the applier removes all of
+//     them (oracle case 96), so the text of such a line is not known.
+//
+// The applier accepts some other forms, such as "*** End of File" as
+// the first line of a section. A nil result keeps such a section
+// unprojectable, so the guard never guesses its content.
+func patchChunks(lines []string) []lessoncheck.PatchChunk {
+	var chunks []lessoncheck.PatchChunk
+
+	for i := 0; i < len(lines); {
+		var chunk lessoncheck.PatchChunk
+
+		switch line := strings.TrimRightFunc(lines[i], unicode.IsSpace); {
+		case line == "@@":
+			i++
+		case strings.HasPrefix(line, "@@ "):
+			chunk.Anchor = line[len("@@ "):]
+			i++
+		case len(chunks) > 0:
+			return nil
+		}
+
+		i = chunkLines(lines, i, &chunk)
+		if len(chunk.Lines) == 0 || i < 0 {
+			return nil
+		}
+
+		chunks = append(chunks, chunk)
+	}
+
+	return chunks
+}
+
+// chunkLines reads the change lines of one chunk from lines[i:] into
+// chunk. It returns the index of the first line after the chunk, or -1
+// when an end-of-file line closes a chunk without lines or a change line
+// ends with a carriage return.
+func chunkLines(lines []string, i int, chunk *lessoncheck.PatchChunk) int {
+	for ; i < len(lines); i++ {
+		raw := lines[i]
+
+		switch {
+		case strings.TrimRightFunc(raw, unicode.IsSpace) == patchEndOfFile:
+			if len(chunk.Lines) == 0 {
+				return -1
+			}
+
+			chunk.EndOfFile = true
+
+			return i + 1
+		case strings.HasSuffix(raw, "\r"):
+			return -1
+		case raw == "":
+			chunk.Lines = append(chunk.Lines, lessoncheck.PatchLine{Kind: lessoncheck.PatchContext})
+		case strings.ContainsRune("+- ", rune(raw[0])):
+			chunk.Lines = append(chunk.Lines, lessoncheck.PatchLine{Kind: lessoncheck.PatchLineKind(raw[0]), Text: raw[1:]})
+		default:
+			return i
+		}
+	}
+
+	return i
 }
 
 // patchOpPaths returns the paths of the operations in patch order: each

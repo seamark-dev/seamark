@@ -64,7 +64,9 @@ const (
 	noteNotText     = "the current content is not readable text"
 	noteLink        = "the path is a symbolic link"
 	noteThroughLink = "a parent directory is a symbolic link"
-	noteHunks       = "update hunks have no verified projection"
+	noteHunks       = "the update hunks have a form without a verified projection"
+	noteNoMatch     = "an update hunk does not match the current content"
+	noteLoneCR      = "the current content has a carriage return without a line feed"
 	noteSamePath    = "the move target is the source path"
 	noteRepeated    = "the edit names the path more than once"
 )
@@ -173,12 +175,40 @@ func checkOperation(op Operation) error {
 			problem = "has a move target that its kind does not take"
 		}
 
+		if problem == "" && fop.Chunks != nil {
+			problem = chunkProblem(fop)
+		}
+
 		if problem != "" {
 			return fmt.Errorf("lesson checks: file operation %d (%q) %s", i+1, fop.Kind, problem)
 		}
 	}
 
 	return nil
+}
+
+// chunkProblem returns why the chunks of an operation are not a form
+// that the decoder gives, or "". The decoder fills chunks only for an
+// update with hunks, and each chunk holds at least one line of a known
+// kind.
+func chunkProblem(fop FileOp) string {
+	if fop.Kind != OpPatchUpdate || !fop.Hunks {
+		return "has chunks that its kind does not take"
+	}
+
+	for _, chunk := range fop.Chunks {
+		if len(chunk.Lines) == 0 {
+			return "has a chunk without lines"
+		}
+
+		for _, line := range chunk.Lines {
+			if line.Kind != PatchContext && line.Kind != PatchDelete && line.Kind != PatchAdd {
+				return "has a chunk line of an unknown kind"
+			}
+		}
+	}
+
+	return ""
 }
 
 // operationPaths returns every path of the operations, move targets
@@ -429,9 +459,8 @@ func (p *projector) remove(fop FileOp) Change {
 }
 
 // update projects a Codex Update File section. Without hunks it is a
-// move with unchanged content. With hunks the paths are complete, and
-// the content stays unprojectable, because no verified hunk applier
-// exists yet.
+// move with unchanged content. With hunks the content is the result of
+// the chunks (see applyChunks), or unprojectable.
 //
 // A move onto an existing file replaces that file. The projection then
 // gives a delete of the source and a modify of the target. It uses a
@@ -495,17 +524,63 @@ func (p *projector) update(fop FileOp) []Change {
 }
 
 // updateContent sets the after content of an update: the source
-// content for a move without hunks, unprojectable for a section with
-// hunks or with an absent source.
+// content for a move without hunks, the projected content for a section
+// with hunks, and unprojectable for an absent source.
 func (p *projector) updateContent(ch *Change, fop FileOp, before Side) {
 	switch {
-	case fop.Hunks:
-		unprojectable(ch, noteHunks)
 	case before.Type == ObjectAbsent:
 		// The native tool refuses to update or move an absent file.
 		unprojectable(ch, noteAbsent)
 	case before.Type == ObjectOther:
 		unprojectable(ch, noteNotFile)
+	case !fop.Hunks:
+		// A move without hunks keeps the source content.
+	case fop.Chunks == nil:
+		// The decoder found a form of hunk that no oracle case pins.
+		unprojectable(ch, noteHunks)
+	default:
+		p.chunkContent(ch, fop, before)
+	}
+}
+
+// chunkContent projects the chunks of an update onto the before
+// content. It sets the after side to the projected content, or marks it
+// unprojectable with the first cause, or marks it too large.
+func (p *projector) chunkContent(ch *Change, fop FileOp, before Side) {
+	switch {
+	case ch.unprojectable != "":
+		// An earlier rule, such as a move onto itself, already made the
+		// result unknown. A projected side must not replace that mark.
+		return
+	case before.Type != ObjectFile:
+		// The native tool writes through a symbolic link. The link rules
+		// of source and target replace this detail with their own.
+		unprojectable(ch, noteNotFile)
+
+		return
+	case before.Content != ContentAvailable:
+		// The before side keeps its own state, such as binary or
+		// too-large. The pattern checker reads it first, so that state
+		// names the reason.
+		unprojectable(ch, noteNotText)
+
+		return
+	}
+
+	after, tooLarge, note, err := applyChunks(p.r.ctx, before.text, fop.Chunks, p.r.lim.MaxFileBytes)
+
+	switch {
+	case err != nil:
+		// The budget ended inside a seek. The reader keeps the context
+		// error, and ProjectOperation then discards the whole projection.
+		p.r.done()
+	case note != "":
+		unprojectable(ch, note)
+	case tooLarge > 0:
+		ch.After = Side{Type: ObjectFile, Mode: ch.After.Mode, Size: tooLarge, Content: ContentTooLarge}
+		p.r.hit(LimitMaxFileBytes, p.r.lim.MaxFileBytes, 1)
+	default:
+		ch.After = p.content(after, ch.After.Mode)
 	}
 }
 
