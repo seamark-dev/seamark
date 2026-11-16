@@ -24,6 +24,7 @@ type companion struct {
 	file     string
 	with     string // the set file that shares the most commits with it
 	together int
+	total    int // the commits co-change counts in the mined window
 	lift     float64
 	outside  bool // no set file lives in the companion's directory
 }
@@ -79,7 +80,7 @@ func (s *companionSet) note(file string, p store.CoChangePartner) {
 	}
 
 	s.found[p.File] = companion{
-		file: p.File, with: file, together: p.Together, lift: p.Lift,
+		file: p.File, with: file, together: p.Together, total: p.Total, lift: p.Lift,
 		outside: !s.dirs[path.Dir(p.File)],
 	}
 }
@@ -146,13 +147,17 @@ func rankCompanions(companions map[string]companion) []companion {
 // full timeout per partner; a slow history then costs one budget, not six.
 const historyBudget = 5 * time.Second
 
-// printCompanions writes the closing list: one line of numbers per partner
-// and, when history has them, one line of reasons. A bare file name was
-// the weakest line on the screen in the first workflow cohort; the reason
-// is what makes a partner a question the agent answers. Both reasons are
-// quoted facts from git, never a claim about the code.
-func printCompanions(w io.Writer, st *store.Store, root, title string, companions map[string]companion) {
-	list := rankCompanions(companions)
+// printCompanions writes the closing list, ranked by rankCompanions: one
+// line of numbers per partner and, when history has them, one line of
+// reasons. A bare file name was the weakest line on the screen in the
+// first workflow cohort; the reason is what makes a partner a question
+// the agent answers. Both reasons are quoted facts from git, never a
+// claim about the code.
+//
+// With window, the numbers take the N/M form of the change_set file
+// lines, because change_set prints a listed partner only here. check
+// prints no file lines, and its line keeps the shared-commit form.
+func printCompanions(w io.Writer, st *store.Store, root, title string, list []companion, window bool) {
 	if len(list) == 0 {
 		return
 	}
@@ -164,8 +169,13 @@ func printCompanions(w io.Writer, st *store.Store, root, title string, companion
 	for i, c := range list {
 		// File names come from git history, where control characters are
 		// legal, so they are sanitized like commit titles before the terminal.
-		fmt.Fprintf(w, "  %-50s %d shared commits with %s, lift %.1f\n",
-			render.Sanitize(c.file), c.together, render.Sanitize(c.with), c.lift)
+		counts := fmt.Sprintf("%d shared commits", c.together)
+		if window {
+			counts = fmt.Sprintf("%d/%d commits", c.together, c.total)
+		}
+
+		fmt.Fprintf(w, "  %-50s %s with %s, lift %.1f\n",
+			render.Sanitize(c.file), counts, render.Sanitize(c.with), c.lift)
 
 		if reason := companionReason(st, c, funcs[i]); reason != "" {
 			fmt.Fprintf(w, "    %s\n", reason)
@@ -379,7 +389,7 @@ func CheckCompanions(w io.Writer, st *store.Store, root string, files []string) 
 		return
 	}
 
-	printCompanions(w, st, root, checkCompanionsTitle, set.found)
+	printCompanions(w, st, root, checkCompanionsTitle, rankCompanions(set.found), false)
 }
 
 // companionStatus is the line check prints when it lists no companion.

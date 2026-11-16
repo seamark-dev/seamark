@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -16,8 +17,8 @@ import (
 // unchanged first. Then lessoncheck.Verify reads the default
 // working-tree selection, whatever diff the policy read.
 // report.NewCheckLessonsEnvelope combines both verdicts, and the command
-// exits with the combined exit code. The command decides no outcome
-// itself.
+// exits with the combined exit code. The text form leads with the
+// combined line. The command decides no outcome itself.
 
 // checkLessonsRun is the state of one check run when its policy path is
 // done.
@@ -32,22 +33,24 @@ type checkLessonsRun struct {
 }
 
 // runCheckLessons prints the policy verdict and the lesson verification
-// of one check --lessons run. The text form is the plain check text, a
-// blank line, the lesson report, and the combined line. The JSON form
-// is only the check-lessons/1 document. The returned error makes
-// Execute exit with the combined exit code.
+// of one check --lessons run. The text form is report.WriteCheckLessons:
+// the combined line first, then the plain check text and the lesson
+// report. The JSON form is only the check-lessons/1 document. The
+// returned error makes Execute exit with the combined exit code.
 func runCheckLessons(cmd *cobra.Command, run checkLessonsRun) error {
 	out := cmd.OutOrStdout()
+	changed := gate.ChangedPaths(run.diff)
 
-	// The plain check text prints before the snapshot. The advisory
+	// The plain check text renders before the snapshot. The advisory
 	// appends to the lessons audit under .seamark, and a write after the
-	// snapshot read can make the result stale.
-	if !run.asJSON {
-		report.Decision(out, run.decision)
+	// snapshot read can make the result stale. The text waits in a
+	// buffer, because the combined line comes first.
+	var policyText bytes.Buffer
 
-		changed := gate.ChangedPaths(run.diff)
-		report.CheckCompanions(out, run.st, run.root, changed)
-		report.CheckAdvisory(out, run.st, run.root, changed)
+	if !run.asJSON {
+		report.Decision(&policyText, run.decision)
+		report.CheckCompanions(&policyText, run.st, run.root, changed)
+		report.CheckAdvisory(&policyText, run.st, run.root, changed)
 	}
 
 	// SQLite keeps its WAL files next to an open index, and a read can
@@ -67,7 +70,7 @@ func runCheckLessons(cmd *cobra.Command, run checkLessonsRun) error {
 		return err
 	}
 
-	env := report.NewCheckLessonsEnvelope(run.decision, v, run.policyInput)
+	env := report.NewCheckLessonsEnvelope(run.decision, v, run.policyInput, changed)
 
 	if run.asJSON {
 		// The encoding is compact, as plain check --json prints the
@@ -76,10 +79,14 @@ func runCheckLessons(cmd *cobra.Command, run checkLessonsRun) error {
 			return err
 		}
 	} else {
-		fmt.Fprintln(out)
-		lessoncheck.RenderText(out, v)
-		fmt.Fprintf(out, "combined: %s (policy %s, lessons %s)\n",
-			env.Combined.State, env.Combined.Policy, env.Combined.Lessons)
+		report.WriteCheckLessons(out, env, policyText.String(), false)
+	}
+
+	// A failed audit record never changes the outcome or the exit code.
+	// The rule of lessons --verify applies: on an exit-0 path one stderr
+	// line names it, and a non-zero exit keeps its own line alone.
+	if auditErr := v.AuditError(); auditErr != nil && env.Combined.ExitCode == 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "seamark: lesson-check audit:", auditErr)
 	}
 
 	return checkLessonsExit(env.Combined, run.decision, v)

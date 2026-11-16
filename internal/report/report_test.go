@@ -1068,8 +1068,9 @@ func TestChangeSetSuggestsCompanionsWithReasons(t *testing.T) {
 
 	assert.Contains(t, out, CompanionsTitle)
 	assert.Contains(t, out, "web/src/api/generated.ts")
-	assert.Contains(t, out, "2 shared commits with server/schema.py, lift 1.3")
+	assert.Contains(t, out, "2/6 commits with server/schema.py, lift 1.3")
 	assert.Contains(t, out, "last fix here: fix: refresh web types after workspace schema change (7263562)")
+	assert.NotContains(t, out, "usually changes with", "the closing list is the one place of a listed partner")
 
 	// Equal numbers: the partner outside the planned directories comes
 	// before the one beside them, because that is the file a plan forgets.
@@ -2354,4 +2355,74 @@ func TestWhyPartnerLineKeepsItsForm(t *testing.T) {
 		assert.Equal(t, "4", m[1])
 		assert.Equal(t, "18", m[2], "M is the same on every partner line")
 	}
+}
+
+// TestChangeSetPrintsEachPartnerOnce proves that change_set prints no
+// partner twice. A partner that the closing list shows prints only
+// there, with the N/M counts of a file line, its lift, and the planned
+// file it shares the most commits with. A file block keeps the partners
+// that the closing list does not show: a planned file, and a partner
+// past the cap of the closing list. Before, the closing list repeated the
+// file lines of a one-file plan.
+func TestChangeSetPrintsEachPartnerOnce(t *testing.T) {
+	root := t.TempDir()
+	st, err := store.Open(filepath.Join(root, "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		for _, file := range []string{"server/schema.py", "server/api.py"} {
+			sym := model.Symbol{FQN: file + ".fn", Name: "fn", Kind: model.KindFunction,
+				File: file, Span: model.Span{StartLine: 1, EndLine: 1}}
+			if err := tx.InsertSymbol(&sym); err != nil {
+				return err
+			}
+		}
+
+		pairs := []model.CoChange{
+			{FileA: "server/api.py", FileB: "server/schema.py", Together: 5, Total: 40, Lift: 2.0},
+			{FileA: "server/api.py", FileB: "web/p1.ts", Together: 2, Total: 40, Lift: 1.2},
+			{FileA: "server/api.py", FileB: "web/late.ts", Together: 1, Total: 40, Lift: 1.1},
+		}
+
+		for i := 1; i <= 7; i++ {
+			pairs = append(pairs, model.CoChange{FileA: "server/schema.py", FileB: fmt.Sprintf("web/p%d.ts", i),
+				Together: 10 - i, Total: 40, Lift: 1.5})
+		}
+
+		for _, p := range pairs {
+			if err := tx.InsertCoChange(p); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	var b strings.Builder
+	require.NoError(t, ChangeSet(&b, st, root, []string{"server/schema.py", "server/api.py"}))
+
+	assert.Equal(t, `server/schema.py
+  usually changes with  server/api.py                                   5/40 commits, lift 2.0
+  defines                1 symbols
+
+server/api.py
+  usually changes with  server/schema.py                                5/40 commits, lift 2.0
+  usually changes with  web/late.ts                                     1/40 commits, lift 1.1
+  defines                1 symbols
+
+history suggests also reviewing
+  web/p1.ts                                          9/40 commits with server/schema.py, lift 1.5
+  web/p2.ts                                          8/40 commits with server/schema.py, lift 1.5
+  web/p3.ts                                          7/40 commits with server/schema.py, lift 1.5
+  web/p4.ts                                          6/40 commits with server/schema.py, lift 1.5
+  web/p5.ts                                          5/40 commits with server/schema.py, lift 1.5
+  web/p6.ts                                          4/40 commits with server/schema.py, lift 1.5
+`, b.String())
+
+	// check keeps its own line form through the shared renderer.
+	b.Reset()
+	CheckCompanions(&b, st, root, []string{"server/schema.py"})
+	assert.Contains(t, b.String(), "  web/p1.ts                                          9 shared commits with server/schema.py, lift 1.5\n")
+	assert.NotContains(t, b.String(), "/40 commits")
 }

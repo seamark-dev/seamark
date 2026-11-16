@@ -852,3 +852,37 @@ func TestLessonsFileShowsWhatTheRoutesLeaveOut(t *testing.T) {
 		assert.Contains(t, shown, rule, "the view that the hook names shows %s", rule)
 	}
 }
+
+// TestLessonsPrepareSaysWhenTheIndexIsStale proves the mined freshness of
+// lessons --prepare. The command refreshes no index, so after an edit of
+// a tracked file the index no longer matches the workspace: the document
+// says stale beside mined_status ok, and the text says it in one line. A
+// current index has no key, so an ordinary document keeps its bytes. The
+// root of the preparation is the root that the index records, so the
+// command never names a mined_root.
+func TestLessonsPrepareSaysWhenTheIndexIsStale(t *testing.T) {
+	root := prepareRepo(t, true)
+	main := filepath.Join(root, "a.go")
+	const line = "  the mined lessons come from an index that does not match the workspace now " +
+		"(`seamark index` refreshes it)\n"
+
+	current, err := prepareRun(t, root, main, "--json")
+	require.NoError(t, err)
+	assert.NotContains(t, current, "mined_freshness")
+	assert.NotContains(t, current, "mined_root")
+
+	text, err := prepareRun(t, root, main)
+	require.NoError(t, err)
+	assert.NotContains(t, text, line)
+
+	verifyWrite(t, root, "a.go", "package main\n\nfunc main() {}\n\nfunc later() {}\n")
+
+	p := prepareJSON(t, root, main)
+	assert.Equal(t, delivery.MinedOK, p.Guidance.MinedStatus, "the existing value keeps its meaning")
+	assert.Equal(t, delivery.MinedStale, p.Guidance.MinedFreshness)
+	assert.Empty(t, p.Guidance.MinedRoot)
+
+	text, err = prepareRun(t, root, main)
+	require.NoError(t, err)
+	assert.Contains(t, text, line)
+}

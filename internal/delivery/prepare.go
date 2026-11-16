@@ -62,6 +62,21 @@ const (
 	MinedUnavailable = "unavailable"
 )
 
+// The freshness values of the index behind the mined lessons. Each one
+// qualifies the mined status ok. A current index, and an index whose
+// freshness no fingerprint shows, have no value, so the field is absent
+// in an ordinary document.
+const (
+	// MinedNotRefreshed means that the refresh of this call failed or was
+	// refused, so the mined lessons come from the index as it was. MCP
+	// change_set refreshes the index on each call and sets it.
+	MinedNotRefreshed = "not-refreshed"
+	// MinedStale means that the fingerprint the index records does not
+	// match the workspace now. lessons --prepare refreshes no index and
+	// sets it.
+	MinedStale = "stale"
+)
+
 // The checks statuses of a preparation. The list is closed.
 const (
 	checksNone    = "none"
@@ -136,6 +151,12 @@ type PrepareRequest struct {
 	// The caller opens the index, so only the caller can say why st holds
 	// no mined lessons.
 	MinedStatus string
+	// MinedFreshness is "", MinedNotRefreshed, or MinedStale. Only the
+	// caller refreshes or probes the index, so only the caller knows it.
+	MinedFreshness string
+	// MinedRoot is the root that the index records when that root is
+	// another repository than Root, else "".
+	MinedRoot string
 	// Now gives the preparation time. Nil means time.Now.
 	Now func() time.Time
 	// EventID gives the event_id of the firing record. Nil means 16
@@ -216,6 +237,10 @@ type Guidance struct {
 	MinedStatus    string `json:"mined_status"`
 	ChecksStatus   string `json:"checks_status"`
 	ChecksError    string `json:"checks_error,omitempty"`
+	// MinedFreshness and MinedRoot qualify a mined status ok. Each is
+	// absent when the index is current and records this workspace.
+	MinedFreshness string `json:"mined_freshness,omitempty"`
+	MinedRoot      string `json:"mined_root,omitempty"`
 }
 
 // PreparedPin is one selected pin with its exact version.
@@ -302,6 +327,11 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 		return nil, fmt.Errorf("delivery: unknown mined status %q", mined)
 	}
 
+	freshness, minedRoot, err := minedIndexOf(req, mined)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg, loadErr := preparationConfig(req)
 
 	now := time.Now
@@ -326,6 +356,7 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 		Guidance: Guidance{
 			Status: status, GuidanceSHA256: digest, Budget: cfg.ChangeSetBudget(),
 			MinedStatus: mined, ChecksStatus: checksStatus, ChecksError: checksError,
+			MinedFreshness: freshness, MinedRoot: minedRoot,
 		},
 		Pins:    []PreparedPin{},
 		Lessons: []PreparedLesson{},
@@ -354,6 +385,14 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 	pinPaths, pinCounts := pinScopes(cfg, files)
 	checks, checkCounts := checkSummaries(cfg, refs, pinPaths)
 	withEnforcement(checks, req.Capability)
+
+	// An invalid check configuration runs no checker at all
+	// (lessoncheck.Evaluate), so no listed check runs.
+	if checksStatus == checksInvalid {
+		for i := range checks {
+			checks[i].Runs = false
+		}
+	}
 
 	for i, f := range files {
 		p.Request.Paths[i].Pins = pinCounts[f]
@@ -407,6 +446,23 @@ func (p *Preparation) Record() {
 	}
 
 	p.EventID = ev.EventID
+}
+
+// minedIndexOf returns the freshness and the recorded root of the index
+// behind the mined lessons. Without mined lessons there is nothing to
+// qualify, so both stay empty unless the mined status is ok.
+func minedIndexOf(req PrepareRequest, mined string) (freshness, root string, err error) {
+	switch req.MinedFreshness {
+	case "", MinedNotRefreshed, MinedStale:
+	default:
+		return "", "", fmt.Errorf("delivery: unknown mined freshness %q", req.MinedFreshness)
+	}
+
+	if mined != MinedOK {
+		return "", "", nil
+	}
+
+	return req.MinedFreshness, render.Sanitize(req.MinedRoot), nil
 }
 
 // preparationConfig returns the configuration of the selection and its

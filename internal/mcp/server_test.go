@@ -142,10 +142,10 @@ func TestLifecycleAndTools(t *testing.T) {
 
 	// The instructions state judgment rules, not a ritual. Each phrase is
 	// one rule the agent-skills specification requires: change_set
-	// before the edit, orient only when unfamiliar, check before
-	// completion over a diff that includes new files, co-change as
-	// usually, absence of evidence as unknown.
-	for _, phrase := range []string{"change_set", "before", "check", "git diff HEAD skips", "only when", "usually", "never means safe"} {
+	// before the edit, orient only when unfamiliar, check with the lesson
+	// checks before completion over a diff that includes new files,
+	// co-change as usually, absence of evidence as unknown.
+	for _, phrase := range []string{"change_set", "before", "check", "lesson_checks: true", "git diff HEAD skips", "only when", "usually", "never means safe"} {
 		assert.Contains(t, init.Instructions, phrase)
 	}
 
@@ -325,8 +325,9 @@ func TestResourcesAndPrompts(t *testing.T) {
 	assert.Contains(t, string(resps["5"].Result), "orient")
 
 	// The onboard prompt follows the same rules as the instructions:
-	// orient is conditional, change_set precedes the edit, and check
-	// precedes the completion report over a diff that includes new files.
+	// orient is conditional, change_set precedes the edit, and check with
+	// the lesson checks precedes the completion report over a diff that
+	// includes new files.
 	var prompt struct {
 		Messages []struct {
 			Content struct {
@@ -337,7 +338,7 @@ func TestResourcesAndPrompts(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resps["5"].Result, &prompt))
 	require.Len(t, prompt.Messages, 1)
 
-	for _, phrase := range []string{"change_set", "check", "git diff HEAD skips", "only when"} {
+	for _, phrase := range []string{"change_set", "check", "lesson_checks: true", "git diff HEAD skips", "only when"} {
 		assert.Contains(t, prompt.Messages[0].Content.Text, phrase)
 	}
 }

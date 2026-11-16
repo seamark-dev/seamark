@@ -783,7 +783,7 @@ func TestPrepareWorksWithoutAnIndexAndWithAnInvalidConfig(t *testing.T) {
 		assert.Len(t, p.Pins, 1)
 	})
 
-	t.Run("a semantic error keeps the pins and lists the executable pins", func(t *testing.T) {
+	t.Run("a semantic error keeps the pins and lists the executable pins as not run", func(t *testing.T) {
 		root := workspace(t)
 		cfg := writeConfig(t, root, `lesson_checks_version: 1
 checks:
@@ -812,10 +812,11 @@ pin:
 		assert.Equal(t, errs[0].Message, p.Guidance.ChecksError)
 		assert.Equal(t, []CheckSummary{{
 			PinRef: cfg.ShortPinRef(pinKeyOf(cfg.Pin[1])), PinVersion: cfg.PinVersion(cfg.Pin[1]),
-			Mode: "check", Runs: true, Check: lessoncheck.CheckRef{ID: "no-todos"}, Paths: []string{"api/handler.go"},
-		}}, p.Checks, "the executable pin stays listed with its mode")
+			Mode: "check", Runs: false, Check: lessoncheck.CheckRef{ID: "no-todos"}, Paths: []string{"api/handler.go"},
+		}}, p.Checks, "the executable pin stays listed with its mode, and an invalid configuration runs no checker")
 		assert.Contains(t, preparationText(p, FormFull), "checks are invalid: "+errs[0].Message)
-		assert.Contains(t, preparationText(p, FormFull), "check no-todos (not defined)")
+		assert.Contains(t, preparationText(p, FormFull),
+			"· check · does not run (configuration error) · check no-todos (not defined)\n")
 	})
 
 	t.Run("an unknown mode is invalid on the pin and advisory on the check", func(t *testing.T) {
@@ -849,8 +850,8 @@ pin:
 		assert.Equal(t, "invalid", p.Guidance.ChecksStatus)
 		require.Len(t, p.Checks, 1)
 		assert.Equal(t, lessoncheck.CheckRef{}, p.Checks[0].Check)
-		assert.True(t, p.Checks[0].Runs)
-		assert.Contains(t, preparationText(p, FormFull), "· enforce · runs · check (none bound)\n")
+		assert.False(t, p.Checks[0].Runs, "an invalid configuration runs no checker")
+		assert.Contains(t, preparationText(p, FormFull), "· enforce · does not run (configuration error) · check (none bound)\n")
 	})
 
 	t.Run("no lessons.yaml is absent", func(t *testing.T) {
@@ -1367,4 +1368,166 @@ func TestEnforcementTextScrubsTheBadge(t *testing.T) {
 	assert.NotContains(t, got, "\x1b")
 	assert.NotContains(t, got, "\x07")
 	assert.Equal(t, "claude]0;title enforced (limit: limit[2J)", got)
+}
+
+// TestRenderPreparationSupplementSaysWhyGuidanceFails proves that the
+// supplement form, the second text part of MCP change_set, renders when
+// the guidance is invalid or the checks are invalid, also without a pin
+// or a check. The first part then shows no pin and no note, so without
+// the supplement an older client would never learn why. The supplement
+// uses the words of lessons --prepare. Valid guidance without anything
+// to add, and an absent file, still render nothing.
+func TestRenderPreparationSupplementSaysWhyGuidanceFails(t *testing.T) {
+	t.Run("a file that does not decode", func(t *testing.T) {
+		root := workspace(t)
+		writeConfig(t, root, prepareTwoPins)
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"),
+			[]byte("pin: [this is: not valid yaml\n"), 0o644))
+
+		p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, nil, "api/handler.go"))
+		require.Empty(t, p.Pins)
+		require.Empty(t, p.Checks)
+
+		text := preparationText(p, FormSupplement)
+		assert.Contains(t, text, "guidance invalid · change budget 6 · mined lessons ok · checks invalid\n")
+		assert.Contains(t, text,
+			"  .seamark/lessons.yaml does not read or decode, so the defaults apply and no pin is selected\n")
+		assert.Contains(t, text, "  checks are invalid: ")
+
+		// The full form of lessons --prepare holds the same lines.
+		full := preparationText(p, FormFull)
+		for _, line := range strings.Split(strings.TrimSpace(strings.SplitN(text, "\n\n", 2)[0]), "\n")[1:] {
+			assert.Contains(t, full, line+"\n", "the supplement and lessons --prepare say it in the same words")
+		}
+	})
+
+	t.Run("checks that do not validate", func(t *testing.T) {
+		root := workspace(t)
+		writeWorkspaceFile(t, root, "plain/a.go")
+		cfg := writeConfig(t, root, "lesson_checks_version: 1\nchecks:\n  bad:\n    kind: nonexistent/9\n"+
+			"pin:\n  - rule: bad\n    region: api\n    note: Never.\n    mode: check\n    check: bad\n")
+
+		// plain/a.go is outside the pin, so nothing else would render.
+		p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, cfg, "plain/a.go"))
+		require.Empty(t, p.Pins)
+		require.Empty(t, p.Checks)
+		require.Equal(t, "invalid", p.Guidance.ChecksStatus)
+
+		text := preparationText(p, FormSupplement)
+		assert.Contains(t, text, " · checks invalid\n")
+		assert.Contains(t, text, "  checks are invalid: ")
+	})
+
+	t.Run("valid or absent guidance with nothing to add", func(t *testing.T) {
+		root := workspace(t)
+		writeWorkspaceFile(t, root, "plain/a.go")
+
+		p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, nil, "plain/a.go"))
+		require.Equal(t, "absent", p.Guidance.Status)
+		assert.Empty(t, preparationText(p, FormSupplement), "an absent file is no failure")
+
+		cfg := writeConfig(t, root, prepareTwoPins)
+		p = mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, cfg, "plain/a.go"))
+		require.Equal(t, "ok", p.Guidance.Status)
+		assert.Empty(t, preparationText(p, FormSupplement))
+	})
+}
+
+// TestPrepareKeepsAValidCheckRunning proves that only an invalid check
+// configuration clears runs: under a valid one the executable pin still
+// runs, in the document and in both text forms.
+func TestPrepareKeepsAValidCheckRunning(t *testing.T) {
+	root := workspace(t)
+	cfg := writeConfig(t, root, "lesson_checks_version: 1\nchecks:\n  frozen:\n    kind: forbid-path-change/1\n"+
+		"pin:\n  - rule: frozen-api\n    region: api\n    note: Keep the api frozen.\n    mode: enforce\n    check: frozen\n")
+
+	p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, cfg, "api/handler.go"))
+
+	require.Equal(t, "valid", p.Guidance.ChecksStatus)
+	require.Len(t, p.Checks, 1)
+	assert.True(t, p.Checks[0].Runs)
+
+	for _, form := range []string{FormFull, FormSupplement} {
+		assert.Contains(t, preparationText(p, form), "· enforce · runs · check frozen (forbid-path-change/1, version ", form)
+		assert.NotContains(t, preparationText(p, form), "configuration error", form)
+	}
+}
+
+// TestPrepareSaysWhenTheMinedIndexIsQualified proves the mined_freshness
+// and mined_root fields of lesson-preparation/1. A caller that could not
+// refresh the index, or whose index records another root or no longer
+// matches the workspace, gets the fact in the document and in one
+// guidance line of both text forms. An ordinary document has neither
+// key. Without mined lessons there is nothing to qualify, and an unknown
+// freshness is a caller error.
+func TestPrepareSaysWhenTheMinedIndexIsQualified(t *testing.T) {
+	root := workspace(t)
+	cfg := writeConfig(t, root, prepareTwoPins)
+	const intro = "  the mined lessons come from an index that "
+
+	t.Run("an ordinary document has neither key", func(t *testing.T) {
+		p := mustPrepare(t, prepareMemoryStore(t), prepareRequest(root, cfg, "api/handler.go"))
+
+		data, err := json.Marshal(p)
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "mined_freshness")
+		assert.NotContains(t, string(data), "mined_root")
+
+		for _, form := range []string{FormFull, FormSupplement} {
+			assert.NotContains(t, preparationText(p, form), intro, form)
+		}
+	})
+
+	t.Run("not refreshed and another root", func(t *testing.T) {
+		req := prepareRequest(root, cfg, "api/handler.go")
+		req.MinedFreshness = MinedNotRefreshed
+		req.MinedRoot = "/srv/origin\x1b[2J"
+
+		p := mustPrepare(t, prepareMemoryStore(t), req)
+
+		assert.Equal(t, MinedOK, p.Guidance.MinedStatus, "the existing value keeps its meaning")
+		assert.Equal(t, "not-refreshed", p.Guidance.MinedFreshness)
+		assert.True(t, strings.HasPrefix(p.Guidance.MinedRoot, "/srv/origin"), p.Guidance.MinedRoot)
+		assert.NotContains(t, p.Guidance.MinedRoot, "\x1b", "the root is sanitized")
+
+		for _, form := range []string{FormFull, FormSupplement} {
+			text := preparationText(p, form)
+			assert.Contains(t, text, intro+"was not refreshed for this call and records /srv/origin", form)
+			assert.Equal(t, 1, strings.Count(text, intro), "%s: one line", form)
+			assert.NotContains(t, text, "\x1b", form)
+		}
+	})
+
+	t.Run("stale", func(t *testing.T) {
+		req := prepareRequest(root, cfg, "api/handler.go")
+		req.MinedFreshness = MinedStale
+
+		p := mustPrepare(t, prepareMemoryStore(t), req)
+
+		assert.Equal(t, "stale", p.Guidance.MinedFreshness)
+		assert.Empty(t, p.Guidance.MinedRoot)
+		assert.Contains(t, preparationText(p, FormFull),
+			intro+"does not match the workspace now (`seamark index` refreshes it)\n")
+	})
+
+	t.Run("no mined lessons leave nothing to qualify", func(t *testing.T) {
+		req := prepareRequest(root, cfg, "api/handler.go")
+		req.MinedStatus = MinedNoIndex
+		req.MinedFreshness = MinedNotRefreshed
+		req.MinedRoot = "/srv/origin"
+
+		p := mustPrepare(t, prepareMemoryStore(t), req)
+
+		assert.Empty(t, p.Guidance.MinedFreshness)
+		assert.Empty(t, p.Guidance.MinedRoot)
+		assert.NotContains(t, preparationText(p, FormFull), intro)
+	})
+
+	t.Run("the freshness list is closed", func(t *testing.T) {
+		req := prepareRequest(root, cfg, "api/handler.go")
+		req.MinedFreshness = "old"
+
+		_, err := Prepare(context.Background(), prepareMemoryStore(t), req)
+		require.Error(t, err)
+	})
 }

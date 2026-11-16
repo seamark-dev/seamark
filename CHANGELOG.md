@@ -498,6 +498,59 @@ model-boundary delivery.
   the new field `coverage.files_unsupported`. The count comes from the
   counts that the index already stores, so an existing index shows it
   without a rebuild.
+- **`check` names a policy verdict that does not block.** The
+  `combined:` line read `policy pass` under `verdict deny (mode: warn)`.
+  It now reads, for example, `combined: pass (policy deny, not blocking
+  in warn mode; lessons passed)`. The combined state and the exit code
+  do not change. In `check-lessons/1`, `combined.policy` still says only
+  `pass` or `blocked`, and the new `combined.policy_verdict` holds the
+  verdict.
+- **`check` reports an audit record that was not written.** `check
+  --lessons` prints `seamark: lesson-check audit: <error>` on stderr
+  when the command exits 0, as `lessons --verify` does. MCP `check` ends
+  its text with one `note:` line for each record that was not written,
+  the policy audit and the lesson-check audit, where it only wrote to
+  the log of the server before. The verdict and the exit code never
+  change.
+- **`check` says when executable lesson checks did not run.** When
+  lesson verification was not requested and a pin in mode check or
+  enforce covers a changed file, the check text ends with `lesson
+  checks: not requested — N executable pin(s) cover this diff; run with
+  lesson_checks: true (CLI: seamark check --lessons)`. An invalid
+  `lessons.yaml` says so in that line. The MCP instructions and the
+  onboard prompt now ask for `lesson_checks: true`.
+- **`check --lessons` leads with the combined verdict.** With lesson
+  verification, the `combined:` line is the first line of the CLI and
+  MCP text, then a blank line, the plain check text and the lesson
+  report. It is no longer printed at the end.
+- **`check --lessons` names the diff files that the lesson checks did
+  not read.** The lesson checks read the working tree. When a supplied
+  diff names files outside the verified snapshot, a note under the
+  combined line lists them, and `check-lessons/1` lists them in
+  `combined.diff_paths_outside_snapshot`.
+- **`change_set` prints each co-change partner once.** A partner in the
+  closing `history suggests also reviewing` list is no longer repeated
+  in the lines of its file. Its closing line now carries the N/M counts
+  and the lift beside the `mostly` and last-fix lines. The lines of a
+  file keep the other planned files and the partners past the cap of the
+  closing list. The `check` output does not change.
+- **`change_set` says when `lessons.yaml` does not decode.** An invalid
+  `.seamark/lessons.yaml` dropped every pin from the `change_set` text
+  without a word: an older MCP client got a silent answer, and a newer
+  one found the status only in `structuredContent`. The second text part
+  now shows whenever the guidance or the checks are invalid, in the
+  words of `seamark lessons --prepare`, for every protocol version.
+- **A check that cannot run is not listed as `runs`.** Under an invalid
+  check configuration, preparation lists each check as `does not run
+  (configuration error)` and sets `runs` to false, because no checker
+  runs then. Valid configurations do not change.
+- **Preparation says when the index behind the mined lessons is not
+  current.** `lesson-preparation/1` has two new optional guidance keys,
+  absent in an ordinary document. `mined_freshness` is `not-refreshed`
+  when `change_set` could not refresh the index, and `stale` when
+  `lessons --prepare` finds the index behind the workspace. `mined_root`
+  names the repository that the index of a `change_set` call records
+  when it is another one. Both text forms say it in one line.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

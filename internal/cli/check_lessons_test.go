@@ -317,10 +317,31 @@ func withoutCheckedAt(t *testing.T, doc []byte) map[string]any {
 	return m
 }
 
-// combinedLine is the last line of the text form of check --lessons.
+// combinedLine is the first line of the text form of check --lessons.
+// policy is the clause after "policy ". A clause that names a verdict
+// that does not block holds a comma, so a semicolon ends it.
 func combinedLine(state, policy, lessons string) string {
-	return "combined: " + state + " (policy " + policy + ", lessons " + lessons + ")\n"
+	sep := ", "
+	if strings.Contains(policy, ",") {
+		sep = "; "
+	}
+
+	return "combined: " + state + " (policy " + policy + sep + "lessons " + lessons + ")\n"
 }
+
+// The policy clauses of the combined line in the fixture. checkLessonsPolicy
+// asks for approval of every diff that names a file, so a warn-mode run
+// over a change does not pass the policy, and the clause says so.
+const (
+	clauseApprovalWarn = "require_approval, not blocking in warn mode"
+	clauseAllow        = "pass"
+	clauseBlocked      = "blocked"
+)
+
+// notRequestedOnePin is the line that ends plain check when one
+// executable pin of the fixture covers a changed path.
+const notRequestedOnePin = "lesson checks: not requested — 1 executable pin covers this diff; " +
+	"run with lesson_checks: true (CLI: seamark check --lessons)\n"
 
 // TestCheckLessonsExitTable proves the exit table of check --lessons
 // through the real Execute, in a child process: 0 when the policy does
@@ -328,8 +349,11 @@ func combinedLine(state, policy, lessons string) string {
 // and the lessons are incomplete; 2 when the policy blocks or a lesson
 // check reports a violation; 1 for an error before the evaluation. A
 // blocking policy keeps its stderr line. The JSON exit code equals the
-// process exit code. The text form is the plain check text, a blank
-// line, the lessons --verify text, and the combined line.
+// process exit code, and the JSON names the policy verdict beside the
+// blocking word. The text form is the combined line, a blank line, the
+// plain check text without its lesson-checks line, a blank line, and the
+// lessons --verify text. Plain check ends with that line exactly when an
+// executable pin covers a changed path.
 //
 // The parent owns the sentinel environment, and its cleanup runs after
 // every parallel child. A stub call in any child fails this table, but
@@ -350,26 +374,35 @@ func TestCheckLessonsExitTable(t *testing.T) {
 		stderr  string // the Execute line; "" = none
 		is      error  // the sentinel of the in-process error; nil = no error
 		state   string // the combined state
-		policy  string // the combined policy value
+		policy  string // the combined policy value: pass or blocked
+		verdict string // the policy verdict
+		clause  string // the policy clause of the combined line
 		lessons string // the lesson summary state
+		// notRequested is true when plain check ends with the line on
+		// lesson checks that did not run.
+		notRequested bool
 	}{
 		{
 			name: "policy warns, lessons passed",
 			edit: checkLessonsEditHandler,
-			code: 0, state: "pass", policy: "pass", lessons: "passed",
+			code: 0, state: "pass", policy: "pass", verdict: "require_approval", clause: clauseApprovalWarn,
+			lessons: "passed", notRequested: true,
 		},
 		{
 			name: "policy warns, no applicable checks",
 			edit: func(t *testing.T, root string) { verifyWrite(t, root, "docs/readme.md", "readme\nmore\n") },
-			code: 0, state: "pass", policy: "pass", lessons: "no-applicable-checks",
+			code: 0, state: "pass", policy: "pass", verdict: "require_approval", clause: clauseApprovalWarn,
+			lessons: "no-applicable-checks",
 		},
 		{
-			name:   "policy warns, lessons incomplete",
+			// git diff HEAD skips the untracked binary, so the policy reads
+			// no file and allows.
+			name:   "policy allows, lessons incomplete",
 			edit:   verifyAddBinary,
 			code:   1,
 			stderr: verifyUnknownLine,
 			is:     lessoncheck.ErrIncomplete,
-			state:  "incomplete", policy: "pass", lessons: "incomplete",
+			state:  "incomplete", policy: "pass", verdict: "allow", clause: clauseAllow, lessons: "incomplete",
 		},
 		{
 			name:   "policy warns, lesson violation",
@@ -377,7 +410,8 @@ func TestCheckLessonsExitTable(t *testing.T) {
 			code:   2,
 			stderr: verifyViolationLine,
 			is:     lessoncheck.ErrViolation,
-			state:  "fail", policy: "pass", lessons: "violation",
+			state:  "fail", policy: "pass", verdict: "require_approval", clause: clauseApprovalWarn,
+			lessons: "violation", notRequested: true,
 		},
 		{
 			name:    "policy blocks, lessons passed",
@@ -386,7 +420,8 @@ func TestCheckLessonsExitTable(t *testing.T) {
 			code:    2,
 			stderr:  checkLessonsBlockedLine,
 			is:      gate.ErrBlocked,
-			state:   "fail", policy: "blocked", lessons: "passed",
+			state:   "fail", policy: "blocked", verdict: "require_approval", clause: clauseBlocked,
+			lessons: "passed", notRequested: true,
 		},
 		{
 			name: "policy blocks, lessons incomplete",
@@ -398,7 +433,8 @@ func TestCheckLessonsExitTable(t *testing.T) {
 			code:    2,
 			stderr:  checkLessonsBlockedLine,
 			is:      gate.ErrBlocked,
-			state:   "fail", policy: "blocked", lessons: "incomplete",
+			state:   "fail", policy: "blocked", verdict: "require_approval", clause: clauseBlocked,
+			lessons: "incomplete", notRequested: true,
 		},
 		{
 			name:    "policy blocks, lesson violation",
@@ -407,7 +443,8 @@ func TestCheckLessonsExitTable(t *testing.T) {
 			code:    2,
 			stderr:  checkLessonsBlockedLine,
 			is:      gate.ErrBlocked,
-			state:   "fail", policy: "blocked", lessons: "violation",
+			state:   "fail", policy: "blocked", verdict: "require_approval", clause: clauseBlocked,
+			lessons: "violation", notRequested: true,
 		},
 	}
 
@@ -438,8 +475,8 @@ func TestCheckLessonsExitTable(t *testing.T) {
 				assert.Equal(t, []string{c.stderr}, checkExitLines(stderr), "one Execute line; the policy line wins")
 			}
 
-			want := combinedLine(c.state, c.policy, c.lessons)
-			assert.True(t, strings.HasSuffix(stdout, want), "stdout ends with %q: %s", want, stdout)
+			want := combinedLine(c.state, c.clause, c.lessons)
+			assert.True(t, strings.HasPrefix(stdout, want), "stdout starts with %q: %s", want, stdout)
 
 			jsonOut, jsonErr, jsonCode := seamarkProcess(t, root, append(args, "--json")...)
 			assert.Equal(t, c.code, jsonCode, "stderr: %s", jsonErr)
@@ -447,15 +484,17 @@ func TestCheckLessonsExitTable(t *testing.T) {
 
 			env := decodeCheckLessons(t, jsonOut)
 			assert.Equal(t, report.CombinedResult{
-				State:       lessoncheck.CombinedState(c.state),
-				ExitCode:    jsonCode,
-				Policy:      c.policy,
-				Lessons:     lessoncheck.SummaryState(c.lessons),
-				PolicyInput: report.PolicyInputGitDiffHead,
+				State:         lessoncheck.CombinedState(c.state),
+				ExitCode:      jsonCode,
+				Policy:        c.policy,
+				PolicyVerdict: c.verdict,
+				Lessons:       lessoncheck.SummaryState(c.lessons),
+				PolicyInput:   report.PolicyInputGitDiffHead,
 			}, env.Combined, "the process exits with combined.exit_code")
 
-			// The text form: plain check, a blank line, the lesson
-			// report of lessons --verify, and the combined line.
+			// The text form: the combined line, a blank line, plain check
+			// without its lesson-checks line, a blank line, and the lesson
+			// report of lessons --verify.
 			plain, _, plainErr := runIn(t, "", plainArgs...)
 			if c.enforce {
 				require.ErrorIs(t, plainErr, gate.ErrBlocked)
@@ -465,8 +504,18 @@ func TestCheckLessonsExitTable(t *testing.T) {
 
 			lessonText, _, _ := runIn(t, "", "-C", root, "lessons", "--verify")
 
+			body := plain
+			if c.notRequested {
+				require.True(t, strings.HasSuffix(plain, "\n"+notRequestedOnePin), "plain check names the pin: %s", plain)
+				body = strings.TrimSuffix(plain, "\n"+notRequestedOnePin)
+			} else {
+				assert.NotContains(t, plain, "lesson checks:", "no executable pin covers the diff")
+			}
+
 			got, _, err := runIn(t, "", args...)
-			assert.Equal(t, plain+"\n"+lessonText+want, got)
+			assert.Equal(t, want+"\n"+body+"\n"+lessonText, got)
+			assert.NotContains(t, got, "not requested", "a run that verifies never says that it did not")
+			assert.NotContains(t, got, "note: the lesson checks read", "git diff HEAD needs no input note")
 
 			// The in-process run returns the error that Execute maps.
 			if c.is == nil {
@@ -553,13 +602,15 @@ func TestCheckLessonsJSONEnvelope(t *testing.T) {
 			name:  "piped diff",
 			stdin: string(diff),
 			combined: report.CombinedResult{State: lessoncheck.CombinedFail, ExitCode: 2, Policy: "pass",
-				Lessons: lessoncheck.SummaryViolation, PolicyInput: report.PolicyInputStdinDiff},
+				PolicyVerdict: "require_approval", Lessons: lessoncheck.SummaryViolation,
+				PolicyInput: report.PolicyInputStdinDiff},
 			is: lessoncheck.ErrViolation,
 		},
 		{
 			name: "git diff HEAD",
 			combined: report.CombinedResult{State: lessoncheck.CombinedFail, ExitCode: 2, Policy: "pass",
-				Lessons: lessoncheck.SummaryViolation, PolicyInput: report.PolicyInputGitDiffHead},
+				PolicyVerdict: "require_approval", Lessons: lessoncheck.SummaryViolation,
+				PolicyInput: report.PolicyInputGitDiffHead},
 			is: lessoncheck.ErrViolation,
 		},
 		{
@@ -567,7 +618,8 @@ func TestCheckLessonsJSONEnvelope(t *testing.T) {
 			stdin:   string(diff),
 			enforce: true,
 			combined: report.CombinedResult{State: lessoncheck.CombinedFail, ExitCode: 2, Policy: "blocked",
-				Lessons: lessoncheck.SummaryViolation, PolicyInput: report.PolicyInputStdinDiff},
+				PolicyVerdict: "require_approval", Lessons: lessoncheck.SummaryViolation,
+				PolicyInput: report.PolicyInputStdinDiff},
 			is: gate.ErrBlocked,
 		},
 	}
@@ -590,6 +642,7 @@ func TestCheckLessonsJSONEnvelope(t *testing.T) {
 			env := decodeCheckLessons(t, stdout)
 			assert.Equal(t, report.CheckLessonsSchema, env.Schema)
 			assert.Equal(t, c.combined, env.Combined)
+			assert.NotContains(t, stdout, "diff_paths_outside_snapshot", "every path of the diff is in the snapshot")
 
 			// The policy member holds the bytes of plain check --json.
 			assert.JSONEq(t, plainJSON, string(env.Policy))
@@ -699,7 +752,7 @@ func TestCheckLessonsStaleResult(t *testing.T) {
 			assert.Equal(t, c.code, code, "stdout: %s\nstderr: %s", stdout, stderr)
 			assert.Equal(t, []string{c.stderr}, checkExitLines(stderr))
 			assert.Contains(t, stdout, "\n  stale: the inputs changed after the read")
-			assert.True(t, strings.HasSuffix(stdout, combinedLine(c.combined, "pass", string(c.state))), stdout)
+			assert.True(t, strings.HasPrefix(stdout, combinedLine(c.combined, clauseApprovalWarn, string(c.state))), stdout)
 
 			reset()
 
@@ -718,4 +771,269 @@ func TestCheckLessonsStaleResult(t *testing.T) {
 			sentinel.requireNoCall(t)
 		})
 	}
+}
+
+// checkLessonsDenyPolicy denies every diff that names a file, in the
+// given mode.
+func checkLessonsDenyPolicy(mode string) string {
+	return "mode: " + mode + "\ndeny:\n" +
+		"  - id: no-change\n" +
+		"    when: 'size(diff.files) > 0'\n" +
+		"    message: the change touches files\n"
+}
+
+// commitPolicy replaces the committed policy of root, so the policy file
+// is no change of the working tree.
+func commitPolicy(t *testing.T, root, policy string) {
+	t.Helper()
+
+	verifyWrite(t, root, ".seamark/policy.yaml", policy)
+	verifyGit(t, root, "add", ".seamark/policy.yaml")
+	verifyGit(t, root, "commit", "-q", "-m", "Change the policy")
+}
+
+// TestCheckLessonsNamesANonBlockingVerdict proves that check --lessons
+// names a deny or require_approval verdict that warn mode does not
+// block. Before the fix the combined line read "policy pass" under
+// "verdict  deny (mode: warn)". The combined state and the exit code
+// stay as they were: warn mode never blocks. The JSON keeps policy
+// "pass" and adds policy_verdict. Enforce mode keeps "policy blocked".
+func TestCheckLessonsNamesANonBlockingVerdict(t *testing.T) {
+	sentinel := newInvokerEnvironment(t)
+
+	cases := []struct {
+		name   string
+		policy string // "" keeps checkLessonsPolicy
+		edit   func(t *testing.T, root string)
+		line   string
+		is     error
+		want   report.CombinedResult
+	}{
+		{
+			name: "deny in warn mode, lessons passed", policy: checkLessonsDenyPolicy("warn"), edit: checkLessonsEditHandler,
+			line: "combined: pass (policy deny, not blocking in warn mode; lessons passed)\n",
+			want: report.CombinedResult{State: lessoncheck.CombinedPass, ExitCode: 0, Policy: "pass", PolicyVerdict: "deny",
+				Lessons: lessoncheck.SummaryPassed, PolicyInput: report.PolicyInputGitDiffHead},
+		},
+		{
+			name: "deny in warn mode, lesson violation", policy: checkLessonsDenyPolicy("warn"), edit: verifyEditAsset,
+			line: "combined: fail (policy deny, not blocking in warn mode; lessons violation)\n",
+			is:   lessoncheck.ErrViolation,
+			want: report.CombinedResult{State: lessoncheck.CombinedFail, ExitCode: 2, Policy: "pass", PolicyVerdict: "deny",
+				Lessons: lessoncheck.SummaryViolation, PolicyInput: report.PolicyInputGitDiffHead},
+		},
+		{
+			// The fixture policy asks for approval in warn mode.
+			name: "require_approval in warn mode, lessons passed", edit: checkLessonsEditHandler,
+			line: "combined: pass (policy require_approval, not blocking in warn mode; lessons passed)\n",
+			want: report.CombinedResult{State: lessoncheck.CombinedPass, ExitCode: 0, Policy: "pass", PolicyVerdict: "require_approval",
+				Lessons: lessoncheck.SummaryPassed, PolicyInput: report.PolicyInputGitDiffHead},
+		},
+		{
+			name: "deny in enforce mode", policy: checkLessonsDenyPolicy("enforce"), edit: checkLessonsEditHandler,
+			line: "combined: fail (policy blocked, lessons passed)\n",
+			is:   gate.ErrBlocked,
+			want: report.CombinedResult{State: lessoncheck.CombinedFail, ExitCode: 2, Policy: "blocked", PolicyVerdict: "deny",
+				Lessons: lessoncheck.SummaryPassed, PolicyInput: report.PolicyInputGitDiffHead},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := checkLessonsFixture(t, sentinel)
+			if c.policy != "" {
+				commitPolicy(t, root, c.policy)
+			}
+
+			c.edit(t, root)
+
+			stdout, _, err := runIn(t, "", "-C", root, "check", "--lessons")
+			assert.True(t, strings.HasPrefix(stdout, c.line), "stdout starts with %q: %s", c.line, stdout)
+
+			jsonOut, _, jsonErr := runIn(t, "", "-C", root, "check", "--lessons", "--json")
+			assert.Equal(t, c.want, decodeCheckLessons(t, jsonOut).Combined)
+			assert.Contains(t, jsonOut, `"policy_verdict":"`+c.want.PolicyVerdict+`"`)
+
+			for _, got := range []error{err, jsonErr} {
+				if c.is == nil {
+					assert.NoError(t, got)
+				} else {
+					assert.ErrorIs(t, got, c.is)
+				}
+			}
+		})
+	}
+
+	sentinel.requireNoCall(t)
+}
+
+// TestCheckLessonsReportsAFailedLessonAudit proves that check --lessons
+// says when its lesson-check audit record was not written, with the
+// line and the rule of lessons --verify: one stderr line on an exit-0
+// path, none on a non-zero exit, whose own line stays alone. Before the
+// fix the command printed nothing. The verdict and the exit code do not
+// change, and nothing goes through the link.
+func TestCheckLessonsReportsAFailedLessonAudit(t *testing.T) {
+	sentinel := newInvokerEnvironment(t)
+	root := checkLessonsFixture(t, sentinel)
+	checkLessonsEditHandler(t, root)
+
+	audit := filepath.Join(root, ".seamark", "lesson-check-audit.jsonl")
+	target := filepath.Join(t.TempDir(), "target")
+	require.NoError(t, os.WriteFile(target, []byte("keep\n"), 0o644))
+	require.NoError(t, os.Symlink(target, audit))
+
+	want := []string{"seamark: lesson-check audit: unsafe path: " + audit + " is a symbolic link"}
+
+	t.Run("an exit-0 path prints one line", func(t *testing.T) {
+		for _, args := range [][]string{nil, {"--json"}} {
+			stdout, stderr, code := seamarkProcess(t, root, append([]string{"-C", root, "check", "--lessons"}, args...)...)
+			assert.Equal(t, 0, code, "args %v: stdout: %s\nstderr: %s", args, stdout, stderr)
+			assert.Equal(t, want, checkExitLines(stderr), "args %v", args)
+			assert.NotContains(t, stdout, "lesson-check audit:", "the line goes to stderr only")
+		}
+
+		stdout, _, err := runIn(t, "", "-C", root, "check", "--lessons")
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(stdout, combinedLine("pass", clauseApprovalWarn, "passed")), stdout)
+	})
+
+	t.Run("a non-zero exit keeps its own line alone", func(t *testing.T) {
+		verifyEditAsset(t, root)
+
+		_, stderr, code := seamarkProcess(t, root, "-C", root, "check", "--lessons")
+		assert.Equal(t, 2, code)
+		assert.Equal(t, []string{verifyViolationLine}, checkExitLines(stderr))
+	})
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "keep\n", string(data), "nothing goes through the link")
+
+	sentinel.requireNoCall(t)
+}
+
+// TestCheckNamesLessonChecksNotRequested proves the last line of plain
+// check: when an executable pin covers a changed path, the text says
+// that its check exists and did not run, and names the route. Before
+// the fix the advisory listed the pin and nothing more. No covering pin
+// keeps the text without the line, and an invalid lessons.yaml says so
+// instead of a false "none". check --json stays verdict-shaped.
+func TestCheckNamesLessonChecksNotRequested(t *testing.T) {
+	sentinel := newInvokerEnvironment(t)
+
+	const twoPins = "lesson checks: not requested — 2 executable pins cover this diff; " +
+		"run with lesson_checks: true (CLI: seamark check --lessons)\n"
+
+	const invalid = "lesson checks: not requested — lessons.yaml is invalid, so whether an executable pin " +
+		"covers this diff is unknown; run with lesson_checks: true (CLI: seamark check --lessons)\n"
+
+	cases := []struct {
+		name string
+		edit func(t *testing.T, root string)
+		want string // the last line; "" = no line
+	}{
+		{name: "one covering pin", edit: checkLessonsEditHandler, want: notRequestedOnePin},
+		{name: "two covering pins", edit: func(t *testing.T, root string) {
+			checkLessonsEditHandler(t, root)
+			verifyEditAsset(t, root)
+		}, want: twoPins},
+		{name: "no covering pin", edit: func(t *testing.T, root string) {
+			verifyWrite(t, root, "docs/readme.md", "readme\nmore\n")
+		}},
+		{name: "an invalid lessons.yaml", edit: func(t *testing.T, root string) {
+			checkLessonsEditHandler(t, root)
+			verifyWrite(t, root, ".seamark/lessons.yaml", "pin: [\n")
+		}, want: invalid},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := checkLessonsFixture(t, sentinel)
+			c.edit(t, root)
+
+			stdout, _, err := runIn(t, "", "-C", root, "check")
+			require.NoError(t, err, "a warn-mode policy never blocks")
+
+			if c.want == "" {
+				assert.NotContains(t, stdout, "lesson checks:")
+			} else {
+				assert.True(t, strings.HasSuffix(stdout, "\n\n"+c.want), "stdout ends with a blank line and %q: %s", c.want, stdout)
+				assert.Equal(t, 1, strings.Count(stdout, "lesson checks:"), "one line")
+			}
+
+			jsonOut, _, err := runIn(t, "", "-C", root, "check", "--json")
+			require.NoError(t, err)
+			assert.NotContains(t, jsonOut, "lesson checks")
+
+			var d gate.Decision
+			require.NoError(t, json.Unmarshal([]byte(jsonOut), &d), "check --json is the decision alone")
+		})
+	}
+
+	sentinel.requireNoCall(t)
+}
+
+// TestCheckLessonsNamesDiffPathsOutsideSnapshot proves the note on a
+// supplied diff that the lesson checks did not read. The lesson checks
+// read the working tree, so a piped diff over a clean tree passed with
+// no word about it. The note follows the combined line, and the JSON
+// lists the paths. A diff whose paths are all in the snapshot, and git
+// diff HEAD, get no note.
+func TestCheckLessonsNamesDiffPathsOutsideSnapshot(t *testing.T) {
+	sentinel := newInvokerEnvironment(t)
+
+	const todoDiff = `diff --git a/src/todo.go b/src/todo.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/todo.go
+@@ -0,0 +1,3 @@
++package src
++
++// TODO(owner): split.
+`
+
+	t.Run("a diff over a clean tree", func(t *testing.T) {
+		root := checkLessonsFixture(t, sentinel)
+
+		stdout, _, err := runIn(t, todoDiff, "-C", root, "check", "--lessons")
+		require.NoError(t, err)
+
+		lines := strings.SplitN(stdout, "\n", 4)
+		require.Len(t, lines, 4)
+		assert.Equal(t, strings.TrimSuffix(combinedLine("pass", clauseApprovalWarn, "no-applicable-checks"), "\n"), lines[0])
+		assert.Equal(t, "note: the lesson checks read the working tree, not the supplied diff; "+
+			"1 file of the diff is not in the verified snapshot (src/todo.go)", lines[1])
+		assert.Empty(t, lines[2], "a blank line follows the head")
+
+		jsonOut, _, err := runIn(t, todoDiff, "-C", root, "check", "--lessons", "--json")
+		require.NoError(t, err)
+
+		combined := decodeCheckLessons(t, jsonOut).Combined
+		assert.Equal(t, []string{"src/todo.go"}, combined.DiffPathsOutsideSnapshot)
+		assert.Equal(t, report.PolicyInputStdinDiff, combined.PolicyInput)
+	})
+
+	t.Run("a diff that the snapshot holds", func(t *testing.T) {
+		root := checkLessonsFixture(t, sentinel)
+		checkLessonsEditHandler(t, root)
+
+		cmd := exec.Command("git", "diff", "HEAD")
+		cmd.Dir = root
+		diff, err := cmd.Output()
+		require.NoError(t, err)
+
+		for _, stdin := range []string{string(diff), ""} {
+			stdout, _, err := runIn(t, stdin, "-C", root, "check", "--lessons")
+			require.NoError(t, err)
+			assert.NotContains(t, stdout, "note: the lesson checks read")
+
+			jsonOut, _, err := runIn(t, stdin, "-C", root, "check", "--lessons", "--json")
+			require.NoError(t, err)
+			assert.NotContains(t, jsonOut, "diff_paths_outside_snapshot")
+		}
+	})
+
+	sentinel.requireNoCall(t)
 }

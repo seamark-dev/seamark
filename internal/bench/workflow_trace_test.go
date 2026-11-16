@@ -21,7 +21,9 @@ func toolResultLine(id, text string) string {
 	return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"` + id + `","content":` + text + `}]}}`
 }
 
-const changeSetResultText = "server/schema.py\\n  usually changes with  web/src/api/generated.ts   2/6 commits, lift 1.3\\n\\nhistory suggests also reviewing\\n  web/src/api/generated.ts   2 shared commits, lift 1.3\\n"
+// changeSetResultText has the shape of a change_set reply: a listed
+// partner prints only in the closing list, with its N/M counts.
+const changeSetResultText = "server/schema.py\\n  defines                1 symbols\\n\\nhistory suggests also reviewing\\n  web/src/api/generated.ts   2/6 commits with server/schema.py, lift 1.3\\n"
 
 func TestWorkflowTraceKeepsToolOrderAndResultAssociation(t *testing.T) {
 	trace := parseWorkflowTrace(transcriptLines(

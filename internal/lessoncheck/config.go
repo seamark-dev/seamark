@@ -393,6 +393,30 @@ func (m Mode) Executable() bool {
 	return m == ModeCheck || m == ModeEnforce
 }
 
+// ExecutablePinsCovering counts the pins of mode check or enforce whose
+// scope holds at least one of paths. It uses the scope rule of the
+// checkers. check without lesson verification names the count, so a
+// check that did not run is not silent.
+func (c *Config) ExecutablePinsCovering(paths []string) int {
+	n := 0
+
+	for _, pin := range c.Pins {
+		if !pin.Mode.Executable() {
+			continue
+		}
+
+		for _, p := range paths {
+			if inScope(p, pin.Scope) {
+				n++
+
+				break
+			}
+		}
+	}
+
+	return n
+}
+
 // SortedScope returns a sorted copy of a region list. A pin scope is
 // SortedScope(pin.AllRegions()). The slice is never nil, so an empty
 // scope encodes as [] (repository-wide). The checkers, the preparation,
