@@ -19,6 +19,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -993,4 +994,48 @@ func TestGatherOffersInitWhileTheHooksAreOffAndNoGateHookIsInstalled(t *testing.
 	assert.Contains(t, b.String(),
 		"gate           policy mode warn; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n")
 	assert.NotContains(t, b.String(), "no gate hook runs for shell commands")
+}
+
+// TestPrintNamesTheRecordedRootAndItsRoute proves the two lines that the
+// facts of the database change. An index of another root opens with the
+// root line, and a stale index names the route of a state that refuses a
+// build here, because a plain index run would fail. The root comes from
+// the database, so both lines sanitize it. The own database keeps both
+// lines as they were.
+func TestPrintNamesTheRecordedRootAndItsRoute(t *testing.T) {
+	st, root := seededStore(t)
+
+	printed := func(o ownership.State) (string, *Status) {
+		s, err := Gather(st, root)
+		require.NoError(t, err)
+
+		s.Freshness = FreshStale
+		s.NoteOwnership(o)
+
+		var b bytes.Buffer
+		Print(&b, s)
+
+		return b.String(), s
+	}
+
+	foreign := ownership.State{
+		Facts:     ownership.Facts{File: ownership.FileOther, Root: ownership.RootFound, Owner: ownership.OwnerRoot, RootDefault: true, RootOwnsFile: true},
+		Workspace: "/w", Recorded: "/r\x1b[31m", DB: "/r/.seamark/index.db",
+	}
+
+	out, s := printed(foreign)
+	assert.True(t, strings.HasPrefix(out, "root           this database records another repository (/r[31m), "+
+		"so this report describes /r[31m, not this workspace\n"+
+		"workspace      STALE — run `seamark index` in /r[31m (schema v"), out)
+	assert.NotContains(t, out, "\x1b")
+	assert.Equal(t, "/r[31m", s.RecordedRoot)
+
+	for name, own := range map[string]ownership.State{
+		"no facts":         {},
+		"the own database": {Facts: ownership.Facts{File: ownership.FileDefault, Root: ownership.RootSame}, Workspace: "/w", Recorded: "/w"},
+	} {
+		out, s := printed(own)
+		assert.True(t, strings.HasPrefix(out, "workspace      STALE — run `seamark index` (schema v"), "%s: %s", name, out)
+		assert.Empty(t, s.RecordedRoot, name)
+	}
 }

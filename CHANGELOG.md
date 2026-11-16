@@ -440,6 +440,34 @@ model-boundary delivery.
   internal document. They point to `docs/policies.md` and
   `docs/lessons.md`, and both policy headers name `unindexed_files`, a
   count, in the `diff` input.
+- **The lesson firing log refuses symbolic links.** Seamark no longer
+  appends to `.seamark/lessons-audit.jsonl` through a symbolic link at
+  the log or at `.seamark`, so a cloned repository can no longer send
+  firing records to a file outside it. New logs are created owner-only
+  (0600) in a 0700 `.seamark`, and an existing 0644 log is tightened to
+  0600. Edit hooks still fail open, `change_set` and `check` still
+  answer, and the refused record is not written. `lessons --stats` and
+  the delivery report show a linked log as unreadable, not as empty.
+- **The index no longer reads as current after an edit made during
+  indexing.** An index run recorded the workspace fingerprint after it
+  had parsed the files, so a file edited during the run was recorded but
+  never parsed. Every later run, `status`, `orient` and `check` then
+  trusted that stale index until a forced rebuild. The run now records
+  the state it saw before reading any file, and it writes that record in
+  the same transaction as the graph, so overlapping runs cannot pair a
+  newer fingerprint with an older graph. An edit during a run costs one
+  extra rebuild on the next call, and the run logs a note that says so.
+- **MCP answers name the repository that their index records.** Under a
+  database that records another repository, every MCP read (`orient`,
+  `why`, `expand`, `change_set` and both resources) opens with one note
+  that names that root, both when the index matches the workspace and
+  when the server refuses to refresh it. The `seamark://status` resource
+  prints the same `root` line as `seamark status`, `check` keeps its
+  verdict at a matching fingerprint and carries the note, and the
+  `orient` title names the recorded root. Where a plain `seamark index`
+  in this workspace would be refused, the stale status line and the
+  stale note of the CLI read commands print the route of that state
+  instead.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

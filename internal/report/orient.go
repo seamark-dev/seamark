@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -35,6 +36,14 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 	return orient(w, st, root, orientFooterMCP, time.Now(), index.WorkspaceState)
 }
 
+// OrientNamed is Orient with the title of named, the root that the index
+// records. The MCP server can answer from the index of another
+// repository, and the title then names that repository, as OrientCLI
+// does. The rest reads root, the workspace of the server.
+func OrientNamed(w io.Writer, st *store.Store, root, named string) error {
+	return orientNamed(w, st, root, named, orientFooterMCP, time.Now(), index.WorkspaceState)
+}
+
 // OrientCLI writes the same repo overview with the CLI footer, which
 // offers only routes that run in the CLI.
 func OrientCLI(w io.Writer, st *store.Store, root string) error {
@@ -52,12 +61,20 @@ func OrientCLI(w io.Writer, st *store.Store, root string) error {
 func orient(w io.Writer, st *store.Store, root, footer string,
 	now time.Time, fingerprint func(string) string,
 ) error {
+	return orientNamed(w, st, root, root, footer, now, fingerprint)
+}
+
+// orientNamed is orient with the title of named.
+func orientNamed(w io.Writer, st *store.Store, root, named, footer string,
+	now time.Time, fingerprint func(string) string,
+) error {
 	stats, err := st.Stats()
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(w, "%s — orientation\n", path.Base(root))
+	// named can come from the database, so the title sanitizes it.
+	fmt.Fprintf(w, "%s — orientation\n", render.Sanitize(path.Base(named)))
 	fmt.Fprintf(w, "  index  %d symbols · %d call/def edges · %d co-change pairs · %d decisions · %d effect-tagged symbols\n",
 		stats.Symbols, stats.Edges, stats.CoChanges, stats.Decisions, stats.Tagged)
 

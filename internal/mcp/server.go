@@ -21,9 +21,11 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/status"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -251,42 +253,72 @@ func (s *Server) initialize(params json.RawMessage) any {
 // The notes that open an answer from an index that did not refresh. An
 // agent acts on the answer, and the log of the server does not reach it.
 const (
-	// staleNote follows the refusal of a move of another root.
+	// staleNote follows the refusal of a move when the recorded root does
+	// not read, so no note can name it.
 	staleNote = "note: seamark did not refresh this index, because a rebuild here could move the root of " +
 		"another repository; this answer can miss recent changes.\n"
 	// brokenNote follows any other failed refresh. The log names the cause.
 	brokenNote = "note: seamark could not refresh this index; this answer can miss recent changes.\n"
 )
 
-// refreshNote returns the note of a refresh that failed, or "".
-func refreshNote(failure error) string {
+// refusedNote follows the refusal of a move of the root that o records.
+// The answer describes that root, and it can hold symbols and effects
+// that this workspace does not have, so the note names the root.
+func refusedNote(o ownership.State) string {
+	return "note: seamark did not refresh this index, because it " + status.RecordedClause(o) +
+		" and a rebuild here would move its root; this answer describes " + render.Sanitize(o.Recorded) +
+		" and can differ from this workspace.\n"
+}
+
+// matchNote follows a skip under the index of another root, as for a
+// sibling worktree at one commit. The answer is current, but it still
+// describes that root.
+func matchNote(o ownership.State) string {
+	return "note: this index " + status.RecordedClause(o) + "; it matches this workspace now, and this answer describes " +
+		render.Sanitize(o.Recorded) + ".\n"
+}
+
+// refreshed is what one refresh leaves for the answer.
+type refreshed struct {
+	// failure says why the refresh failed, or it is nil.
+	failure error
+	// owner holds the facts of the database that index.Run read for a skip
+	// or a refusal, so no answer probes it again. It is zero after a build,
+	// which records this workspace, and after any other failure.
+	owner ownership.State
+	// route is the route of a skip under the index of another root
+	// (index.Summary.RootRoute), else "".
+	route string
+}
+
+// note returns the note that opens an answer after this refresh, or "".
+func (r refreshed) note() string {
 	switch {
-	case failure == nil:
+	case r.failure == nil && r.route != "":
+		return matchNote(r.owner)
+	case r.failure == nil:
 		return ""
-	case errors.Is(failure, index.ErrRootMove):
+	case errors.Is(r.failure, index.ErrRootMove) && r.owner.Recorded != "":
+		return refusedNote(r.owner)
+	case errors.Is(r.failure, index.ErrRootMove):
 		return staleNote
 	default:
 		return brokenNote
 	}
 }
 
-// withStore refreshes the index if the workspace changed, then runs fn
-// against the opened store. A failed refresh must not kill reads, so the
-// answer comes from what exists. It opens with a note, also when it is an
-// error such as "nothing matches", because the index can be the cause.
-func (s *Server) withStore(fn func(st *store.Store) (string, error)) (string, error) {
-	failure := s.refresh()
-
-	st, err := s.open(failure)
-	if err != nil {
-		return "", err
+// named returns the root that the answer describes: the root that the
+// index records, else root. The CLI reads that root too.
+func (r refreshed) named(root string) string {
+	if r.owner.Recorded != "" && r.owner.Root != ownership.RootSame {
+		return r.owner.Recorded
 	}
-	defer func() { _ = st.Close() }() // read-only surface, nothing to lose
 
-	note := refreshNote(failure)
+	return root
+}
 
-	text, err := fn(st)
-
+// withNote opens text, or the error, with note.
+func withNote(note, text string, err error) (string, error) {
 	switch {
 	case note == "":
 		return text, err
@@ -297,13 +329,40 @@ func (s *Server) withStore(fn func(st *store.Store) (string, error)) (string, er
 	}
 }
 
+// withStore refreshes the index if the workspace changed, then runs fn
+// against the opened store. A failed refresh must not kill reads, so the
+// answer comes from what exists. It opens with a note, also when it is an
+// error such as "nothing matches", because the index can be the cause.
+func (s *Server) withStore(fn func(st *store.Store) (string, error)) (string, error) {
+	return s.withRefreshedStore(func(st *store.Store, _ refreshed) (string, error) { return fn(st) })
+}
+
+// withRefreshedStore is withStore for an answer that also needs what the
+// refresh found, as the root that the index records.
+func (s *Server) withRefreshedStore(fn func(st *store.Store, r refreshed) (string, error)) (string, error) {
+	r := s.refresh()
+
+	st, err := s.open(r.failure)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = st.Close() }() // read-only surface, nothing to lose
+
+	text, err := fn(st, r)
+
+	return withNote(r.note(), text, err)
+}
+
 // withCurrentStore is withStore for a verdict. A verdict needs a current
 // graph: changed lines inside an old symbol still map to it, so a stale
 // graph can allow what a current one denies. So any failed refresh ends
-// the call, as it ends `seamark check`.
+// the call, as it ends `seamark check`. A current index of another root
+// keeps its verdict, as for a sibling worktree at one commit, and the
+// verdict opens with the note that names that root.
 func (s *Server) withCurrentStore(fn func(st *store.Store) (string, error)) (string, error) {
-	if failure := s.refresh(); failure != nil {
-		return "", failure
+	r := s.refresh()
+	if r.failure != nil {
+		return "", r.failure
 	}
 
 	st, err := s.open(nil)
@@ -312,24 +371,45 @@ func (s *Server) withCurrentStore(fn func(st *store.Store) (string, error)) (str
 	}
 	defer func() { _ = st.Close() }() // read-only surface, nothing to lose
 
-	return fn(st)
+	text, err := fn(st)
+
+	return withNote(r.note(), text, err)
 }
 
-// refresh refreshes the index and returns why it failed, or nil. The log
-// names each failure.
-func (s *Server) refresh() error {
+// refresh refreshes the index and returns what it found. The log names
+// each failure. The facts of the database come from index.Run, so a
+// refresh probes the database no second time.
+func (s *Server) refresh() refreshed {
 	sum, err := index.Run(index.Options{Root: s.root, DBPath: s.dbPath, Logf: s.logf})
 
 	switch {
 	case err != nil:
 		s.logf("mcp: index refresh: %v", err)
 
-		return err
+		owner, _ := index.RefusedState(err)
+
+		return refreshed{failure: err, owner: owner}
 	case !sum.Skipped:
 		s.logf("mcp: index refreshed")
 	}
 
-	return nil
+	return refreshed{owner: sum.Ownership, route: sum.RootRoute}
+}
+
+// ownerFacts returns the facts of the database for the status resource.
+// A refresh that failed for another reason gave none, so it reads them
+// as the CLI status does. Only that failure pays for the read.
+func (s *Server) ownerFacts(r refreshed) ownership.State {
+	if r.failure == nil || errors.Is(r.failure, index.ErrRootMove) {
+		return r.owner
+	}
+
+	db := store.AbsolutePath(s.dbPath)
+	if db == "" {
+		db = store.DefaultPath(s.root)
+	}
+
+	return ownership.Gather(s.root, db)
 }
 
 // open opens the index after refresh. After a refused move the open is
@@ -449,9 +529,9 @@ func (s *Server) outputResult(out toolOutput) map[string]any {
 // in withStore.
 var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 	"orient": func(s *Server, _ json.RawMessage) (toolOutput, error) {
-		return textOutput(s.withStore(func(st *store.Store) (string, error) {
+		return textOutput(s.withRefreshedStore(func(st *store.Store, r refreshed) (string, error) {
 			var b bytes.Buffer
-			err := report.Orient(&b, st, s.root)
+			err := report.OrientNamed(&b, st, s.root, r.named(s.root))
 
 			return b.String(), err
 		}))

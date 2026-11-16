@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
@@ -301,4 +302,38 @@ func TestRunJudgesTheFileThatItOpens(t *testing.T) {
 	require.ErrorIs(t, err, ErrRootMove)
 	assert.Equal(t, origin, recordedRoot(t, shared))
 	assert.NoFileExists(t, filepath.Join(base, "links", "shared.db"))
+}
+
+// TestRunHandsOverTheFactsOfAnotherDatabase proves what a surface reads
+// after a run under the database of another root. A skip carries the
+// facts and the route, and a refusal carries the facts. So the MCP server
+// names that root without a second probe. Any other error carries none.
+func TestRunHandsOverTheFactsOfAnotherDatabase(t *testing.T) {
+	root := indexedRepo(t)
+	side := filepath.Join(tempDir(t), "sibling")
+	gitIn(t, root, "worktree", "add", side, "-b", "side")
+
+	sum, err := Run(Options{Root: side, DBPath: store.DefaultPath(root)})
+	require.NoError(t, err)
+	require.True(t, sum.Skipped)
+	assert.Equal(t, root, sum.Ownership.Recorded)
+	assert.Equal(t, "run `seamark index` in "+root, sum.RootRoute)
+
+	require.NoError(t, os.WriteFile(filepath.Join(side, "side.go"), []byte("package main\n"), 0o644))
+
+	_, err = Run(Options{Root: side, DBPath: store.DefaultPath(root)})
+	require.ErrorIs(t, err, ErrRootMove)
+
+	state, ok := RefusedState(err)
+	require.True(t, ok)
+	assert.Equal(t, root, state.Recorded)
+	assert.Equal(t, "run `seamark index` in "+root, state.RefusedBuildRoute())
+
+	_, ok = RefusedState(os.ErrNotExist)
+	assert.False(t, ok)
+
+	own, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	require.True(t, own.Skipped)
+	assert.Equal(t, ownership.RootSame, own.Ownership.Root, "the own database reads as the same root")
 }

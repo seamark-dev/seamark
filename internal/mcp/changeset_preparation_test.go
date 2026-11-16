@@ -686,21 +686,31 @@ func TestChangeSetPreparationRepeatsTheRefreshNote(t *testing.T) {
 	})
 
 	t.Run("a refused move of another root", func(t *testing.T) {
-		_, other, dbPath := rootMoveFixture(t)
+		origin, other, dbPath := rootMoveFixture(t)
 
 		resps := serveDB(t, other, dbPath, t.Logf, initializeLine("2025-06-18"), changeSetCall(t, 1, "a.go"))
 
-		assertNoted(t, decodeToolParts(t, resps["1"]), staleNote)
+		assertNoted(t, decodeToolParts(t, resps["1"]), refusedText(origin))
 	})
 
 	t.Run("a linked worktree after an edit", func(t *testing.T) {
-		_, tree := rootMoveLinked(t, true)
+		origin, tree := rootMoveLinked(t, true)
 
 		rootMoveEdit(t, tree)
 
 		resps := serveDB(t, tree, store.DefaultPath(tree), t.Logf, initializeLine("2025-06-18"), changeSetCall(t, 1, "a.go"))
 
-		assertNoted(t, decodeToolParts(t, resps["1"]), staleNote)
+		assertNoted(t, decodeToolParts(t, resps["1"]), refusedText(origin))
+	})
+
+	// A current index of another root needs the note too: the answer
+	// describes that root, and the key is all that some clients show.
+	t.Run("a linked worktree at one commit", func(t *testing.T) {
+		origin, tree := rootMoveLinked(t, true)
+
+		resps := serveDB(t, tree, store.DefaultPath(tree), t.Logf, initializeLine("2025-06-18"), changeSetCall(t, 1, "a.go"))
+
+		assertNoted(t, decodeToolParts(t, resps["1"]), matchText(origin))
 	})
 
 	t.Run("a session before 2025-06-18 gets the note and no key", func(t *testing.T) {

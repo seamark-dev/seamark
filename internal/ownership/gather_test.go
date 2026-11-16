@@ -594,3 +594,32 @@ func TestNearestDirectoryTestsTheFilesystemRoot(t *testing.T) {
 	_, ok = nearestDirectory("/a", func(string) bool { return false })
 	assert.False(t, ok, "the walk ends at the filesystem root")
 }
+
+// TestRefusedBuildRouteFollowsTheDecision proves the route that a stale
+// hint prints. Only a state that refuses a build names one, and it names
+// the route of a build. Every other state keeps the plain index run of
+// its surface.
+func TestRefusedBuildRouteFollowsTheDecision(t *testing.T) {
+	base := State{Workspace: "/w", Recorded: "/r", DB: "/r/.seamark/index.db"}
+
+	for name, tc := range map[string]struct {
+		facts Facts
+		want  string
+	}{
+		"the database of another root": {
+			Facts{File: FileOther, Root: RootFound, Owner: OwnerRoot, RootDefault: true, RootOwnsFile: true},
+			"run `seamark index` in /r",
+		},
+		"a gone root on a detached disk": {
+			Facts{File: FileOther, Root: RootGone},
+			"run `seamark index --move-root --db /r/.seamark/index.db` in /w to move the root",
+		},
+		"the own root":              {Facts{File: FileDefault, Root: RootSame}, ""},
+		"a copied checkout":         {Facts{File: FileDefault, Root: RootFound}, ""},
+		"a newer schema goes ahead": {Facts{File: FileOther, Root: RootFound, RootDefault: true, NewerSchema: true}, ""},
+	} {
+		s := base
+		s.Facts = tc.facts
+		assert.Equal(t, tc.want, s.RefusedBuildRoute(), name)
+	}
+}

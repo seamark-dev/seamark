@@ -37,13 +37,15 @@ external assets, and nothing fetched when it is opened. It can be attached to
 a pull request or read offline.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, root, err := openIndex(opts)
+			st, probe, ws, err := openIndexWorkspace(opts)
 			if err != nil {
 				return err
 			}
 			defer func() { _ = st.Close() }() // read-only surface, nothing to lose
 
-			staleNote(cmd.ErrOrStderr(), st, root)
+			root := probe.Root
+
+			staleNote(cmd.ErrOrStderr(), st, root, ws)
 
 			if out == stdoutTarget {
 				if inBrowser {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/store"
 )
@@ -258,4 +260,106 @@ func TestStatusResolvesTheWorkspaceOnce(t *testing.T) {
 	data, err := os.ReadFile(calls)
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(data), "rev-parse --show-toplevel\n"), string(data))
+}
+
+// mcpStatusText reads the resource seamark://status through
+// `seamark mcp` that runs with the global flags.
+func mcpStatusText(t *testing.T, flags ...string) string {
+	t.Helper()
+
+	var out, errOut bytes.Buffer
+
+	cmd := New()
+	cmd.SetIn(strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"seamark://status"}}` + "\n"))
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	cmd.SetArgs(append(flags, "mcp"))
+	require.NoError(t, cmd.Execute(), "stderr: %s", errOut.String())
+
+	var resp struct {
+		Result struct {
+			Contents []struct {
+				Text string `json:"text"`
+			} `json:"contents"`
+		} `json:"result"`
+	}
+
+	require.NoError(t, json.Unmarshal(out.Bytes(), &resp), out.String())
+	require.Len(t, resp.Result.Contents, 1, out.String())
+
+	return resp.Result.Contents[0].Text
+}
+
+// TestStatusRootLineIsTheSameOverMCP covers one workspace and one
+// database through both surfaces. The MCP status resource prints the root
+// line of seamark status once, at a matching fingerprint and after the
+// refused refresh of a differing one.
+func TestStatusRootLineIsTheSameOverMCP(t *testing.T) {
+	origin := rootWriteRepo(t)
+	copied := rootWriteCopy(t, origin)
+	flags := []string{"-C", copied, "--db", store.DefaultPath(origin)}
+
+	require.Equal(t, index.WorkspaceState(origin), index.WorkspaceState(copied), "the copy starts at one fingerprint")
+
+	want := "root           this database records another repository (" + origin + "), so this report describes " +
+		origin + ", not this workspace"
+
+	for _, state := range []string{"a matching fingerprint", "a differing fingerprint"} {
+		if state == "a differing fingerprint" {
+			require.NoError(t, os.WriteFile(filepath.Join(copied, "b.go"), []byte("package main\n"), 0o644))
+		}
+
+		cli := statusRootLine(t, flags...)
+		require.Equal(t, want, cli, state)
+
+		text := mcpStatusText(t, flags...)
+
+		var lines []string
+
+		for line := range strings.SplitSeq(text, "\n") {
+			if strings.HasPrefix(line, "root ") {
+				lines = append(lines, line)
+			}
+		}
+
+		assert.Equal(t, []string{cli}, lines, "%s: %s", state, text)
+	}
+}
+
+// TestStaleHintsNameTheRouteOfTheDatabase covers a stale index that a
+// plain index run in this workspace cannot refresh, because the database
+// records another repository. The status line and the note of a read
+// command name the route of that state. An own database keeps the plain
+// index run, byte for byte.
+func TestStaleHintsNameTheRouteOfTheDatabase(t *testing.T) {
+	t.Run("the database of the origin from a copy", func(t *testing.T) {
+		origin := rootWriteRepo(t)
+		copied := rootWriteCopy(t, origin)
+		flags := []string{"-C", copied, "--db", store.DefaultPath(origin)}
+
+		require.NoError(t, os.WriteFile(filepath.Join(origin, "b.go"), []byte("package main\n"), 0o644))
+
+		out, err := run(t, append(flags, "status")...)
+		require.NoError(t, err)
+		assert.Contains(t, out, "\nworkspace      STALE — run `seamark index` in "+origin+" (schema v", out)
+
+		_, stderr, err := runErr(t, append(flags, "why", "main")...)
+		require.NoError(t, err)
+		assert.Contains(t, stderr, "note: the workspace changed since the last index — run `seamark index` in "+origin+"\n")
+		assert.NotContains(t, stderr, "to refresh")
+	})
+
+	t.Run("an own database", func(t *testing.T) {
+		root := rootWriteRepo(t)
+
+		require.NoError(t, os.WriteFile(filepath.Join(root, "b.go"), []byte("package main\n"), 0o644))
+
+		out, err := run(t, "-C", root, "status")
+		require.NoError(t, err)
+		assert.True(t, strings.HasPrefix(out, "workspace      STALE — run `seamark index` (schema v"), out)
+
+		_, stderr, err := runErr(t, "-C", root, "why", "main")
+		require.NoError(t, err)
+		assert.Contains(t, stderr, "note: the workspace changed since the last index — run `seamark index` to refresh\n")
+	})
 }

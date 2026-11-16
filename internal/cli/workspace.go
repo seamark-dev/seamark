@@ -165,49 +165,6 @@ func openPinWriter(opts *options) (*store.Store, workspace.IndexProbe, error) {
 	return st, probe, nil
 }
 
-// recordedRootNotice says that the index records another root than the
-// workspace ws, so status describes that root. It returns "" when the
-// two are one directory. ws is the workspace that opened the index, so
-// the equal case starts no git process. Status runs often, so that cost
-// counts. The words and the subject follow pinWriteRefusal.
-//
-// The notice names only a route that makes the index record this
-// workspace. A route into the recorded root would print the same report
-// again, so the notice then has no route.
-func recordedRootNotice(ws workspace.Workspace, recorded string) string {
-	if recorded == "" || store.SameDirectory(recorded, ws.Root) {
-		return ""
-	}
-
-	// GatherCommand counts a directory inside a recorded root outside
-	// git as that root, because a command there runs in that repository.
-	s := ownership.GatherCommand(ws.Root, ws.AbsoluteDB())
-	if s.Root == ownership.RootNone || s.Root == ownership.RootSame {
-		return ""
-	}
-
-	subject := "this database"
-	if s.File == ownership.FileDefault {
-		subject = "the index of this checkout"
-	}
-
-	root := render.Sanitize(recorded)
-
-	what := "records another repository"
-	if s.Root == ownership.RootGone {
-		what = "records a directory that no longer exists"
-	}
-
-	notice := fmt.Sprintf("%s %s (%s), so this report describes %s, not this workspace", subject, what, root, root)
-
-	switch d := ownership.Decide(s.Facts); d.Route {
-	case ownership.RouteIndexHere, ownership.RouteIndexHereDB, ownership.RouteMoveHere:
-		notice += "; " + s.Route(d.Route, ownership.SurfaceCommand)
-	}
-
-	return notice
-}
-
 // pinWriteRefusal says why a pin write must not run in this state and
 // names the next step, or it returns nil. Only an open that follows can
 // report a file without an index or a newer schema. The recorded root

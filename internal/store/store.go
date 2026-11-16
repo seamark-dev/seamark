@@ -440,6 +440,19 @@ func (s *Store) Rebuild(fn func(tx *Tx) error) error {
 	return nil
 }
 
+// SetMeta stores an index bookkeeping value in the rebuild transaction.
+// The index run writes its meta this way, so the workspace state it
+// records commits with the graph it describes. A meta write after the
+// commit could pair the state of one run with the graph of another.
+func (t *Tx) SetMeta(key, value string) error {
+	_, err := t.tx.Exec(
+		`INSERT INTO meta (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value,
+	)
+
+	return err
+}
+
 // InsertSymbol stores sym and sets sym.ID.
 func (t *Tx) InsertSymbol(sym *model.Symbol) error {
 	res, err := t.tx.Exec(

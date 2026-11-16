@@ -6,7 +6,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/status"
+	"github.com/seamark-dev/seamark/internal/store"
 )
 
 func newStatusCmd(opts *options) *cobra.Command {
@@ -40,8 +42,11 @@ and asks how much its answers can be trusted.`,
 				return err
 			}
 
-			if notice := recordedRootNotice(ws, probe.Root); notice != "" {
-				s.NoteRecordedRoot(probe.Root, notice)
+			// The equal case starts no git process. Status runs often, so
+			// that cost counts. The MCP status resource reads the same
+			// facts, so both print the same root line for one pair.
+			if !store.SameDirectory(probe.Root, ws.Root) {
+				s.NoteOwnership(ownership.Gather(ws.Root, ws.AbsoluteDB()))
 			}
 
 			if asJSON {

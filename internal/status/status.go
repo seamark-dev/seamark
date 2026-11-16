@@ -22,6 +22,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
@@ -50,6 +51,9 @@ type Status struct {
 	// rootNotice is the text of the root line. The JSON holds only
 	// RecordedRoot, because the route is advice for a terminal.
 	rootNotice string
+	// staleRoute replaces the plain index run of a stale index when a
+	// build in the workspace is refused, because that run would fail.
+	staleRoute string
 
 	SchemaVersion string   `json:"schema_version"`
 	IndexedAt     int64    `json:"indexed_at,omitempty"`
@@ -244,12 +248,69 @@ func gatherAs(reg *integration.Registry, st *store.Store, root string,
 	return s, nil
 }
 
-// NoteRecordedRoot records that the index describes another root than
-// the workspace of the command. The CLI sets it, because only the CLI
-// knows the workspace that the user named. notice is the text of the
-// root line, and recorded is that root.
-func (s *Status) NoteRecordedRoot(recorded, notice string) {
-	s.RecordedRoot, s.rootNotice = render.Sanitize(recorded), notice
+// NoteOwnership records the facts of the database that the report reads.
+// The surface sets them, because only the surface knows the workspace
+// that the user named. An index that records another root gets the root
+// line, and a state that refuses a build in the workspace replaces the
+// index run of the stale line with its route. Both read the state as a
+// CLI command does (ownership.State.Command).
+func (s *Status) NoteOwnership(o ownership.State) {
+	// The own database reads no disk here: a status runs often.
+	if o.Recorded == "" || o.Root == ownership.RootSame {
+		return
+	}
+
+	if notice := RootNotice(o); notice != "" {
+		s.RecordedRoot, s.rootNotice = render.Sanitize(o.Recorded), notice
+	}
+
+	s.staleRoute = o.Command().RefusedBuildRoute()
+}
+
+// RootNotice says that the index records another root than the
+// workspace, so a report describes that root. It returns "" when the two
+// are one directory. The CLI status and the MCP status resource print it
+// as the root line, so both say the same for one pair. The words and the
+// subject follow the refusal of a pin write.
+//
+// The notice names only a route that makes the index record this
+// workspace. A route into the recorded root would print the same report
+// again, so the notice then has no route.
+func RootNotice(o ownership.State) string {
+	// A directory inside a recorded root outside git counts as that root,
+	// because a command there runs in that repository.
+	s := o.Command()
+	if s.Recorded == "" || s.Root == ownership.RootNone || s.Root == ownership.RootSame {
+		return ""
+	}
+
+	subject := "this database"
+	if s.File == ownership.FileDefault {
+		subject = "the index of this checkout"
+	}
+
+	root := render.Sanitize(s.Recorded)
+	notice := fmt.Sprintf("%s %s, so this report describes %s, not this workspace", subject, RecordedClause(s), root)
+
+	switch d := ownership.Decide(s.Facts); d.Route {
+	case ownership.RouteIndexHere, ownership.RouteIndexHereDB, ownership.RouteMoveHere:
+		notice += "; " + s.Route(d.Route, ownership.SurfaceCommand)
+	}
+
+	return notice
+}
+
+// RecordedClause names the root that the database records, as "records
+// another repository (R)". A root that is gone gets its own words. Every
+// note on another root uses it, so the notes name the root in one way.
+// The root comes from the database, so the clause sanitizes it.
+func RecordedClause(o ownership.State) string {
+	what := "records another repository"
+	if o.Root == ownership.RootGone {
+		what = "records a directory that no longer exists"
+	}
+
+	return what + " (" + render.Sanitize(o.Recorded) + ")"
 }
 
 // Print renders the report as aligned text, the RFC's status layout.
@@ -264,10 +325,12 @@ func Print(w io.Writer, s *Status) {
 	}
 
 	fresh := s.Freshness
-	switch s.Freshness {
-	case FreshStale:
+	switch {
+	case s.Freshness == FreshStale && s.staleRoute != "":
+		fresh = "STALE — " + s.staleRoute
+	case s.Freshness == FreshStale:
 		fresh = "STALE — run `seamark index`"
-	case FreshUnknown:
+	case s.Freshness == FreshUnknown:
 		fresh = "freshness unknown (no git fingerprint) — reindex when in doubt"
 	}
 

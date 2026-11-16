@@ -22,7 +22,8 @@ func orientText(t *testing.T, resps map[string]rpcResp) string {
 // TestOrientHealthHeaderAfterARefresh covers the freshness word of the
 // orient header in the three refresh states of the server. A refresh
 // note, when one exists, still opens the text once, and the header
-// follows the title.
+// follows the title. The title names the repository that the index
+// records, as in seamark orient.
 func TestOrientHealthHeaderAfterARefresh(t *testing.T) {
 	t.Run("a refresh that succeeds", func(t *testing.T) {
 		root := changeSetPrepFixture(t)
@@ -57,16 +58,18 @@ func TestOrientHealthHeaderAfterARefresh(t *testing.T) {
 	})
 
 	t.Run("a refused move of another root", func(t *testing.T) {
-		_, other, dbPath := rootMoveFixture(t)
+		origin, other, dbPath := rootMoveFixture(t)
+		note := refusedText(origin)
 
 		text := orientText(t, serveDB(t, other, dbPath, t.Logf, rootMoveCall(1, "orient", `{}`)))
 
-		require.True(t, strings.HasPrefix(text, staleNote), text)
-		assert.Equal(t, 1, strings.Count(text, staleNote))
+		require.True(t, strings.HasPrefix(text, note), text)
+		assert.Equal(t, 1, strings.Count(text, "note: "))
 
-		lines := strings.Split(strings.TrimPrefix(text, staleNote), "\n")
+		lines := strings.Split(strings.TrimPrefix(text, note), "\n")
 		require.GreaterOrEqual(t, len(lines), 3, text)
-		assert.Equal(t, filepath.Base(other)+" — orientation", lines[0], "the title names the workspace of the server")
+		require.NotEqual(t, filepath.Base(origin), filepath.Base(other))
+		assert.Equal(t, filepath.Base(origin)+" — orientation", lines[0], "the title names the recorded root")
 		assert.True(t, strings.HasPrefix(lines[1], "  index  "), text)
 		assert.True(t, strings.HasPrefix(lines[2], "  health indexed "), text)
 		assert.Contains(t, lines[2], " · freshness stale (", "the workspace has another fingerprint")

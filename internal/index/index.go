@@ -80,6 +80,11 @@ type Summary struct {
 	// commit. Root then names that repository, and Force would refuse.
 	// It is "" for every other run.
 	RootRoute string
+	// Ownership holds the facts of the database that a skip read. A
+	// surface uses them to say which repository answers, without a second
+	// probe. It is zero after a build, because a build records this
+	// workspace.
+	Ownership ownership.State
 	// FilesSeen counts the listed files that exist in the working tree.
 	// A deleted path and a path outside a sparse checkout are not in it,
 	// because no file exists to see.
@@ -114,14 +119,30 @@ type Summary struct {
 var ErrRootMove = errors.New("a rebuild must not move the recorded root of another repository")
 
 // rootMoveRefusal is one refusal of Run. Its text has the facts and the
-// route, and it matches ErrRootMove.
-type rootMoveRefusal string
+// route, and it matches ErrRootMove. It keeps the facts, so a surface
+// that answers from the old index can name its root without a second
+// probe.
+type rootMoveRefusal struct {
+	text  string
+	state ownership.State
+}
 
 // Error returns the text of the refusal.
-func (r rootMoveRefusal) Error() string { return string(r) }
+func (r rootMoveRefusal) Error() string { return r.text }
 
 // Unwrap makes the refusal match ErrRootMove.
 func (r rootMoveRefusal) Unwrap() error { return ErrRootMove }
+
+// RefusedState returns the facts of the database that a refusal of Run
+// read. ok is false for any other error.
+func RefusedState(err error) (state ownership.State, ok bool) {
+	var r rootMoveRefusal
+	if !errors.As(err, &r) {
+		return ownership.State{}, false
+	}
+
+	return r.state, true
+}
 
 // buildRefusal returns the refusal of a build in this state, or nil. Its
 // text has the facts and the route of the decision.
@@ -132,29 +153,35 @@ func buildRefusal(s ownership.State, d ownership.Decision) error {
 
 	there, here := render.Sanitize(s.Recorded), render.Sanitize(s.Workspace)
 	route := s.Route(d.Route, ownership.SurfaceBuild)
+	refuse := func(text string) error { return rootMoveRefusal{text: text, state: s} }
 
 	switch {
 	case s.DirRefusesWrites():
 		// No read works in this state, so "run it again" would not help.
 		// The text names the directory instead.
-		return rootMoveRefusal(s.ReadOnlyDirCause() + "; nothing changed; " + route)
+		return refuse(s.ReadOnlyDirCause() + "; nothing changed; " + route)
 	case s.Root == ownership.RootUnreadable:
-		return rootMoveRefusal(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
+		return refuse(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
 			"rebuild could move the root of another repository; nothing changed; run it again, %s",
 			render.Sanitize(s.DB), render.Sanitize(s.ReadErr.Error()), route))
 	case s.Root == ownership.RootGone:
-		return rootMoveRefusal(fmt.Sprintf("this database records a directory that does not exist now (%s), which "+
+		return refuse(fmt.Sprintf("this database records a directory that does not exist now (%s), which "+
 			"can be a moved repository or a detached disk, so a rebuild in %s would replace that root; "+
 			"nothing changed; %s", there, here, route))
 	case s.Owner == ownership.OwnerWorkspace:
-		return rootMoveRefusal(fmt.Sprintf("this database lies in %s but records another repository (%s), so a "+
+		return refuse(fmt.Sprintf("this database lies in %s but records another repository (%s), so a "+
 			"rebuild here would move its recorded root; nothing changed; %s", here, there, route))
 	default:
-		return rootMoveRefusal(fmt.Sprintf("this database records another repository (%s), so a rebuild in %s would "+
+		return refuse(fmt.Sprintf("this database records another repository (%s), so a rebuild in %s would "+
 			"move its recorded root, and that repository would lose its pins and maintenance; nothing changed; %s",
 			there, here, route))
 	}
 }
+
+// afterRead runs after the read loop and before the write when it is
+// not nil. Only tests set it: it is the one point where a test can change
+// a file after its read and before the run records the workspace state.
+var afterRead func()
 
 // Run executes a full indexing pass.
 func Run(opts Options) (*Summary, error) {
@@ -183,6 +210,13 @@ func Run(opts Options) (*Summary, error) {
 	decision := ownership.Decide(state.Facts)
 	refusal := buildRefusal(state, decision)
 
+	// The workspace state is observed before any file is read, and the
+	// run records this state. A file that changes during the run then
+	// makes the record differ from the workspace, so the next run
+	// rebuilds. A state observed after the reads would mark an older parse
+	// as current. The fast path compares the same observation.
+	observed := WorkspaceState(root)
+
 	// Fast path: an unchanged workspace needs no work. This makes
 	// "reindex whenever unsure" free (~30ms) for the CLI, and no-change
 	// saves free for the LSP server.
@@ -194,7 +228,9 @@ func Run(opts Options) (*Summary, error) {
 	switch {
 	case refusal != nil:
 		if !opts.Force && !opts.MoveRoot {
-			if sum := freshSummary(root, dbPath, start, store.OpenReadOnly, state, decision); sum != nil {
+			if sum := freshSummary(root, dbPath, observed, start, store.OpenReadOnly, state, decision); sum != nil {
+				sum.Ownership = state
+
 				if sum.Root != "" && !store.SameDirectory(sum.Root, root) {
 					sum.RootRoute = state.Route(decision.Route, ownership.SurfaceBuild)
 				}
@@ -205,7 +241,9 @@ func Run(opts Options) (*Summary, error) {
 
 		return nil, refusal
 	case !opts.Force && !opts.MoveRoot:
-		if sum := freshSummary(root, dbPath, start, store.Open, state, decision); sum != nil {
+		if sum := freshSummary(root, dbPath, observed, start, store.Open, state, decision); sum != nil {
+			sum.Ownership = state
+
 			return sum, nil
 		}
 	}
@@ -324,6 +362,10 @@ func Run(opts Options) (*Summary, error) {
 		}
 	}
 
+	if afterRead != nil {
+		afterRead()
+	}
+
 	// History is best-effort: a non-git workspace still gets a structure graph.
 	var decisions []model.Decision
 	var pairs []model.CoChange
@@ -346,6 +388,20 @@ func Run(opts Options) (*Summary, error) {
 	}
 
 	catalog, err := effects.Load(root)
+	if err != nil {
+		return nil, err
+	}
+
+	// The file-coverage summary is persisted so `seamark status` can
+	// report parser coverage long after this run's stdout is gone. A
+	// safety answer without coverage context is uninterpretable.
+	coverage, err := json.Marshal(map[string]int{
+		"files_seen":    sum.FilesSeen,
+		"files_parsed":  sum.FilesParsed,
+		"files_skipped": sum.FilesSkipped,
+		"files_deleted": sum.FilesDeleted,
+		"parse_errors":  sum.ParseErrors,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -387,37 +443,36 @@ func Run(opts Options) (*Summary, error) {
 			}
 		}
 
-		return tx.PruneParseCache(keep)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// The file-coverage summary is persisted so `seamark status` can
-	// report parser coverage long after this run's stdout is gone. A
-	// safety answer without coverage context is uninterpretable.
-	coverage, err := json.Marshal(map[string]int{
-		"files_seen":    sum.FilesSeen,
-		"files_parsed":  sum.FilesParsed,
-		"files_skipped": sum.FilesSkipped,
-		"files_deleted": sum.FilesDeleted,
-		"parse_errors":  sum.ParseErrors,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	for k, v := range map[string]string{
-		store.MetaRepoRoot:          root,
-		store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
-		store.MetaIndexedState:      WorkspaceState(root),
-		store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
-		store.MetaParseCacheVersion: parseCacheVersion,
-		store.MetaIndexSummary:      string(coverage),
-	} {
-		if err := st.SetMeta(k, v); err != nil {
-			return nil, err
+		if err := tx.PruneParseCache(keep); err != nil {
+			return err
 		}
+
+		// The meta commits with the graph. A meta write after the commit
+		// could pair this graph with the workspace state of a concurrent
+		// run, and a newer state on an older graph reads as current.
+		for k, v := range map[string]string{
+			store.MetaRepoRoot:          root,
+			store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
+			store.MetaIndexedState:      observed,
+			store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
+			store.MetaParseCacheVersion: parseCacheVersion,
+			store.MetaIndexSummary:      string(coverage),
+		} {
+			if err := tx.SetMeta(k, v); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// A change during the run leaves the record behind the workspace, so
+	// the next run rebuilds. The note says why that run is not skipped.
+	if observed != "" && WorkspaceState(root) != observed {
+		logf("note: the workspace changed during indexing; the next run rebuilds")
 	}
 
 	if sum.Stats, err = st.Stats(); err != nil {
@@ -1103,17 +1158,17 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 
 // freshSummary returns a Skipped summary when the index at dbPath was
 // built from the current workspace state; nil when a rebuild is needed.
-// open is the opener of the database, so a caller decides whether an
-// older schema migrates. state and decision say whether a rebuild must
-// record root.
-func freshSummary(root, dbPath string, start time.Time, open func(string) (*store.Store, error),
+// current is the WorkspaceState that Run observed before its reads; a
+// rebuild records the same value. open is the opener of the database, so
+// a caller decides whether an older schema migrates. state and decision
+// say whether a rebuild must record root.
+func freshSummary(root, dbPath, current string, start time.Time, open func(string) (*store.Store, error),
 	state ownership.State, decision ownership.Decision,
 ) *Summary {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil
 	}
 
-	current := WorkspaceState(root)
 	if current == "" {
 		return nil // no cheap fingerprint without git: rebuild
 	}

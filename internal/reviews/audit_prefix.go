@@ -42,12 +42,13 @@ type AuditPrefix struct {
 // Only a missing log gives an empty prefix. The function returns every
 // other open, stat, or read error, because an unreadable log is not an
 // empty log (lesson error-is-not-absence). A line that does not parse is
-// never an error, because the legacy readers also skip it. The read
-// writes nothing.
+// never an error, because the legacy readers also skip it. A symbolic
+// link at the log is an error, because the writer refuses it too. The
+// read writes nothing.
 func ReadAuditPrefix(root string, maxBytes int64) (AuditPrefix, error) {
 	out := AuditPrefix{Path: AuditLogPath(root)}
 
-	f, err := os.Open(out.Path)
+	f, err := openAuditRead(out.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return out, nil

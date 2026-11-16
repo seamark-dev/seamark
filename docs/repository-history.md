@@ -121,6 +121,12 @@ The index freshness check, the `check` fallback, the console
 only, such as `touch`, then leaves the git index as it was, so a
 concurrent git command does not meet `.git/index.lock`.
 
+An index run records the workspace state that it observes before it
+reads any file, and it writes that record in the same transaction as
+the graph. A file that changes during the run therefore makes the next
+run, `check`, or MCP call rebuild, and the index never reads as current
+for content that it did not parse.
+
 ## How much can the answers be trusted?
 
 ```bash
@@ -158,6 +164,33 @@ When the index records another root than the workspace, as in a copied
 or moved checkout, a `root` line comes first. It names that root, says
 that the report describes it, and names the `seamark index` run that
 records this workspace. `--json` carries the root as `recorded_root`.
+The MCP resource `seamark://status` prints the same line for the same
+workspace and database. When the index is stale and a plain
+`seamark index` in this workspace would be refused, because the
+database belongs to another repository, the `workspace` line names the
+route of that state instead, for example
+``STALE — run `seamark index` in <root>``. The stale note of `seamark why`,
+`seamark orient`, and `seamark report` does the same. A database of
+this workspace keeps ``STALE — run `seamark index` ``.
+
+The MCP server never rebuilds an index that records another repository.
+Every read answer (`orient`, `why`, `expand`, `change_set` with its
+`change_set_report` key, and both resources) then opens with one note
+that names that root:
+
+- When the workspace fingerprint matches the index, as in a sibling
+  worktree at the same commit, the note is
+  `note: this index records another repository (<root>); it matches this workspace now, and this answer describes <root>.`
+  `check` keeps its verdict and opens with the same note.
+- When the fingerprints differ, the refresh is refused, and the note is
+  `note: seamark did not refresh this index, because it records another repository (<root>) and a rebuild here would move its root; this answer describes <root> and can differ from this workspace.`
+  The answer can hold symbols and effects that this workspace does not
+  have. `check` refuses, because a verdict needs a current graph.
+
+A recorded root that no longer exists reads `records a directory that
+no longer exists (<root>)` in both notes. The `orient` title names the
+recorded root, as `seamark orient` does. A server on a database of its
+own workspace prints none of these notes.
 
 The `clients` block is the per-agent view: which hooks and which MCP
 registration each agent has, the native evidence behind them (a

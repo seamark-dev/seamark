@@ -79,8 +79,11 @@ file or directory`, and the gate blocks it under `--enforce`.
 In a copied or moved checkout whose index still records the original
 root, `seamark status` reports on that root, as the console does. Its
 first line names that root and the `seamark index` run that records this
-workspace, and `--json` adds `recorded_root`. `seamark doctor` reads the
-`-C` workspace.
+workspace, and `--json` adds `recorded_root`. The MCP resource
+`seamark://status` prints the same first line, and every MCP answer from
+such an index opens with a note that names the recorded root (see
+[repository history](repository-history.md#how-much-can-the-answers-be-trusted)).
+`seamark doctor` reads the `-C` workspace.
 
 `seamark index` refuses a `--db` that records another repository, also
 with `--force`, because that repository would lose its pins and
@@ -246,6 +249,15 @@ uses a separate lock, rotates at 5 MiB or an oldest record of 30 days,
 and retains one rotated generation. These records keep outcomes,
 identities as digests and evidence locations, not matching source-line
 excerpts. They are not the reminder firing log.
+
+Every surface that shows a lesson appends to the reminder firing log
+`.seamark/lessons-audit.jsonl`. The writer creates the file with mode
+0600 and a missing `.seamark` with mode 0700, and it tightens an
+existing log to 0600. It refuses a symbolic link at the log or at
+`.seamark`, so no record lands outside the repository; the surface still
+answers, and that record is not written. The log has no lock and no
+rotation. Its readers (`lessons --stats` and the delivery report) refuse
+a link at the log too and report the log as unreadable, not as empty.
 
 The **delivery report** reads the reminder log
 `.seamark/lessons-audit.jsonl`, both retained check-audit generations,
