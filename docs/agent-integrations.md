@@ -885,14 +885,24 @@ Before release:
 - **Done:** Investigate and fix the known local-script timeout flake in the
   benchmark tests without weakening validated behavior. Handle any
   benchmark fingerprint change explicitly; successful reruns alone do
-  not close this prerequisite. The interrupted-session tests cancelled
+  not close this prerequisite. The two interrupted-session tests
+  (`TestRunWorkflowTreatsInterruptedSessionAsCancellation` and
+  `TestRunActivationTreatsInterruptedSessionAsCancellation`) cancelled
   on a fixed timer, so their bound measured fixture setup. They now
   cancel when the stub agent has started and bound the time from the
   interrupt to the return at 30 seconds, half the agent's sleep. The
-  `CommandVersion` test starts each fresh script once before its timed
-  call. With a slowed `git` and CPU load the old tests fail and the new
-  ones pass. Only test files change, so no benchmark fingerprint
-  changes.
+  new `TestRunActivationStopsCleanlyOnCancel` covers a cancel before
+  the first session. `TestCommandVersionReadsTheFirstLineOrUnknown`
+  starts each fresh script once before its timed call. With a slowed
+  `git` and CPU load the old tests fail and the new ones pass. Only test
+  files change, so no benchmark fingerprint changes. This item covers
+  these four tests. `TestOTelHistogramPreparedFixtureContract` is a
+  separate known flake under load, a judge timeout, and it is not
+  fixed. Its first judge run on a fresh tree builds with an empty Go
+  build cache, and under CPU load that run can pass the 30-second limit
+  in the embedded `judge_command.go`; a timeout counts as a failed
+  verdict. In one loaded run the same command took 34 seconds without
+  the limit. A change to the limit changes the benchmark fingerprints.
 
 Native recording commands require the operator's login, can cost tokens,
 and run in scratch workspaces. Cover the per-tool/context cases above:

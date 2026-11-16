@@ -81,9 +81,12 @@ and child: each honors an in-budget slow deny. One root case of each
 client (a Write, a patch) shows that the client lets the write run
 after 10 s; no child case records it. The other timeout candidates
 remain open in the same checklist. None is completed by documenting
-it. The benchmark script-timeout flake is fixed in the tests, with no
-benchmark fingerprint change. Doctor keeps all-client coverage and
-warnings.
+it. The benchmark script-timeout flake is fixed in the tests (the two
+interrupted-session tests and the `CommandVersion` test), with no
+benchmark fingerprint change. `TestOTelHistogramPreparedFixtureContract`
+can still fail under load: its judge's 30 s `go test` limit is in an
+embedded benchmark file, and the test-only fix does not change it.
+Doctor keeps all-client coverage and warnings.
 
 ## Guard — experimental
 
