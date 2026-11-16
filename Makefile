@@ -149,7 +149,7 @@ report-bench: ## Measure the delivery report build over synthetic audit logs (of
 # projection, and fails on any difference. See docs/agent-integrations.md.
 CLIENT ?= codex
 
-agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI: version, exec surface, patch oracle, Update projection, sandbox, generated setup, offered tools
+agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI: version, exec surface, patch oracle, Update projection, sandbox, generated setup, offered tools, hook trust
 	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run '^TestNative' ./internal/integration
 	scripts/agent-integration-smoke.sh check $(CLIENT) $(BINARY)
 
