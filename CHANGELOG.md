@@ -55,6 +55,14 @@ model-boundary delivery.
   call, lane, and turn attribution. Every Codex path stays below
   `active` with the reason `trust-unknown`, because Seamark cannot read
   the Codex trust record.
+- **Codex patch paths with a tab or a carriage return.** The lesson-check
+  hooks refuse a Codex `apply_patch` header path (Add, Update, Delete, or
+  Move to) that holds a tab or a carriage return. codex-cli 0.169.0
+  removes both characters when it writes, so such a path could leave a
+  pin scope. An armed guard now denies the patch with `incomplete-paths`,
+  the baseline handler stores no baseline, and the post-edit check
+  reports every executable pin as `unknown/incomplete-paths`. The
+  advisory edit hook is unchanged.
 - **Lesson delivery reading.** `lessons --delivery [--pin <ref>]`
   (`delivery/1` JSON) reads the delivery records of each pin version
   from the audit logs, with separate check and guard counts. The text

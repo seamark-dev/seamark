@@ -628,6 +628,58 @@ func TestLessonsVerifyHookCodexAddMatchesNativeBytes(t *testing.T) {
 	sentinel.requireNoCall(t)
 }
 
+// TestLessonsVerifyHookCodexControlPathIsIncomplete proves the post-edit
+// rule for a Codex header path with a tab or a carriage return. Codex
+// writes the path without the character, so the hook cannot place the
+// edit. Every executable pin is unknown/incomplete-paths, also with the
+// written file on disk. The named path is outside every scope, so a
+// check of that path alone would report nothing.
+func TestLessonsVerifyHookCodexControlPathIsIncomplete(t *testing.T) {
+	root, sentinel := guardFixture(t)
+
+	for _, body := range []string{
+		"*** Add File: gen\rerated/b.txt\n+x\n",
+		"*** Update File: README.md\n*** Move to: gen\terated/b.txt\n",
+	} {
+		_, _, err := baselineHook(t, root, codexPatchEvent(t, root, body), "--client", "codex")
+		require.NoError(t, err)
+		assert.Empty(t, pendingNames(t, root), "the baseline handler stores nothing for a refused path")
+
+		// The file that codex-cli 0.169.0 writes for either patch.
+		verifyWrite(t, root, "generated/b.txt", "x\n")
+
+		stdout, stderr := verifyHook(t, root, codexCompletionEvent(t, root, body, 0), "--client", "codex")
+		assert.Empty(t, stderr)
+
+		event, text := claudeFindings(t, stdout)
+		assert.Equal(t, "PostToolUse", event)
+
+		for _, rule := range []string{"frozen-assets", "no-todo", "no-todo-docs"} {
+			assert.Contains(t, text, "- unknown/incomplete-paths: pin "+pinRefOf(t, root, rule)+", check ")
+		}
+
+		assert.Contains(t, text, "Check again: seamark lessons --verify\n", "no path is known")
+		requireReportOnly(t, text)
+
+		rec := lastRecord(t, root, lessoncheck.AuditPostEdit)
+		assert.Equal(t, integration.CodexID, rec.Client)
+		assert.Equal(t, lessoncheck.ToolSucceeded, rec.ToolOutcome)
+		assert.False(t, rec.PathsComplete)
+		assert.Empty(t, rec.Paths, "no record names the path of the refused patch")
+		assert.Contains(t, rec.Error, "a header path holds a tab or a carriage return")
+		require.Len(t, rec.Pins, 3, "the scope of the edit is not known, so every executable pin applies")
+
+		for _, pin := range rec.Pins {
+			assert.Equal(t, lessoncheck.OutcomeUnknown, pin.Outcome)
+			assert.Equal(t, lessoncheck.ReasonIncompletePaths, pin.Reason)
+		}
+
+		require.NoError(t, os.Remove(filepath.Join(root, "generated", "b.txt")))
+	}
+
+	sentinel.requireNoCall(t)
+}
+
 // TestLessonsVerifyHookCallsNoInvoker proves that the post-edit hook
 // starts no model client and makes no network call. The runs cover a
 // pass, a violation, a missing baseline, an event that does not decode,

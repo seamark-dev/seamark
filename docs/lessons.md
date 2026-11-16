@@ -1054,8 +1054,11 @@ Seamark cannot read the Codex trust record, so a Codex path still reads
 `active-unverified`. Native denial of `MultiEdit` and the post-edit
 reply remain unverified. Codex Update content is
 currently unprojectable for a content predicate, so an armed guard denies that
-unknown result. Verified Update projection and native evidence are
-required before v0.9.0 can ship. See the
+unknown result. A Codex patch header path with a tab or a carriage
+return gets `incomplete-paths`, so an armed guard denies it and the
+post-edit check reports every pin as unknown: codex-cli 0.169.0 writes
+such a path without that character. Verified Update projection and
+native evidence are required before v0.9.0 can ship. See the
 [integration guide](agent-integrations.md#lesson-checks-and-exploration-unreleased).
 
 ## Lesson delivery: lessons --delivery

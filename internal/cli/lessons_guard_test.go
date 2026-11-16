@@ -966,8 +966,9 @@ func TestLessonsGuardHookCheckModeAndNoteNeverDeny(t *testing.T) {
 // TestLessonsGuardHookCodexApplyPatch proves the guard rules for Codex
 // apply_patch: Add, Delete, and Move project; an Update with hunks in a
 // pattern scope stays unknown and denies; a forbid pin decides on paths
-// alone; a grammar that the decoder cannot read arms every enforce pin;
-// relative paths start at the event directory.
+// alone; a grammar that the decoder cannot read, and a header path with
+// a tab or a carriage return, arm every enforce pin; relative paths
+// start at the event directory.
 func TestLessonsGuardHookCodexApplyPatch(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	pins := guardPins(t, root)
@@ -1044,6 +1045,28 @@ func TestLessonsGuardHookCodexApplyPatch(t *testing.T) {
 		assert.Len(t, rec.Guard.Pins, 2, "every enforce pin applies")
 		assert.Contains(t, rec.Error, "unsupported edit grammar")
 	})
+
+	// codex-cli 0.169.0 removes a tab or a carriage return from a header
+	// path when it writes, so "gen\rerated/b.txt" writes generated/b.txt.
+	// The text names a path outside the frozen scope; the guard must deny.
+	for name, body := range map[string]string{
+		"a carriage return in an Add path arms every enforce pin": "*** Add File: gen\rerated/b.txt\n+x\n",
+		"a tab in a Move target arms every enforce pin":           "*** Update File: README.md\n*** Move to: gen\terated/b.txt\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := guardHook(t, root, codexPatchEvent(t, root, body), "--client", "codex")
+			reasons := requireDenied(t, err)
+			assert.Contains(t, reasons, "cannot evaluate a path that the guard cannot resolve: incomplete-paths")
+
+			rec := lastRecord(t, root, lessoncheck.AuditGuard)
+			assert.Equal(t, lessoncheck.GuardCauseUnknown, rec.Guard.Cause)
+			assert.False(t, rec.Guard.PathsComplete)
+			assert.Len(t, rec.Guard.Pins, 2, "every enforce pin applies")
+			assert.Contains(t, rec.Error, "unsupported edit grammar: a header path holds a tab or a carriage return")
+			assert.Empty(t, rec.Paths, "no record names the path of the refused patch")
+			assert.Empty(t, pendingNames(t, root), "a deny writes no baseline")
+		})
+	}
 
 	t.Run("a Move from a frozen path to outside the root arms every enforce pin", func(t *testing.T) {
 		// Dropping the move would allow the removal of a frozen file.
@@ -1377,6 +1400,16 @@ func TestLessonsBaselineHookNeverDenies(t *testing.T) {
 					map[string]any{"file_path": filepath.Join(root, "generated", "a.txt"), "content": "x\n"})
 			},
 			err: errNoMatchID.Error(),
+		},
+		{
+			// Codex writes generated/b.txt for this path, so a baseline of
+			// the named path would describe another file.
+			name: "a Codex header path with a carriage return",
+			payload: func(t *testing.T, root string) string {
+				return codexPatchEvent(t, root, "*** Add File: gen\rerated/b.txt\n+x\n")
+			},
+			args: []string{"--client", "codex"},
+			err:  "unsupported edit grammar: a header path holds a tab or a carriage return",
 		},
 	}
 

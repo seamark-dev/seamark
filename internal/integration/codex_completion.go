@@ -23,11 +23,12 @@ type codexCompletions struct{}
 // The decoder reads no other part of tool_response, because the output
 // text can hold file content.
 //
-// The paths come from the patch text by the rules of applyPatchPaths,
-// so the post-edit hook scopes a missing baseline with the same paths as
-// the advisory hook. A patch that the grammar does not cover gives the
-// error of applyPatchPaths, and the Completion keeps its identity and
-// outcome.
+// The paths come from the patch text by the rules of guardPatchOps, so
+// the post-edit hook reads the same paths as the guard. A patch that the
+// grammar does not cover gives the error of guardPatchOps, and the
+// Completion keeps its identity and outcome. A header path with a tab
+// or a carriage return is such a patch: Codex writes another path than
+// the text names, so the post-edit check must not observe the named one.
 func (codexCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completion, error) {
 	var native struct {
 		HookEventName string          `json:"hook_event_name"`
@@ -65,12 +66,12 @@ func (codexCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completion
 		return c, err
 	}
 
-	paths, err := applyPatchPaths(patch)
+	ops, err := guardPatchOps(patch)
 	if err != nil {
 		return c, err
 	}
 
-	c.Paths = paths
+	c.Paths = patchOpPaths(ops)
 
 	return c, nil
 }

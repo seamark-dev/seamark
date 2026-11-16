@@ -136,8 +136,10 @@ func (codexResets) DecodeReset(payload []byte) (ResetEvent, error) {
 // paths stay; the shared normalization removes them.
 //
 // The result is complete or it is an error, by the rules of
-// applyPatchOps. The advisory edit hook and the guard then read one
-// patch alike, because the paths come from the guard's operations.
+// applyPatchOps. The advisory edit hook and the guard then read the
+// paths of one patch alike. The guard and the post-edit check also
+// refuse a header path with a tab or a carriage return (guardPatchOps).
+// The advisory hook keeps such a path, so its replies do not change.
 func applyPatchPaths(patch string) ([]string, error) {
 	ops, err := applyPatchOps(patch)
 	if err != nil {

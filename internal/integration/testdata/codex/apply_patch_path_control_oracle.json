@@ -1,0 +1,354 @@
+{
+  "schema": "apply-patch-path-controls/1",
+  "client_version": "codex-cli 0.169.0",
+  "recorded": "2026-11-16",
+  "provenance": "Each case was applied offline by the installed codex binary run under the name apply_patch: no model, no login, a scratch CODEX_HOME, and a new scratch directory per case that holds the before files only. exit_status, stdout, and stderr are what the applier returned, with the scratch directory written as <scratch>. after holds every file in the scratch directory after the run, so its paths are the paths that the applier wrote. The cases show the applier, not what tool_input.command carries in a live PreToolUse.",
+  "cases": [
+    {
+      "name": "01_add_cr_inside",
+      "shape": "a carriage return inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen\rtinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen\rtinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "02_add_tab_inside",
+      "shape": "a tab inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen\ttinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen\ttinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "03_update_cr_inside",
+      "shape": "a carriage return inside an Update path",
+      "before": {
+        "sentinel/x.txt": "a\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: sen\rtinel/x.txt\n@@\n-a\n+b\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nM sen\rtinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "b\n"
+      }
+    },
+    {
+      "name": "04_update_tab_inside",
+      "shape": "a tab inside an Update path",
+      "before": {
+        "sentinel/x.txt": "a\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: sen\ttinel/x.txt\n@@\n-a\n+b\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nM sen\ttinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "b\n"
+      }
+    },
+    {
+      "name": "05_delete_cr_inside",
+      "shape": "a carriage return inside a Delete path",
+      "before": {
+        "sentinel/x.txt": "a\n"
+      },
+      "patch": "*** Begin Patch\n*** Delete File: sen\rtinel/x.txt\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nD sen\rtinel/x.txt\n",
+      "stderr": "",
+      "after": {}
+    },
+    {
+      "name": "06_delete_tab_inside",
+      "shape": "a tab inside a Delete path",
+      "before": {
+        "sentinel/x.txt": "a\n"
+      },
+      "patch": "*** Begin Patch\n*** Delete File: sen\ttinel/x.txt\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nD sen\ttinel/x.txt\n",
+      "stderr": "",
+      "after": {}
+    },
+    {
+      "name": "07_move_cr_inside",
+      "shape": "a carriage return inside a Move to path",
+      "before": {
+        "a.txt": "a\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n*** Move to: sen\rtinel/m.txt\n@@\n-a\n+b\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nM sen\rtinel/m.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/m.txt": "b\n"
+      }
+    },
+    {
+      "name": "08_move_tab_inside",
+      "shape": "a tab inside a Move to path",
+      "before": {
+        "a.txt": "a\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n*** Move to: sen\ttinel/m.txt\n@@\n-a\n+b\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nM sen\ttinel/m.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/m.txt": "b\n"
+      }
+    },
+    {
+      "name": "09_add_cr_before_slash",
+      "shape": "a carriage return at the end of a directory name",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sentinel\r/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sentinel\r/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "10_add_cr_first",
+      "shape": "a carriage return as the first character of a path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: \rsentinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA \rsentinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "11_add_tab_first",
+      "shape": "a tab as the first character of a path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: \tsentinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA \tsentinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "12_add_cr_joins_lines",
+      "shape": "a carriage return between a path and a + line, with no line feed",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: a.txt\r+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA a.txt\r+x\n",
+      "stderr": "",
+      "after": {
+        "a.txt+x": ""
+      }
+    },
+    {
+      "name": "13_crlf_patch_cr_inside",
+      "shape": "a patch with CRLF line ends and a carriage return inside a path",
+      "before": {},
+      "patch": "*** Begin Patch\r\n*** Add File: sen\rtinel/x.txt\r\n+x\r\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen\rtinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "14_tab_in_second_section",
+      "shape": "a clean Update, then an Update path with a tab",
+      "before": {
+        "a.txt": "a\n",
+        "sentinel/x.txt": "s\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: a.txt\n@@\n-a\n+b\n*** Update File: sen\ttinel/x.txt\n@@\n-s\n+t\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nM a.txt\nM sen\ttinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "a.txt": "b\n",
+        "sentinel/x.txt": "t\n"
+      }
+    },
+    {
+      "name": "15_add_trailing_tab_cr",
+      "shape": "a tab and a carriage return at the end of an Add header line",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: x.txt\t\r\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA x.txt\n",
+      "stderr": "",
+      "after": {
+        "x.txt": "x\n"
+      }
+    },
+    {
+      "name": "16_add_vertical_tab_inside",
+      "shape": "a vertical tab inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen\u000btinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen\u000btinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sen\u000btinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "17_add_form_feed_inside",
+      "shape": "a form feed inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen\ftinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen\ftinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sen\ftinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "18_add_start_of_heading_inside",
+      "shape": "the C0 control U+0001 inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen\u0001tinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen\u0001tinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sen\u0001tinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "19_add_escape_inside",
+      "shape": "an escape character inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen\u001btinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen\u001btinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sen\u001btinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "20_add_delete_char_inside",
+      "shape": "the DEL character inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sentinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sentinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "21_add_next_line_inside",
+      "shape": "the C1 control NEL (U+0085) inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sentinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sentinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sentinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "22_add_no_break_space_inside",
+      "shape": "a no-break space inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen tinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen tinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sen tinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "23_add_line_separator_inside",
+      "shape": "the line separator U+2028 inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen\u2028tinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen\u2028tinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sen\u2028tinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "24_add_zero_width_space_inside",
+      "shape": "a zero-width space inside an Add path",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen​tinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA sen​tinel/x.txt\n",
+      "stderr": "",
+      "after": {
+        "sen​tinel/x.txt": "x\n"
+      }
+    },
+    {
+      "name": "25_update_vertical_tab_inside",
+      "shape": "a vertical tab inside an Update path, with only the plain path on disk",
+      "before": {
+        "sentinel/x.txt": "a\n"
+      },
+      "patch": "*** Begin Patch\n*** Update File: sen\u000btinel/x.txt\n@@\n-a\n+b\n*** End Patch",
+      "exit_status": 1,
+      "stdout": "",
+      "stderr": "Failed to read file to update <scratch>/sen\u000btinel/x.txt: No such file or directory (os error 2)\n",
+      "after": {
+        "sentinel/x.txt": "a\n"
+      }
+    },
+    {
+      "name": "26_add_line_feed_inside",
+      "shape": "a line feed inside an Add path (refusal)",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: sen\ntinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 1,
+      "stdout": "",
+      "stderr": "Invalid patch hunk on line 3: 'tinel/x.txt' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\n",
+      "after": {}
+    },
+    {
+      "name": "27_add_tab_after_colon",
+      "shape": "a tab in place of the space after the Add marker (refusal)",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File:\tsentinel/x.txt\n+x\n*** End Patch",
+      "exit_status": 1,
+      "stdout": "",
+      "stderr": "Invalid patch hunk on line 2: '*** Add File:\tsentinel/x.txt' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'\n",
+      "after": {}
+    },
+    {
+      "name": "28_add_content_tab_cr",
+      "shape": "a tab and a carriage return inside added content",
+      "before": {},
+      "patch": "*** Begin Patch\n*** Add File: c.txt\n+f\to\rx\n*** End Patch",
+      "exit_status": 0,
+      "stdout": "Success. Updated the following files:\nA c.txt\n",
+      "stderr": "",
+      "after": {
+        "c.txt": "f\to\rx\n"
+      }
+    }
+  ]
+}

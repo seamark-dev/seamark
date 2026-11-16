@@ -151,17 +151,18 @@ agents-native-check: build ## Offline checks against the installed $(CLIENT) CLI
 	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run '^TestNative' ./internal/integration
 	scripts/agent-integration-smoke.sh check $(CLIENT) $(BINARY)
 
-# The apply_patch content oracle: the installed codex binary, run offline
-# under the name apply_patch in scratch directories, applies each content
-# case, and the recorder writes what it did into
-# internal/integration/testdata/codex/apply_patch_oracle.json. No model,
-# no login. ORACLE_VERSION must name the installed version (for example
-# 0.164.0), so a different installed version never rewrites the file by
-# itself. The path cases keep their bytes. agents-native-check replays
-# the content cases.
-agents-oracle-record: ## Record the apply_patch content oracle from the installed codex (offline; ORACLE_VERSION=<codex version>)
+# The apply_patch oracles: the installed codex binary, run offline under
+# the name apply_patch in scratch directories, applies each case, and the
+# recorders write what it did. The content cases go into
+# internal/integration/testdata/codex/apply_patch_oracle.json, and the
+# cases with control characters in header paths go into
+# apply_patch_path_control_oracle.json beside it. No model, no login.
+# ORACLE_VERSION must name the installed version (for example 0.164.0),
+# so a different installed version never rewrites a file by itself. The
+# path cases keep their bytes. agents-native-check replays both.
+agents-oracle-record: ## Record the apply_patch content and path-control oracles from the installed codex (offline; ORACLE_VERSION=<codex version>)
 	@test -n "$(ORACLE_VERSION)" || { echo "ORACLE_VERSION must name the installed codex version, for example ORACLE_VERSION=0.164.0" >&2; exit 2; }
-	SEAMARK_NATIVE_CLIENT=codex SEAMARK_ORACLE_RECORD="$(ORACLE_VERSION)" CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run '^TestRecordCodexContentOracle$$' ./internal/integration
+	SEAMARK_NATIVE_CLIENT=codex SEAMARK_ORACLE_RECORD="$(ORACLE_VERSION)" CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run '^TestRecordCodex(Content|PathControl)Oracle$$' ./internal/integration
 
 agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)

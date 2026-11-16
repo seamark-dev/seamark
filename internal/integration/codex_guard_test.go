@@ -135,6 +135,53 @@ func TestCodexGuardDecodesApplyPatchOps(t *testing.T) {
 		}
 	})
 
+	// codex-cli 0.169.0 removes a tab or a carriage return from a header
+	// path when it writes. The guard must not judge the path that the
+	// text names, so it refuses the patch. The advisory hook keeps its
+	// paths, the character included.
+	t.Run("a tab or a carriage return in a header path refuses the patch", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			patch    string
+			advisory []string
+		}{
+			{"a carriage return in an add path",
+				"*** Begin Patch\n*** Add File: sen\rtinel/x.txt\n+x\n*** End Patch", []string{"sen\rtinel/x.txt"}},
+			{"a tab in an update path",
+				"*** Begin Patch\n*** Update File: sen\ttinel/x.txt\n@@\n-a\n+b\n*** End Patch", []string{"sen\ttinel/x.txt"}},
+			{"a carriage return in a delete path",
+				"*** Begin Patch\n*** Delete File: sentinel\r/x.txt\n*** End Patch", []string{"sentinel\r/x.txt"}},
+			{"a tab in a move target",
+				"*** Begin Patch\n*** Update File: a.txt\n*** Move to: sen\ttinel/m.txt\n@@\n-a\n+b\n*** End Patch",
+				[]string{"a.txt", "sen\ttinel/m.txt"}},
+			{"a tab at the start of a path",
+				"*** Begin Patch\n*** Add File: \tsentinel/x.txt\n+x\n*** End Patch", []string{"\tsentinel/x.txt"}},
+			{"a carriage return in the second section of a clean patch",
+				"*** Begin Patch\n*** Delete File: a.txt\n*** Add File: sen\rtinel/x.txt\n+x\n*** End Patch",
+				[]string{"a.txt", "sen\rtinel/x.txt"}},
+		} {
+			op, err := codexGuards{}.DecodeGuard(patchEvent(t, tc.patch))
+			require.ErrorIs(t, err, ErrUnsupportedGrammar, tc.name)
+			assert.NotContains(t, err.Error(), "tinel", "%s: the error text names no path", tc.name)
+			assert.Empty(t, op.Ops, tc.name)
+			assert.False(t, op.PathsComplete, tc.name)
+			assert.Equal(t, CodexID, op.Client, tc.name)
+			assert.Equal(t, "apply_patch", op.Tool, tc.name)
+			assert.Equal(t, "call_1", op.MatchID, "%s: the audit record still joins by the match", tc.name)
+
+			event, err := codexEdits{}.DecodeEdit(patchEvent(t, tc.patch))
+			require.NoError(t, err, tc.name)
+			assert.Equal(t, tc.advisory, event.Paths, "%s: the advisory hook keeps the raw paths", tc.name)
+		}
+
+		// A tab or a carriage return at the end of a header line goes in
+		// the line trim, in Codex and in the decoder, so no path holds it.
+		op, err := codexGuards{}.DecodeGuard(patchEvent(t,
+			"*** Begin Patch\n*** Add File: x.txt\t\r\n+x\n*** Update File: a.txt\n*** Move to: b.txt\t\n@@\n-a\n+b\n*** End Patch"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"x.txt", "a.txt", "b.txt"}, patchOpPaths(op.Ops))
+	})
+
 	t.Run("the command gate keeps refusing a patch", func(t *testing.T) {
 		_, err := codexCommands{}.DecodeCommand(codexFixture(t, "pre_tool_use_apply_patch_add.json"))
 		require.ErrorIs(t, err, ErrNotApplicable)
