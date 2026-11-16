@@ -385,3 +385,38 @@ export class Store {
 
 	assert.Equal(t, []CallRef{{Name: "audit", Line: 15}}, symbolByFQN(t, res, "web/src/store.Store.load").Calls)
 }
+
+// TestEcmaClassBodyReceiverCalls proves that this.save() in a class body
+// is a receiver call of the class. A field arrow function keeps the this
+// of the class. A private method is no symbol, so the class carries its
+// calls, and its this is still the instance. A plain function, an object
+// literal method and a method of a nested class rebind this.
+func TestEcmaClassBodyReceiverCalls(t *testing.T) {
+	src := `export class Panel {
+	onClick = () => { this.save(); };
+	#flush() {
+		this.save();
+	}
+	legacy = function () { return this.save(); };
+	handlers = {
+		run() { return this.save(); },
+	};
+	inner = class {
+		go() { return this.save(); }
+	};
+
+	save() {}
+}
+`
+	res := extractTS(t, "panel.ts", src)
+
+	receivers := map[uint32]bool{}
+
+	for _, c := range symbolByFQN(t, res, "panel.Panel").Calls {
+		if c.Name == "save" {
+			receivers[c.Line] = c.Receiver
+		}
+	}
+
+	assert.Equal(t, map[uint32]bool{2: true, 4: true, 6: false, 8: false, 11: false}, receivers)
+}

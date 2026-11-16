@@ -521,7 +521,12 @@ func Run(opts Options) (*Summary, error) {
 // Python class carries the calls of its body outside its methods. An old
 // blob decodes with no calls on these symbols, so their edges and effects
 // would stay missing. freshSummary rebuilds an index of another version.
-const parseCacheVersion = "3"
+//
+// Version "4": a call on this in a private or computed JS/TS method is a
+// receiver call of the class, because the class carries the calls of such
+// a method. An old blob keeps it a plain call. The rebuild also gives an
+// unchanged index the same-class edges of class bodies.
+const parseCacheVersion = "4"
 
 // OtherVersion reports an index that another seamark version built: the
 // parse cache version of its last run is not the one of this binary, so
@@ -1983,7 +1988,9 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 //     import alias or
 //     namespace import
 //  3. self/cls/this      → the method of the caller's      (same-class)
-//     method call          own class, when declared there
+//     method call of a     own class, when declared there;
+//     method or of a       a class body calls its own class
+//     class body
 //  4. any other          → the single same-family repo     (unique-name)
 //     selector call        symbol with that method name
 //
@@ -2067,11 +2074,10 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 				dst = pickUnique(g.decls[scopedKey(fam, res.Package)][call.Name], model.KindFunction)
 				origin = model.OriginSamePackage
 			}
-		case call.Receiver && decl.Symbol.Kind == model.KindMethod:
+		case call.Receiver && (decl.Symbol.Kind == model.KindMethod || decl.Symbol.Kind == model.KindType):
 			// The receiver shadows any same-named import, so this tier
-			// comes first. The caller's FQN is <pkg>.<Class>.<name>; a
-			// sibling method shares everything but the last segment.
-			want := strings.TrimSuffix(decl.Symbol.FQN, "."+decl.Symbol.Name) + "." + call.Name
+			// comes first.
+			want := receiverClass(&decl.Symbol) + "." + call.Name
 
 			for _, c := range g.decls[scopedKey(fam, res.Package)][call.Name] {
 				if c.Kind == model.KindMethod && c.FQN == want {
@@ -2129,6 +2135,20 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	}
 
 	return nil
+}
+
+// receiverClass returns the FQN of the class that a receiver call of sym
+// calls into. A method FQN is <pkg>.<Class>.<name>, so the class is all but
+// the last segment. A class carries the calls of its body, such as a field
+// arrow function that calls this.save(), so the class is sym itself. Only
+// a JS/TS class gives such calls: a Python class body binds no receiver
+// name, and no other type carries calls.
+func receiverClass(sym *model.Symbol) string {
+	if sym.Kind == model.KindType {
+		return sym.FQN
+	}
+
+	return strings.TrimSuffix(sym.FQN, "."+sym.Name)
 }
 
 // detectCallEffects records catalogue matches for one call site on the

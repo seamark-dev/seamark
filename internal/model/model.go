@@ -50,7 +50,8 @@ const (
 	// OriginSamePackage: bare-identifier call resolved within the package.
 	OriginSamePackage = "same-package"
 	// OriginSameClass: self/cls/this method call resolved to a method of
-	// the caller's own class.
+	// the caller's own class. A class body, such as a field initializer,
+	// calls into its own class.
 	OriginSameClass = "same-class"
 	// OriginQualified: qualified call resolved through the file's imports.
 	OriginQualified = "qualified"

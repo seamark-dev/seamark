@@ -485,10 +485,13 @@ model-boundary delivery.
   literals and lambdas included. A JS/TS or Python class now carries the
   calls of its body outside its methods, such as field initializers,
   static blocks and class attributes, while each method keeps its own
-  calls. Before, a change in such a place counted as inside a symbol
-  that reached nothing, so `check` gave a clean verdict with no effects
-  and no unknown-reach note. Now `why` lists these symbols as callers
-  with their calls and effects, and `check` reports what the change can
+  calls. A JS/TS `this.save()` in a class body, such as in a field
+  arrow function or a private method, resolves to the `save` method of
+  that class, as it does in a method. Before, a change in such a place
+  counted as inside a symbol that reached nothing, so `check` gave a
+  clean verdict with no effects and no unknown-reach note. Now `why`
+  lists these symbols as callers with their calls and effects, and
+  `check` reports what the change can
   reach. A Go `const` initializer and a function value without a call
   still get no edge. An index built by an older version is rebuilt once
   by the next index run or MCP call, except a database file that does

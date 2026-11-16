@@ -486,3 +486,45 @@ func TestEvalDiffOnAClassFieldReachesEffects(t *testing.T) {
 	assert.Empty(t, d.Effects, "the write of dump stays with dump")
 	assert.Empty(t, d.Notes)
 }
+
+// TestEvalDiffOnAFieldReceiverCallReachesEffects proves that an edit of a
+// class field whose arrow function calls this.save() reports the write of
+// save. Another class also has a save method, so the edge must come from
+// the same-class tier, not from the unique-name guess.
+func TestEvalDiffOnAFieldReceiverCallReachesEffects(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{
+		"panel.ts": `import * as fs from "fs";
+
+export class Panel {
+	onClick = () => { this.save(); };
+
+	save() { fs.writeFileSync("a", "b"); }
+}
+`,
+		"other.ts": "export class Other {\n\tsave() { return 2; }\n}\n",
+	})
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: diff-writes-files
+    when: 'diff.effects.exists(e, e == "fs:write")'
+    message: the change can write files
+`), 0o644))
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	diff := `diff --git a/panel.ts b/panel.ts
+--- a/panel.ts
++++ b/panel.ts
+@@ -4,1 +4,1 @@
+-	onClick = () => { this.save(); };
++	onClick = () => { this.save(); this.save(); };
+`
+
+	d, err := EvalDiff(p, st, diff, SourceStdin)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fs:write"}, d.Effects)
+	assert.Equal(t, VerdictApproval, d.Verdict)
+	assert.Empty(t, d.Notes, "the change lies in an indexed symbol")
+}

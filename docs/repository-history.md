@@ -376,8 +376,11 @@ table in [Data flow](data-flow.md).
   methods: field initializers, static blocks, class attributes, and a
   method decorator that the grammar places outside the method (TypeScript
   and Python; a JavaScript method decorator stays with its method). A
-  method keeps its own calls, and the class does not repeat them. A Go
-  type declares no call, so a struct needs no such rule.
+  method keeps its own calls, and the class does not repeat them. A
+  JS/TS `this.save()` in a class body, such as in a field arrow function
+  or a private method, resolves to the `save` method of that class as
+  `[same-class]`, as it does in a method. A Go type declares no call, so
+  a struct needs no such rule.
   An index built before this rule is rebuilt once by the next index run
   or MCP call, also on an unchanged workspace; a database file that does
   not accept writes keeps its old edges. A workspace that reads the

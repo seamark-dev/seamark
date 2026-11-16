@@ -302,12 +302,8 @@ func inEcmaMethodOf(node, decl *tree_sitter.Node) bool {
 			continue
 		}
 
-		name := p.ChildByFieldName("name")
-		body := p.Parent()
-
-		if name != nil && name.Kind() == "property_identifier" &&
-			body != nil && body.Kind() == "class_body" &&
-			body.Parent() != nil && sameNode(body.Parent(), decl) {
+		if name := p.ChildByFieldName("name"); name != nil && name.Kind() == "property_identifier" &&
+			memberOfClass(p, decl) {
 			return true
 		}
 	}
@@ -321,9 +317,14 @@ func sameNode(a, b *tree_sitter.Node) bool {
 }
 
 // thisIsReceiver reports whether `this` at node still refers to the
-// enclosing method's instance. Arrow functions keep lexical this; any
-// plain function or nested method (object literals, class expressions)
-// between the call and the declaration rebinds it.
+// instance of the enclosing method or class. Arrow functions keep lexical
+// this; any plain function or nested method (object literals, class
+// expressions) between the call and the declaration rebinds it.
+//
+// A method directly in the body of the class decl keeps it. Such a method
+// reaches here only when it is no symbol, such as a private (#m) method.
+// The class carries its calls, and its this is the same as in a named
+// method of that class.
 func thisIsReceiver(node, decl *tree_sitter.Node) bool {
 	for p := node.Parent(); p != nil; p = p.Parent() {
 		if p.StartByte() == decl.StartByte() && p.EndByte() == decl.EndByte() {
@@ -332,13 +333,25 @@ func thisIsReceiver(node, decl *tree_sitter.Node) bool {
 
 		switch p.Kind() {
 		case "function_expression", "function_declaration",
-			"generator_function", "generator_function_declaration",
-			"method_definition":
+			"generator_function", "generator_function_declaration":
 			return false
+		case "method_definition":
+			if !memberOfClass(p, decl) {
+				return false
+			}
 		}
 	}
 
 	return false
+}
+
+// memberOfClass reports whether method lies directly in the body of the
+// class decl. For any other decl it is false.
+func memberOfClass(method, decl *tree_sitter.Node) bool {
+	body := method.Parent()
+
+	return body != nil && body.Kind() == "class_body" &&
+		body.Parent() != nil && sameNode(body.Parent(), decl)
 }
 
 // atModuleTopLevel reports whether a declaration sits directly in the

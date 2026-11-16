@@ -3689,3 +3689,66 @@ def audit(p):
 		assert.Equal(t, tc.method, callers[0].FQN, "the method's call is not copied onto the class")
 	}
 }
+
+// TestClassBodyReceiverCallResolvesToItsOwnClass proves that this.save()
+// in a class body resolves through the same-class tier to the save method
+// of that class. The caller is the class symbol, which carries the calls
+// of a field arrow function and of a private method. Another class with a
+// save method makes the unique-name guess abstain, so only the same-class
+// tier can give the edge and the fs:write effect.
+func TestClassBodyReceiverCallResolvesToItsOwnClass(t *testing.T) {
+	for _, withOther := range []bool{false, true} {
+		root := t.TempDir()
+		files := map[string]string{
+			"panel.ts": `import * as fs from "fs";
+
+export class Panel {
+	onClick = () => { this.save(); };
+
+	save() { fs.writeFileSync("a", "b"); }
+
+	handle() { this.save(); }
+}
+`,
+			"board.ts": `import * as fs from "fs";
+
+export class Board {
+	#flush() {
+		this.store();
+	}
+
+	store() { fs.writeFileSync("a", "b"); }
+}
+`,
+		}
+
+		if withOther {
+			files["other.ts"] = "export class Other {\n\tsave() { return 2; }\n\n\tstore() { return 3; }\n}\n"
+		}
+
+		for rel, content := range files {
+			require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+		}
+
+		_, st := runIndex(t, root)
+
+		for _, tc := range []struct{ caller, callee string }{
+			{"panel.Panel", "panel.Panel.save"},
+			{"panel.Panel.handle", "panel.Panel.save"},
+			{"board.Board", "board.Board.store"},
+		} {
+			caller := mustFind(t, st, tc.caller)
+
+			callees, err := st.Callees(caller.ID)
+			require.NoError(t, err)
+			require.Len(t, callees, 1, "%s, other class %v", tc.caller, withOther)
+			assert.Equal(t, tc.callee, callees[0].FQN, "%s, other class %v", tc.caller, withOther)
+			assert.Equal(t, model.OriginSameClass, callees[0].Origin, "%s, other class %v", tc.caller, withOther)
+
+			effs, err := st.EffectsForSymbol(caller.ID)
+			require.NoError(t, err)
+			assert.Equal(t, []store.Effect{{Tag: "fs:write", Origin: "propagated", Depth: 1}}, effs,
+				"%s, other class %v", tc.caller, withOther)
+		}
+	}
+}
