@@ -448,6 +448,15 @@ model-boundary delivery.
   0600. Edit hooks still fail open, `change_set` and `check` still
   answer, and the refused record is not written. `lessons --stats` and
   the delivery report show a linked log as unreadable, not as empty.
+- **The index no longer reads as current after an edit made during
+  indexing.** An index run recorded the workspace fingerprint after it
+  had parsed the files, so a file edited during the run was recorded but
+  never parsed. Every later run, `status`, `orient` and `check` then
+  trusted that stale index until a forced rebuild. The run now records
+  the state it saw before reading any file, and it writes that record in
+  the same transaction as the graph, so overlapping runs cannot pair a
+  newer fingerprint with an older graph. An edit during a run costs one
+  extra rebuild on the next call, and the run logs a note that says so.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

@@ -121,6 +121,12 @@ The index freshness check, the `check` fallback, the console
 only, such as `touch`, then leaves the git index as it was, so a
 concurrent git command does not meet `.git/index.lock`.
 
+An index run records the workspace state that it observes before it
+reads any file, and it writes that record in the same transaction as
+the graph. A file that changes during the run therefore makes the next
+run, `check`, or MCP call rebuild, and the index never reads as current
+for content that it did not parse.
+
 ## How much can the answers be trusted?
 
 ```bash

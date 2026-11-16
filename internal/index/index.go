@@ -156,6 +156,11 @@ func buildRefusal(s ownership.State, d ownership.Decision) error {
 	}
 }
 
+// afterRead runs after the read loop and before the write when it is
+// not nil. Only tests set it: it is the one point where a test can change
+// a file after its read and before the run records the workspace state.
+var afterRead func()
+
 // Run executes a full indexing pass.
 func Run(opts Options) (*Summary, error) {
 	start := time.Now()
@@ -183,6 +188,13 @@ func Run(opts Options) (*Summary, error) {
 	decision := ownership.Decide(state.Facts)
 	refusal := buildRefusal(state, decision)
 
+	// The workspace state is observed before any file is read, and the
+	// run records this state. A file that changes during the run then
+	// makes the record differ from the workspace, so the next run
+	// rebuilds. A state observed after the reads would mark an older parse
+	// as current. The fast path compares the same observation.
+	observed := WorkspaceState(root)
+
 	// Fast path: an unchanged workspace needs no work. This makes
 	// "reindex whenever unsure" free (~30ms) for the CLI, and no-change
 	// saves free for the LSP server.
@@ -194,7 +206,7 @@ func Run(opts Options) (*Summary, error) {
 	switch {
 	case refusal != nil:
 		if !opts.Force && !opts.MoveRoot {
-			if sum := freshSummary(root, dbPath, start, store.OpenReadOnly, state, decision); sum != nil {
+			if sum := freshSummary(root, dbPath, observed, start, store.OpenReadOnly, state, decision); sum != nil {
 				if sum.Root != "" && !store.SameDirectory(sum.Root, root) {
 					sum.RootRoute = state.Route(decision.Route, ownership.SurfaceBuild)
 				}
@@ -205,7 +217,7 @@ func Run(opts Options) (*Summary, error) {
 
 		return nil, refusal
 	case !opts.Force && !opts.MoveRoot:
-		if sum := freshSummary(root, dbPath, start, store.Open, state, decision); sum != nil {
+		if sum := freshSummary(root, dbPath, observed, start, store.Open, state, decision); sum != nil {
 			return sum, nil
 		}
 	}
@@ -324,6 +336,10 @@ func Run(opts Options) (*Summary, error) {
 		}
 	}
 
+	if afterRead != nil {
+		afterRead()
+	}
+
 	// History is best-effort: a non-git workspace still gets a structure graph.
 	var decisions []model.Decision
 	var pairs []model.CoChange
@@ -346,6 +362,20 @@ func Run(opts Options) (*Summary, error) {
 	}
 
 	catalog, err := effects.Load(root)
+	if err != nil {
+		return nil, err
+	}
+
+	// The file-coverage summary is persisted so `seamark status` can
+	// report parser coverage long after this run's stdout is gone. A
+	// safety answer without coverage context is uninterpretable.
+	coverage, err := json.Marshal(map[string]int{
+		"files_seen":    sum.FilesSeen,
+		"files_parsed":  sum.FilesParsed,
+		"files_skipped": sum.FilesSkipped,
+		"files_deleted": sum.FilesDeleted,
+		"parse_errors":  sum.ParseErrors,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -387,37 +417,36 @@ func Run(opts Options) (*Summary, error) {
 			}
 		}
 
-		return tx.PruneParseCache(keep)
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// The file-coverage summary is persisted so `seamark status` can
-	// report parser coverage long after this run's stdout is gone. A
-	// safety answer without coverage context is uninterpretable.
-	coverage, err := json.Marshal(map[string]int{
-		"files_seen":    sum.FilesSeen,
-		"files_parsed":  sum.FilesParsed,
-		"files_skipped": sum.FilesSkipped,
-		"files_deleted": sum.FilesDeleted,
-		"parse_errors":  sum.ParseErrors,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	for k, v := range map[string]string{
-		store.MetaRepoRoot:          root,
-		store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
-		store.MetaIndexedState:      WorkspaceState(root),
-		store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
-		store.MetaParseCacheVersion: parseCacheVersion,
-		store.MetaIndexSummary:      string(coverage),
-	} {
-		if err := st.SetMeta(k, v); err != nil {
-			return nil, err
+		if err := tx.PruneParseCache(keep); err != nil {
+			return err
 		}
+
+		// The meta commits with the graph. A meta write after the commit
+		// could pair this graph with the workspace state of a concurrent
+		// run, and a newer state on an older graph reads as current.
+		for k, v := range map[string]string{
+			store.MetaRepoRoot:          root,
+			store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
+			store.MetaIndexedState:      observed,
+			store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
+			store.MetaParseCacheVersion: parseCacheVersion,
+			store.MetaIndexSummary:      string(coverage),
+		} {
+			if err := tx.SetMeta(k, v); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// A change during the run leaves the record behind the workspace, so
+	// the next run rebuilds. The note says why that run is not skipped.
+	if observed != "" && WorkspaceState(root) != observed {
+		logf("note: the workspace changed during indexing; the next run rebuilds")
 	}
 
 	if sum.Stats, err = st.Stats(); err != nil {
@@ -1103,17 +1132,17 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 
 // freshSummary returns a Skipped summary when the index at dbPath was
 // built from the current workspace state; nil when a rebuild is needed.
-// open is the opener of the database, so a caller decides whether an
-// older schema migrates. state and decision say whether a rebuild must
-// record root.
-func freshSummary(root, dbPath string, start time.Time, open func(string) (*store.Store, error),
+// current is the WorkspaceState that Run observed before its reads; a
+// rebuild records the same value. open is the opener of the database, so
+// a caller decides whether an older schema migrates. state and decision
+// say whether a rebuild must record root.
+func freshSummary(root, dbPath, current string, start time.Time, open func(string) (*store.Store, error),
 	state ownership.State, decision ownership.Decision,
 ) *Summary {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil
 	}
 
-	current := WorkspaceState(root)
 	if current == "" {
 		return nil // no cheap fingerprint without git: rebuild
 	}
