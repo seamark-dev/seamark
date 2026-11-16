@@ -149,8 +149,12 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string
 		// a real call site against them.
 		fmt.Fprintf(w, "\ncallers (0)  — none resolved\n")
 		fmt.Fprintf(w, "  a call by a method name that several methods share, or through a function value, gets no edge\n")
-		fmt.Fprintf(w, "  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares the method's directory nor imports its package\n")
-		fmt.Fprintf(w, "  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
+
+		// The Go rules say nothing about a symbol of another language.
+		if strings.HasSuffix(sym.File, ".go") {
+			fmt.Fprintf(w, "  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares the method's directory nor imports its package\n")
+			fmt.Fprintf(w, "  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
+		}
 	}
 
 	if len(callees) > 0 {

@@ -594,6 +594,11 @@ model-boundary delivery.
   module-level value stores its whole initializer as its signature, so
   one answer could run past 10 KB. The stored signature does not change,
   and `expand` still gives the source.
+- **`why` prints the Go caller rules only for Go symbols.** `why` on a
+  function or a method with no resolved caller prints the two lines that
+  start with `in Go` only when the file of the symbol is a Go file.
+  Every language keeps the first line, which names the rules of all
+  languages.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

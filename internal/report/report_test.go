@@ -2159,7 +2159,8 @@ func TestWhyOrdersMixedOriginTiers(t *testing.T) {
 
 // TestWhyNamesMissingCallers proves that why says so when a function or a
 // method has no resolved callers. Silence read as "nothing calls this",
-// but the index gives no edge to an ambiguous call.
+// but the index gives no edge to an ambiguous call. The Go rules print
+// only for a symbol in a Go file.
 func TestWhyNamesMissingCallers(t *testing.T) {
 	why := func(t *testing.T, target model.Symbol, callers []store.CallEdge) string {
 		t.Helper()
@@ -2191,6 +2192,27 @@ func TestWhyNamesMissingCallers(t *testing.T) {
 				"  a call by a method name that several methods share, or through a function value, gets no edge\n"+
 				"  in Go, a common method name (Close, Err, …) gets no edge from a file that neither shares the method's directory nor imports its package\n"+
 				"  in Go, a call whose operand starts at a package outside the repository, or to an unexported method of another directory, gets no edge\n")
+		})
+	}
+
+	// The Go rules are noise for another language, so a Python or a
+	// TypeScript symbol keeps only the language-neutral line.
+	for _, target := range []model.Symbol{
+		{
+			FQN: "app/jobs.run_audit", Name: "run_audit", Kind: model.KindFunction,
+			File: "app/jobs.py", Span: model.Span{StartLine: 3, EndLine: 9},
+		},
+		{
+			FQN: "web/src/api/client.Client.fetch", Name: "fetch", Kind: model.KindMethod,
+			File: "web/src/api/client.ts", Span: model.Span{StartLine: 11, EndLine: 15},
+		},
+	} {
+		t.Run(target.File+" gets no Go lines", func(t *testing.T) {
+			out := why(t, target, nil)
+
+			assert.Contains(t, out, "\ncallers (0)  — none resolved\n"+
+				"  a call by a method name that several methods share, or through a function value, gets no edge\n")
+			assert.NotContains(t, out, "in Go, ")
 		})
 	}
 
