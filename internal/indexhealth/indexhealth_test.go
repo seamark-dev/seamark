@@ -3,6 +3,7 @@ package indexhealth
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -36,6 +37,64 @@ func healthStore(t *testing.T) (st *store.Store, root string) {
 	return st, root
 }
 
+// thisVersion stands in for index.OtherVersion on an index that this
+// version built.
+func thisVersion(*store.Store) (bool, error) { return false, nil }
+
+// TestReadCallsStaleAnIndexOfAnotherVersion proves that an index of
+// another seamark version reads stale with its reason whatever its
+// fingerprint, and that Read then runs no git: a rebuild is due anyway.
+// A fingerprint mismatch of an index of this version keeps the reason of
+// a changed workspace.
+func TestReadCallsStaleAnIndexOfAnotherVersion(t *testing.T) {
+	st, root := healthStore(t)
+	require.NoError(t, st.SetMeta(store.MetaIndexedState, "fp-now"))
+
+	calls := 0
+	fingerprint := func(string) string {
+		calls++
+
+		return "fp-now"
+	}
+
+	other := func(*store.Store) (bool, error) { return true, nil }
+
+	h, err := Read(st, root, fingerprint, other)
+	require.NoError(t, err)
+	assert.Equal(t, FreshStale, h.Freshness, "a matching fingerprint does not make it current")
+	assert.Equal(t, StaleOtherVersion, h.StaleReason)
+	assert.Zero(t, calls, "no git run for an index that needs a rebuild")
+
+	h, err = Read(st, root, fingerprint, thisVersion)
+	require.NoError(t, err)
+	assert.Equal(t, FreshCurrent, h.Freshness)
+	assert.Empty(t, h.StaleReason, "only a stale index has a reason")
+
+	h, err = Read(st, root, func(string) string { return "fp-later" }, thisVersion)
+	require.NoError(t, err)
+	assert.Equal(t, FreshStale, h.Freshness)
+	assert.Equal(t, StaleWorkspaceChanged, h.StaleReason)
+
+	// A database with no fingerprint (outside git) also reads stale, so
+	// the version is never hidden behind unknown.
+	bare, bareRoot := healthStore(t)
+
+	h, err = Read(bare, bareRoot, fingerprint, other)
+	require.NoError(t, err)
+	assert.Equal(t, FreshStale, h.Freshness)
+	assert.Equal(t, StaleOtherVersion, h.StaleReason)
+}
+
+// TestReadReturnsTheVersionError proves that a failed version read is an
+// error, not a current index.
+func TestReadReturnsTheVersionError(t *testing.T) {
+	st, root := healthStore(t)
+
+	_, err := Read(st, root, func(string) string { return "" },
+		func(*store.Store) (bool, error) { return false, errors.New("version read failed") })
+	assert.ErrorContains(t, err, "version read failed")
+}
+
 // TestReadCallsTheFingerprintOnlyWhenOneIsRecorded proves that Read runs
 // git only for an index that records a fingerprint. orient pays for that
 // call on every request, so an index without one must not pay it.
@@ -51,7 +110,7 @@ func TestReadCallsTheFingerprintOnlyWhenOneIsRecorded(t *testing.T) {
 		return "fp-now"
 	}
 
-	h, err := Read(st, root, fingerprint)
+	h, err := Read(st, root, fingerprint, thisVersion)
 	require.NoError(t, err)
 	assert.Zero(t, calls, "no recorded fingerprint, no git run")
 	assert.Equal(t, FreshUnknown, h.Freshness)
@@ -64,7 +123,7 @@ func TestReadCallsTheFingerprintOnlyWhenOneIsRecorded(t *testing.T) {
 	require.NoError(t, st.SetMeta(store.MetaIndexSummary,
 		`{"files_seen":4,"files_parsed":3,"files_skipped":1,"parse_errors":0}`))
 
-	h, err = Read(st, root, fingerprint)
+	h, err = Read(st, root, fingerprint, thisVersion)
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls)
 	assert.Equal(t, FreshCurrent, h.Freshness)
@@ -78,7 +137,7 @@ func TestReadReturnsStoreErrors(t *testing.T) {
 	st, root := healthStore(t)
 	require.NoError(t, st.Close())
 
-	_, err := Read(st, root, func(string) string { return "" })
+	_, err := Read(st, root, func(string) string { return "" }, thisVersion)
 	assert.Error(t, err)
 }
 
@@ -105,7 +164,7 @@ func TestReadReturnsAnOriginCountError(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ro.Close() })
 
-	_, err = Read(ro, t.TempDir(), func(string) string { return "" })
+	_, err = Read(ro, t.TempDir(), func(string) string { return "" }, thisVersion)
 	assert.Error(t, err, "a failed origin count is not zero origins")
 }
 
@@ -138,7 +197,7 @@ func TestReadCountsOnlyCallEdges(t *testing.T) {
 		return nil
 	}))
 
-	h, err := Read(st, root, func(string) string { return "" })
+	h, err := Read(st, root, func(string) string { return "" }, thisVersion)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int{model.OriginSamePackage: 1}, h.EdgeOrigins)
 }

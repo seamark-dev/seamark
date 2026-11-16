@@ -2997,7 +2997,7 @@ func TestWorkspaceStateIgnoresGitConfig(t *testing.T) {
 			for i, set := range states {
 				set()
 
-				want[i] = WorkspaceState(root)
+				want[i] = WorkspaceState(root, "")
 				require.NotEmpty(t, want[i])
 			}
 
@@ -3020,7 +3020,7 @@ func TestWorkspaceStateIgnoresGitConfig(t *testing.T) {
 
 			for i, set := range states {
 				set()
-				assert.Equal(t, want[i], WorkspaceState(root), "state %d", i)
+				assert.Equal(t, want[i], WorkspaceState(root, ""), "state %d", i)
 			}
 
 			assert.NoFileExists(t, marker, "no external program runs")
@@ -3150,21 +3150,21 @@ func TestWorkspaceStateKeepsGitIndex(t *testing.T) {
 	root := gitIndexRepo(t)
 	touched := filepath.Join(root, "internal", "util", "util.go")
 
-	fingerprint := WorkspaceState(root)
+	fingerprint := WorkspaceState(root, "")
 	require.NotEmpty(t, fingerprint)
 
 	touchOlder(t, touched, 2*time.Hour)
 
 	before := readGitIndex(t, root)
 
-	assert.Equal(t, fingerprint, WorkspaceState(root), "a touch changes the fingerprint")
-	assert.Equal(t, fingerprint, WorkspaceState(root), "a second call changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a touch changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a second call changes the fingerprint")
 	assertGitIndexKept(t, root, before, "WorkspaceState")
 
 	// A plain git status refreshes the stat cache. The fingerprint stays,
 	// because only the output of git goes into it.
 	configGit(t, root, "status", "--porcelain")
-	assert.Equal(t, fingerprint, WorkspaceState(root), "a refreshed stat cache changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a refreshed stat cache changes the fingerprint")
 
 	// Controls: each plain command writes the index after a new touch, so
 	// the fixture can show the write that WorkspaceState avoids.
@@ -3579,6 +3579,56 @@ func main() {}
 	require.NoError(t, err, "a file that does not accept writes must not fail every run")
 	assert.True(t, readOnly.Skipped)
 	assert.True(t, readOnly.ReadOnly)
+}
+
+// TestOtherVersionReadsTheStoredParseCacheVersion proves the rule that
+// the readers which never rebuild share: an index of this version is not
+// another version, an aged one is, an index with a run and no stored
+// version (from before the version) is, and a database that no run
+// completed is not. A failed read is an error, not a current index.
+func TestOtherVersionReadsTheStoredParseCacheVersion(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+	sum, st := runIndex(t, root)
+
+	other, err := OtherVersion(st)
+	require.NoError(t, err)
+	assert.False(t, other, "a run of this binary")
+
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "2"))
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.True(t, other, "an index of an older parser")
+
+	db, err := sql.Open("sqlite", sum.DBPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, store.MetaParseCacheVersion)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.True(t, other, "a run from before the version was stored")
+
+	_, err = Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.False(t, other, "the rebuild records this version")
+
+	empty, err := store.Open(filepath.Join(t.TempDir(), "index.db"))
+	require.NoError(t, err)
+
+	other, err = OtherVersion(empty)
+	require.NoError(t, err)
+	assert.False(t, other, "no completed run, nothing to compare")
+
+	require.NoError(t, empty.Close())
+
+	_, err = OtherVersion(empty)
+	assert.Error(t, err, "a failed read is not a current index")
 }
 
 // TestClassBodyCallsBelongToTheClassOnly proves that a call in a class body

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -150,4 +151,103 @@ func TestIndexOlderRunCommittingLastRebuildsNextRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, next.Skipped, "an older graph must not read as current")
 	assert.Equal(t, []string{"internal/util.Raced"}, racedSymbols(t, outer.DBPath))
+}
+
+// TestIndexOwnDatabaseInTheWorkspaceKeepsTheSkip covers a database that
+// is an untracked file inside the workspace, as with --db ./custom.db.
+// The fingerprint hashed its size and mtime, and every run writes it, so
+// every run rebuilt and logged that the workspace changed during
+// indexing, an edit that the user never made. The fingerprint leaves the
+// file and its sidecars out now: the run logs no such note, the second
+// run skips, and a reader that passes the file it reads computes the
+// stored fingerprint. A real edit beside the database still rebuilds.
+func TestIndexOwnDatabaseInTheWorkspaceKeepsTheSkip(t *testing.T) {
+	cases := map[string]struct {
+		rel   string // the database, relative to the root
+		other string // an untracked file beside it that the fingerprint keeps, or ""
+	}{
+		"a file at the root":                     {rel: "custom.db"},
+		"a directory that the first run creates": {rel: "state/custom.db"},
+		"a file beside an untracked file":        {rel: "notes/custom.db", other: "notes/todo.txt"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			// The fingerprint hashes the absolute path of an untracked file,
+			// so the test uses the resolved root, as Run does.
+			root, err := filepath.EvalSymlinks(racedRepo(t))
+			require.NoError(t, err)
+
+			db := filepath.Join(root, filepath.FromSlash(c.rel))
+
+			if c.other != "" {
+				require.NoError(t, os.MkdirAll(filepath.Dir(db), 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(root, filepath.FromSlash(c.other)), []byte("todo\n"), 0o644))
+			}
+
+			var logs []string
+
+			logf := func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
+
+			first, err := Run(Options{Root: root, DBPath: db, Logf: logf})
+			require.NoError(t, err)
+			require.False(t, first.Skipped)
+
+			second, err := Run(Options{Root: root, DBPath: db, Logf: logf})
+			require.NoError(t, err)
+			assert.True(t, second.Skipped, "the run's own database is no change of the workspace")
+			assert.NotContains(t, logs, racedNote)
+
+			st, err := store.OpenReadOnly(db)
+			require.NoError(t, err)
+
+			stored, err := st.GetMeta(store.MetaIndexedState)
+			require.NoError(t, err)
+			assert.Equal(t, stored, WorkspaceState(root, st.Path()), "a reader computes the stored fingerprint")
+			assert.NotEqual(t, stored, WorkspaceState(root, ""), "the database is in the git listing")
+			require.NoError(t, st.Close())
+
+			if c.other != "" {
+				// The mtime moves, so the file beside the database changes.
+				later := time.Now().Add(time.Hour)
+				require.NoError(t, os.Chtimes(filepath.Join(root, filepath.FromSlash(c.other)), later, later))
+
+				third, err := Run(Options{Root: root, DBPath: db})
+				require.NoError(t, err)
+				assert.False(t, third.Skipped, "an untracked file beside the database still counts")
+			}
+
+			addRacedFunc(t, root)
+
+			edited, err := Run(Options{Root: root, DBPath: db, Logf: logf})
+			require.NoError(t, err)
+			assert.False(t, edited.Skipped, "an edit still rebuilds")
+			assert.Equal(t, []string{"internal/util.Raced"}, racedSymbols(t, db))
+			assert.NotContains(t, logs, racedNote)
+		})
+	}
+}
+
+// TestWorkspaceStateKeepsOtherDatabases bounds the rule. The default
+// database lies under .seamark, which the fingerprint leaves out already,
+// and a database outside the workspace is not in the git listing. Both
+// keep the fingerprint of a call that names no database.
+func TestWorkspaceStateKeepsOtherDatabases(t *testing.T) {
+	root, err := filepath.EvalSymlinks(racedRepo(t))
+	require.NoError(t, err)
+
+	sum, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	require.Equal(t, store.DefaultPath(root), sum.DBPath)
+
+	outside := filepath.Join(t.TempDir(), "outside.db")
+	_, err = Run(Options{Root: root, DBPath: outside})
+	require.NoError(t, err)
+
+	plain := WorkspaceState(root, "")
+	require.NotEmpty(t, plain)
+	assert.Equal(t, plain, WorkspaceState(root, store.DefaultPath(root)))
+	assert.Equal(t, plain, WorkspaceState(root, outside))
+	assert.Nil(t, ownFiles(root, store.DefaultPath(root)))
+	assert.Nil(t, ownFiles(root, outside))
 }

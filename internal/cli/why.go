@@ -63,21 +63,28 @@ func newOrientCmd(opts *options) *cobra.Command {
 	}
 }
 
-// staleNote warns when the workspace changed since the index was built —
-// answers from a stale graph should never look authoritative. root is the
-// root that the index records, and ws is the workspace of the command.
+// staleNote warns when the workspace changed since the index was built,
+// or when another seamark version built it — answers from a stale graph
+// should never look authoritative. root is the root that the index
+// records, and ws is the workspace of the command. These commands never
+// rebuild, so an index of another version stays old until an index run.
 func staleNote(w io.Writer, st *store.Store, root string, ws workspace.Workspace) {
-	indexed, err := st.GetMeta(store.MetaIndexedState)
-	if err != nil || indexed == "" {
-		return
-	}
+	what, route := "this index was built by another seamark version", "run `seamark index` to rebuild it"
 
-	current := index.WorkspaceState(root)
-	if current == "" || current == indexed {
-		return
-	}
+	// A failed version read says nothing, so the fingerprint decides.
+	if other, err := index.OtherVersion(st); err != nil || !other {
+		indexed, err := st.GetMeta(store.MetaIndexedState)
+		if err != nil || indexed == "" {
+			return
+		}
 
-	route := "run `seamark index` to refresh"
+		current := index.WorkspaceState(root, st.Path())
+		if current == "" || current == indexed {
+			return
+		}
+
+		what, route = "the workspace changed since the last index", "run `seamark index` to refresh"
+	}
 
 	// Only an index of another root can refuse a build here, and a plain
 	// index run would then fail. So the note names the route of that
@@ -88,5 +95,5 @@ func staleNote(w io.Writer, st *store.Store, root string, ws workspace.Workspace
 		}
 	}
 
-	fmt.Fprintln(w, "note: the workspace changed since the last index — "+route)
+	fmt.Fprintln(w, "note: "+what+" — "+route)
 }

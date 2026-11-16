@@ -41,6 +41,12 @@ const (
 	FreshUnknown = indexhealth.FreshUnknown
 )
 
+// Stale reasons: why a stale index is stale.
+const (
+	StaleWorkspaceChanged = indexhealth.StaleWorkspaceChanged
+	StaleOtherVersion     = indexhealth.StaleOtherVersion
+)
+
 // Status is the gathered health report, JSON-ready.
 type Status struct {
 	// RecordedRoot is the root that the index records, set only when it
@@ -55,10 +61,14 @@ type Status struct {
 	// build in the workspace is refused, because that run would fail.
 	staleRoute string
 
-	SchemaVersion string   `json:"schema_version"`
-	IndexedAt     int64    `json:"indexed_at,omitempty"`
-	Freshness     string   `json:"freshness"`
-	Coverage      Coverage `json:"coverage"`
+	SchemaVersion string `json:"schema_version"`
+	IndexedAt     int64  `json:"indexed_at,omitempty"`
+	Freshness     string `json:"freshness"`
+	// StaleReason says why a stale index is stale (indexhealth
+	// StaleWorkspaceChanged or StaleOtherVersion). Any other freshness
+	// leaves it out, so the JSON of a current index keeps its bytes.
+	StaleReason string   `json:"stale_reason,omitempty"`
+	Coverage    Coverage `json:"coverage"`
 
 	Symbols     int            `json:"symbols"`
 	Edges       int            `json:"edges"`
@@ -157,7 +167,10 @@ func gatherAs(reg *integration.Registry, st *store.Store, root string,
 	// The shared reader gives the facts that orient also shows. A
 	// recorded fingerprint decides the freshness; without one it stays
 	// unknown, because a non-git workspace has no change signal.
-	health, err := indexhealth.Read(st, root, index.WorkspaceState)
+	// The fingerprint leaves out the files of the database that st reads,
+	// as the index run did when it stored its fingerprint.
+	health, err := indexhealth.Read(st, root, func(root string) string { return index.WorkspaceState(root, st.Path()) },
+		index.OtherVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -165,6 +178,7 @@ func gatherAs(reg *integration.Registry, st *store.Store, root string,
 	s := &Status{
 		IndexedAt:   health.IndexedAt,
 		Freshness:   health.Freshness,
+		StaleReason: health.StaleReason,
 		Coverage:    health.Coverage,
 		EdgeOrigins: health.EdgeOrigins,
 	}
@@ -325,12 +339,21 @@ func Print(w io.Writer, s *Status) {
 	}
 
 	fresh := s.Freshness
-	switch {
-	case s.Freshness == FreshStale && s.staleRoute != "":
-		fresh = "STALE — " + s.staleRoute
-	case s.Freshness == FreshStale:
-		fresh = "STALE — run `seamark index`"
-	case s.Freshness == FreshUnknown:
+	switch s.Freshness {
+	case FreshStale:
+		route := "run `seamark index`"
+		if s.staleRoute != "" {
+			route = s.staleRoute
+		}
+
+		// The index of another version can match the workspace, so the
+		// line names the reason: a reader would otherwise find nothing
+		// changed.
+		fresh = "STALE — " + route
+		if s.StaleReason == StaleOtherVersion {
+			fresh = "STALE — this index was built by another seamark version; " + route
+		}
+	case FreshUnknown:
 		fresh = "freshness unknown (no git fingerprint) — reindex when in doubt"
 	}
 

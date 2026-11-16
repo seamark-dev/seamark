@@ -481,7 +481,12 @@ model-boundary delivery.
   reach. A Go `const` initializer and a function value without a call
   still get no edge. An index built by an older version is rebuilt once
   by the next index run or MCP call, except a database file that does
-  not accept writes.
+  not accept writes. A workspace that reads the database of another
+  repository, such as a sibling worktree started with `--db`, does not
+  rebuild it: `check` refuses with ``run `seamark index` in <root>`` and
+  MCP reads open with the `did not refresh` note until that root has
+  been indexed once with the new version, so run `seamark index` there
+  once.
 - **`why` says that a caller list can be incomplete.** The header of a
   non-empty caller list of a function or a method now ends with `can be
   incomplete: a call through a function value or a shared method name
@@ -551,6 +556,33 @@ model-boundary delivery.
   `lessons --prepare` finds the index behind the workspace. `mined_root`
   names the repository that the index of a `change_set` call records
   when it is another one. Both text forms say it in one line.
+- **A database inside the workspace no longer forces a rebuild on every
+  run.** With `--db ./custom.db` as an untracked file, the freshness
+  fingerprint included the file that every run writes. So every run
+  rebuilt, logged that the workspace changed during indexing, and
+  `status` and `why` called the index stale. The fingerprint now leaves
+  out a database file inside the workspace (outside `.seamark`) and its
+  SQLite sidecars, so the second run skips. The default database and a
+  database outside the workspace keep their fingerprint.
+- **MCP names the root of a read-only index of another checkout.** A
+  copied or moved checkout whose database does not accept writes keeps
+  its skip, because a rebuild would fail. Its MCP answers opened with no
+  note, although `orient` and `seamark://status` named the other root.
+  Every MCP answer from such an index now opens with the note that names
+  the recorded root, as for a sibling worktree at one commit. With
+  `lesson_checks`, that note is the first line of the `check` answer,
+  and the `combined:` line follows it.
+- **The CLI readers call an index of another seamark version stale.**
+  `seamark status`, `orient`, `why`, `report`, `lessons --prepare`, the
+  HTML report and the console overview now treat an index whose stored
+  parser version differs from the one of this binary as stale, also when
+  the workspace is unchanged. Before, after an upgrade they labelled old
+  answers current until something ran an index. The status line and the
+  read notes say that another seamark version built the index and name
+  `seamark index`, or the route of a database that records another
+  repository. `status --json` keeps `"freshness": "stale"` and adds
+  `stale_reason` (`other-version` or `workspace-changed`), and the
+  preparation document adds `mined_stale_reason`.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

@@ -55,6 +55,9 @@ type Report struct {
 	IndexState string
 	Generated  string
 	Stale      bool
+	// OtherVersion is true when another seamark version built the index.
+	// Stale is then true too, and the warning names that reason.
+	OtherVersion bool
 
 	Stats   []Stat
 	Sources string // the evidence mix behind every proposal
@@ -310,7 +313,11 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 	}
 
 	state, _ := st.GetMeta(store.MetaIndexedState)
-	current := index.WorkspaceState(root)
+	current := index.WorkspaceState(root, st.Path())
+
+	// An index of another version can match the workspace and still lack
+	// facts, so it is stale too. A failed read is no evidence of it.
+	other, _ := index.OtherVersion(st)
 
 	r := &Report{
 		Repo:       repoName(root),
@@ -319,7 +326,8 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		// A report that outlives the terminal it was generated from
 		// must carry its own freshness warning: unreadable state is not
 		// evidence of staleness, so an unknown current state stays quiet.
-		Stale:            state != "" && current != "" && current != state,
+		Stale:            other || (state != "" && current != "" && current != state),
+		OtherVersion:     other,
 		Sources:          sourceMix(findings),
 		MapWidth:         mapWidth,
 		MapHeight:        mapHeight,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -208,7 +209,8 @@ func TestGatherAgreesWithTheSharedReader(t *testing.T) {
 	s, err := Gather(st, root)
 	require.NoError(t, err)
 
-	h, err := indexhealth.Read(st, root, index.WorkspaceState)
+	h, err := indexhealth.Read(st, root, func(root string) string { return index.WorkspaceState(root, st.Path()) },
+		index.OtherVersion)
 	require.NoError(t, err)
 
 	assert.Equal(t, h.Coverage, s.Coverage)
@@ -216,6 +218,76 @@ func TestGatherAgreesWithTheSharedReader(t *testing.T) {
 	assert.Equal(t, h.Freshness, s.Freshness)
 	assert.Equal(t, FreshStale, s.Freshness)
 	assert.Equal(t, h.EdgeOrigins, s.EdgeOrigins)
+}
+
+// TestGatherCallsAnIndexOfAnotherVersionStale proves that status calls an
+// index that another seamark version built stale with its reason, also
+// when the workspace fingerprint matches, and names the rebuild: the text
+// line and the JSON stale_reason. A database that records another
+// repository keeps the route of that state. After an index run status
+// reads current, and the JSON has no reason.
+func TestGatherCallsAnIndexOfAnotherVersionStale(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n\nfunc A() {}\n"), 0o644))
+	gitInit(t, root)
+
+	sum, err := index.Run(index.Options{Root: root})
+	require.NoError(t, err)
+
+	st, err := store.Open(sum.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "2"))
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, FreshStale, s.Freshness)
+	assert.Equal(t, StaleOtherVersion, s.StaleReason)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.True(t, strings.HasPrefix(b.String(),
+		"workspace      STALE — this index was built by another seamark version; run `seamark index` (schema v"), b.String())
+
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"freshness":"stale","stale_reason":"other-version"`)
+
+	s.staleRoute = "run `seamark index` in /srv/origin"
+	b.Reset()
+	Print(&b, s)
+	assert.True(t, strings.HasPrefix(b.String(), "workspace      STALE — this index was built by another seamark version; "+
+		"run `seamark index` in /srv/origin (schema v"), b.String())
+
+	_, err = index.Run(index.Options{Root: root})
+	require.NoError(t, err)
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, FreshCurrent, s.Freshness)
+	assert.Empty(t, s.StaleReason)
+
+	data, err = json.Marshal(s)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "stale_reason", "a current index keeps its JSON")
+}
+
+// gitInit makes root a git repository with one commit of its files, so
+// an index run records a fingerprint.
+func gitInit(t *testing.T, root string) {
+	t.Helper()
+
+	for _, args := range [][]string{{"init", "-b", "main"}, {"add", "-A"}, {"commit", "-m", "initial"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
 }
 
 func TestGatherReadsTheDeletedCount(t *testing.T) {

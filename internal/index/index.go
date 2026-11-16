@@ -215,7 +215,7 @@ func Run(opts Options) (*Summary, error) {
 	// makes the record differ from the workspace, so the next run
 	// rebuilds. A state observed after the reads would mark an older parse
 	// as current. The fast path compares the same observation.
-	observed := WorkspaceState(root)
+	observed := WorkspaceState(root, dbPath)
 
 	// Fast path: an unchanged workspace needs no work. This makes
 	// "reindex whenever unsure" free (~30ms) for the CLI, and no-change
@@ -471,7 +471,7 @@ func Run(opts Options) (*Summary, error) {
 
 	// A change during the run leaves the record behind the workspace, so
 	// the next run rebuilds. The note says why that run is not skipped.
-	if observed != "" && WorkspaceState(root) != observed {
+	if observed != "" && WorkspaceState(root, dbPath) != observed {
 		logf("note: the workspace changed during indexing; the next run rebuilds")
 	}
 
@@ -501,6 +501,31 @@ func Run(opts Options) (*Summary, error) {
 // blob decodes with no calls on these symbols, so their edges and effects
 // would stay missing. freshSummary rebuilds an index of another version.
 const parseCacheVersion = "3"
+
+// OtherVersion reports an index that another seamark version built: the
+// parse cache version of its last run is not the one of this binary, so
+// the index can lack facts that this binary records. The readers that
+// never rebuild ask it, so such an index does not read as current. A
+// database with a completed run and no stored version predates the
+// version, so it counts as another version. A database that no run
+// completed has nothing to compare. A current index costs one meta read.
+func OtherVersion(st *store.Store) (bool, error) {
+	v, err := st.GetMeta(store.MetaParseCacheVersion)
+	if err != nil || v == parseCacheVersion {
+		return false, err
+	}
+
+	if v != "" {
+		return true, nil
+	}
+
+	indexedAt, err := st.GetMeta(store.MetaIndexedAt)
+	if err != nil {
+		return false, err
+	}
+
+	return indexedAt != "", nil
+}
 
 // loadParseCache returns the stored per-file parse cache, or an empty map
 // when forced, version-stale, or unreadable — every one of which just
@@ -1284,10 +1309,17 @@ func sameSpelling(recorded, root string) bool {
 // index is current. "" when git is unavailable — there is no cheap
 // fingerprint without it.
 //
+// db is the database file that the index lives in. A run writes it and
+// its SQLite sidecars, so a file of the database that lies in the
+// workspace would change the fingerprint that the run just stored, and
+// every run would rebuild. The fingerprint leaves those files out (see
+// ownFiles). Every reader passes the file that it reads (store.Path), so
+// it computes what Run stored. "" leaves nothing out.
+//
 // Each git call runs with history.ReadOnlyGitEnviron. Without it, git
 // status and git diff rewrite .git/index after a touch, and a concurrent
 // git command of the user can then fail on .git/index.lock.
-func WorkspaceState(root string) string {
+func WorkspaceState(root, db string) string {
 	gitOut := func(args ...string) ([]byte, bool) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
@@ -1308,17 +1340,26 @@ func WorkspaceState(root string) string {
 	// just stored and every workspace would look permanently stale.
 	const exclSeamark = ":(exclude).seamark"
 
+	own := ownFiles(root, db)
+	specs := []string{"--", ".", exclSeamark}
+	skip := map[string]bool{}
+
+	for _, rel := range own {
+		specs = append(specs, ":(exclude,literal)"+rel)
+		skip[filepath.Join(root, filepath.FromSlash(rel))] = true
+	}
+
 	// --untracked-files=normal is the git default. It keeps
 	// status.showUntrackedFiles=no from hiding a new file, so a new file
 	// still changes the fingerprint.
-	status, ok := gitOut("status", "--porcelain", "-z", "--untracked-files=normal", "--", ".", exclSeamark)
+	status, ok := gitOut(append([]string{"status", "--porcelain", "-z", "--untracked-files=normal"}, specs...)...)
 	if !ok {
 		return ""
 	}
 
 	// ParsedGitArgs keeps an external diff or a textconv driver from
 	// writing a constant text, which leaves a second edit unseen.
-	diff, ok := gitOut(history.ParsedGitArgs("diff", "HEAD", "--", ".", exclSeamark)...)
+	diff, ok := gitOut(history.ParsedGitArgs("diff", append([]string{"HEAD"}, specs...)...)...)
 	if !ok {
 		return ""
 	}
@@ -1347,15 +1388,78 @@ func WorkspaceState(root string) string {
 			continue
 		}
 
-		statInto(h, filepath.Join(root, filepath.FromSlash(entry[3:])), &budget)
+		statInto(h, filepath.Join(root, filepath.FromSlash(entry[3:])), &budget, skip)
 	}
 
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
+// ownFiles returns the workspace paths, slash-separated, of the database
+// db and its SQLite sidecars when db lies in root outside .seamark, else
+// nil. .seamark is left out already, so the default database keeps its
+// fingerprint byte for byte. The directory of db resolves its links, as
+// the root does, and the name stays as given, because git lists a link by
+// its own name. A directory that does not exist yet resolves through its
+// nearest parent, because the first run creates it.
+func ownFiles(root, db string) []string {
+	if db == "" {
+		return nil
+	}
+
+	db = store.AbsolutePath(db)
+
+	top, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
+
+	dir, ok := resolveDir(filepath.Dir(db))
+	if !ok {
+		return nil
+	}
+
+	rel, err := filepath.Rel(top, filepath.Join(dir, filepath.Base(db)))
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil
+	}
+
+	rel = filepath.ToSlash(rel)
+	if first, _, _ := strings.Cut(rel, "/"); first == store.DefaultDir {
+		return nil
+	}
+
+	return []string{rel, rel + "-wal", rel + "-shm", rel + "-journal"}
+}
+
+// resolveDir resolves the links of dir. A part that does not exist is
+// kept as written below its nearest parent that does.
+func resolveDir(dir string) (string, bool) {
+	rest := ""
+
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, rest), true
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
+}
+
 // statInto hashes a content proxy (path, size, mtime) for an untracked
-// file, or every file under an untracked directory.
-func statInto(h io.Writer, p string, budget *int) {
+// file, or every file under an untracked directory. A path in skip is
+// left out: git still lists an untracked directory that holds a file of
+// the database beside other files.
+func statInto(h io.Writer, p string, budget *int, skip map[string]bool) {
+	if skip[p] {
+		return
+	}
+
 	info, err := os.Stat(p)
 	if err != nil {
 		return
@@ -1373,7 +1477,7 @@ func statInto(h io.Writer, p string, budget *int) {
 			return filepath.SkipAll
 		}
 
-		if d.IsDir() {
+		if d.IsDir() || skip[fp] {
 			return nil
 		}
 

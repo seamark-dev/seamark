@@ -192,6 +192,24 @@ route of that state instead, for example
 `seamark orient`, and `seamark report` does the same. A database of
 this workspace keeps ``STALE — run `seamark index` ``.
 
+An index that another seamark version built can lack facts that this
+version records, such as the calls inside package-level values, also
+when the workspace is unchanged. `seamark index`, `seamark check`, and
+every MCP call rebuild it once. The readers that never rebuild call it
+stale and say why: the `workspace` line reads
+``STALE — this index was built by another seamark version; run `seamark index` ``,
+`--json` keeps `"freshness": "stale"` and adds
+`"stale_reason": "other-version"` (a changed workspace gives
+`"workspace-changed"`; any other freshness has no key), the `orient`
+health line reads `freshness stale (this index was built by another
+seamark version)`, and `why`, `orient`, and `report` print
+``note: this index was built by another seamark version — run `seamark index` to rebuild it``.
+The HTML report and the console overview say the same, and
+`lessons --prepare` qualifies its mined lessons with it. A database that
+records another repository keeps the route of that state on both lines.
+An index from before seamark stored its parser version counts as
+another version.
+
 The MCP server never rebuilds an index that records another repository.
 Every read answer (`orient`, `why`, `expand`, `change_set` with its
 `change_set_report` key, and both resources) then opens with one note
@@ -200,7 +218,10 @@ that names that root:
 - When the workspace fingerprint matches the index, as in a sibling
   worktree at the same commit, the note is
   `note: this index records another repository (<root>); it matches this workspace now, and this answer describes <root>.`
-  `check` keeps its verdict and opens with the same note.
+  A copied or moved checkout whose database file does not accept writes
+  gets the same note: the server keeps the skip there, because a rebuild
+  would fail. `check` keeps its verdict and opens with the same note,
+  also with `lesson_checks`, where the `combined:` line follows the note.
 - When the fingerprints differ, the refresh is refused, and the note is
   `note: seamark did not refresh this index, because it records another repository (<root>) and a rebuild here would move its root; this answer describes <root> and can differ from this workspace.`
   The answer can hold symbols and effects that this workspace does not
@@ -326,7 +347,13 @@ table in [Data flow](data-flow.md).
   type declares no call, so a struct needs no such rule.
   An index built before this rule is rebuilt once by the next index run
   or MCP call, also on an unchanged workspace; a database file that does
-  not accept writes keeps its old edges.
+  not accept writes keeps its old edges. A workspace that reads the
+  database of another repository, such as a sibling worktree started
+  with `--db`, does not rebuild it: `seamark check` refuses with
+  ``this database records another repository … run `seamark index` in <root>``,
+  and MCP reads open with the `did not refresh` note, until that root has
+  been indexed once with the new version. Run `seamark index` in the
+  recorded root once.
 - A local variable shadowing an import alias can produce a wrong edge
   (declared as such via its origin label). Scope tracking is future work.
 - Python's DB-API has no syntactic read/write split, so `cursor.execute`

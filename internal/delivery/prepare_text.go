@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/report"
@@ -122,7 +123,11 @@ func minedIndexText(g Guidance) string {
 	case MinedNotRefreshed:
 		parts = append(parts, "was not refreshed for this call")
 	case MinedStale:
-		parts = append(parts, "does not match the workspace now (`seamark index` refreshes it)")
+		if g.MinedStaleReason == indexhealth.StaleOtherVersion {
+			parts = append(parts, "was built by another seamark version (`seamark index` rebuilds it)")
+		} else {
+			parts = append(parts, "does not match the workspace now (`seamark index` refreshes it)")
+		}
 	}
 
 	if g.MinedRoot != "" {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -154,6 +155,9 @@ type PrepareRequest struct {
 	// MinedFreshness is "", MinedNotRefreshed, or MinedStale. Only the
 	// caller refreshes or probes the index, so only the caller knows it.
 	MinedFreshness string
+	// MinedStaleReason says why a MinedStale index is stale: "",
+	// indexhealth.StaleWorkspaceChanged, or indexhealth.StaleOtherVersion.
+	MinedStaleReason string
 	// MinedRoot is the root that the index records when that root is
 	// another repository than Root, else "".
 	MinedRoot string
@@ -240,7 +244,10 @@ type Guidance struct {
 	// MinedFreshness and MinedRoot qualify a mined status ok. Each is
 	// absent when the index is current and records this workspace.
 	MinedFreshness string `json:"mined_freshness,omitempty"`
-	MinedRoot      string `json:"mined_root,omitempty"`
+	// MinedStaleReason says why a stale index is stale, in the words of
+	// status --json stale_reason. It is absent for any other freshness.
+	MinedStaleReason string `json:"mined_stale_reason,omitempty"`
+	MinedRoot        string `json:"mined_root,omitempty"`
 }
 
 // PreparedPin is one selected pin with its exact version.
@@ -327,7 +334,7 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 		return nil, fmt.Errorf("delivery: unknown mined status %q", mined)
 	}
 
-	freshness, minedRoot, err := minedIndexOf(req, mined)
+	freshness, reason, minedRoot, err := minedIndexOf(req, mined)
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +363,7 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 		Guidance: Guidance{
 			Status: status, GuidanceSHA256: digest, Budget: cfg.ChangeSetBudget(),
 			MinedStatus: mined, ChecksStatus: checksStatus, ChecksError: checksError,
-			MinedFreshness: freshness, MinedRoot: minedRoot,
+			MinedFreshness: freshness, MinedStaleReason: reason, MinedRoot: minedRoot,
 		},
 		Pins:    []PreparedPin{},
 		Lessons: []PreparedLesson{},
@@ -448,21 +455,30 @@ func (p *Preparation) Record() {
 	p.EventID = ev.EventID
 }
 
-// minedIndexOf returns the freshness and the recorded root of the index
-// behind the mined lessons. Without mined lessons there is nothing to
-// qualify, so both stay empty unless the mined status is ok.
-func minedIndexOf(req PrepareRequest, mined string) (freshness, root string, err error) {
+// minedIndexOf returns the freshness, its stale reason, and the recorded
+// root of the index behind the mined lessons. Without mined lessons there
+// is nothing to qualify, so all stay empty unless the mined status is ok.
+// A reason qualifies only a stale index.
+func minedIndexOf(req PrepareRequest, mined string) (freshness, reason, root string, err error) {
 	switch req.MinedFreshness {
 	case "", MinedNotRefreshed, MinedStale:
 	default:
-		return "", "", fmt.Errorf("delivery: unknown mined freshness %q", req.MinedFreshness)
+		return "", "", "", fmt.Errorf("delivery: unknown mined freshness %q", req.MinedFreshness)
+	}
+
+	switch {
+	case req.MinedStaleReason == "":
+	case req.MinedFreshness != MinedStale:
+		return "", "", "", errors.New("delivery: a mined stale reason needs the mined freshness stale")
+	case req.MinedStaleReason != indexhealth.StaleWorkspaceChanged && req.MinedStaleReason != indexhealth.StaleOtherVersion:
+		return "", "", "", fmt.Errorf("delivery: unknown mined stale reason %q", req.MinedStaleReason)
 	}
 
 	if mined != MinedOK {
-		return "", "", nil
+		return "", "", "", nil
 	}
 
-	return req.MinedFreshness, render.Sanitize(req.MinedRoot), nil
+	return req.MinedFreshness, req.MinedStaleReason, render.Sanitize(req.MinedRoot), nil
 }
 
 // preparationConfig returns the configuration of the selection and its

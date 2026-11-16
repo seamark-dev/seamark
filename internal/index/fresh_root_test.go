@@ -91,7 +91,7 @@ func TestRunRebuildsADefaultDatabaseOfAnotherRoot(t *testing.T) {
 		origin := indexedRepo(t)
 		dst := copyOf(t, origin)
 
-		require.Equal(t, WorkspaceState(origin), WorkspaceState(dst), "the fingerprint cannot tell the two apart")
+		require.Equal(t, WorkspaceState(origin, ""), WorkspaceState(dst, ""), "the fingerprint cannot tell the two apart")
 		require.Equal(t, origin, recordedRoot(t, store.DefaultPath(dst)))
 
 		built, err := Run(Options{Root: dst})
@@ -192,7 +192,7 @@ func TestRunUnderAnotherDatabaseKeepsItsRules(t *testing.T) {
 	t.Run("one fingerprint skips and keeps the root", func(t *testing.T) {
 		root := indexedRepo(t)
 		side := sibling(t, root)
-		require.Equal(t, WorkspaceState(root), WorkspaceState(side))
+		require.Equal(t, WorkspaceState(root, ""), WorkspaceState(side, ""))
 
 		sum, err := Run(Options{Root: side, DBPath: store.DefaultPath(root)})
 		require.NoError(t, err)

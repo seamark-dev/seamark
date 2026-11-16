@@ -72,7 +72,9 @@ excludes bulk refactors from co-change (default 30). Every command
 takes `-C <dir>` to name the workspace and `--db <path>` to override
 the index location; `status`, `doctor`, `gate`, `check`, and
 `lessons` with `--verify`, `--prepare`, or `--delivery` speak `--json`
-for machines. `gate`, `check`, and `index` refuse a `-C` that
+for machines. A `--db` file inside the workspace and its SQLite sidecars
+stay out of the freshness fingerprint, because every index run writes
+them, so an untracked `./custom.db` does not make the next run rebuild. `gate`, `check`, and `index` refuse a `-C` that
 names no directory with `workspace <path>: not a directory` or `no such
 file or directory`, and the gate blocks it under `--enforce`.
 

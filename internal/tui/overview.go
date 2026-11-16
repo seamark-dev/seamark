@@ -136,6 +136,10 @@ func (o *overview) banner(w int) (string, bool) {
 	t := o.st.theme
 
 	msg := "The workspace changed since the last build"
+	if o.st.index.value.Status.StaleReason == status.StaleOtherVersion {
+		msg = "Another seamark version built it"
+	}
+
 	if at := ovIndexedAt(o.st.index.value); at > 0 {
 		msg += " " + ovAge(at, time.Now())
 	}

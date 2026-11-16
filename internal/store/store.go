@@ -49,6 +49,8 @@ const DefaultDBName = "index.db"
 // Store wraps the SQLite index database.
 type Store struct {
 	db *sql.DB
+	// path is the file that the store opened, or "" in memory.
+	path string
 }
 
 // AbsolutePath returns the absolute form of a database path that names the
@@ -196,8 +198,15 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: create index dir: %w", err)
 	}
 
-	return openSchema(dsn(path,
+	st, err := openSchema(dsn(path,
 		"_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"), path)
+	if err != nil {
+		return nil, err
+	}
+
+	st.path = path
+
+	return st, nil
 }
 
 // OpenMemory opens an empty index in memory and writes no file. The
@@ -288,11 +297,17 @@ func OpenReadOnly(path string) (*Store, error) {
 			stored, schemaVersion)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, path: path}, nil
 }
 
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
+
+// Path returns the file that the store opened, as the opener named it, or
+// "" for a store in memory. A reader passes it to the workspace
+// fingerprint, which leaves out the files of the database that a run
+// writes, so the reader computes the fingerprint that the run stored.
+func (s *Store) Path() string { return s.path }
 
 // MetaSchemaVersion is the meta key of the schema version of the
 // database. Open refuses a newer version and writes the current one
