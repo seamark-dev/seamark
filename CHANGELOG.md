@@ -528,6 +528,12 @@ model-boundary delivery.
   diff names files outside the verified snapshot, a note under the
   combined line lists them, and `check-lessons/1` lists them in
   `combined.diff_paths_outside_snapshot`.
+- **`change_set` prints each co-change partner once.** A partner in the
+  closing `history suggests also reviewing` list is no longer repeated
+  in the lines of its file. Its closing line now carries the N/M counts
+  and the lift beside the `mostly` and last-fix lines. The lines of a
+  file keep the other planned files and the partners past the cap of the
+  closing list. The `check` output does not change.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

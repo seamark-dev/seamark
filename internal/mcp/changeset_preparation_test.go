@@ -123,15 +123,16 @@ func changeSetPrepFixture(t *testing.T) string {
 }
 
 // prepIndexedText is content[0] of change_set for store.go in the
-// fixture of changeSetPrepFixture under the pinned configuration.
+// fixture of changeSetPrepFixture under the pinned configuration. Its
+// one partner, load.go, prints once: in the closing list, with the N/M
+// counts that a file line would show.
 const prepIndexedText = `store.go
-  usually changes with  load.go                                         3/5 commits, lift 1.7
   defines                1 symbols
   called from outside    save (1) — callers in other non-test files
   effects reachable      fs:write
 
 history suggests also reviewing
-  load.go                                            3 shared commits with store.go, lift 1.7
+  load.go                                            3/5 commits with store.go, lift 1.7
     mostly load · last fix here: fix: State the path trust in load and save (f564665)
 `
 
@@ -228,14 +229,15 @@ func serveChangeSetCases(t *testing.T, root string, cases []prepTextCase) {
 }
 
 // TestChangeSetPreparationKeepsText freezes content[0] of the MCP
-// change_set tool as it was before the preparation part existed. The
+// change_set tool: the text of report.ChangeSetWith, which the
+// preparation part does not change. The
 // cases are an indexed file, a new path, a pinned region, a new path in
 // a pinned region, the "./" and absolute spellings, and a configuration
 // without pins. Each case runs under the three protocol branches.
 // content[1] and structuredContent came later, and they must not change
 // these goldens.
 func TestChangeSetPreparationKeepsText(t *testing.T) {
-	// The goldens hold the text from before the preparation part. The
+	// The goldens hold the text of report.ChangeSetWith. The
 	// pinned text holds two blank lines before the lesson block, because
 	// the file block ends with one and the lesson block starts with one.
 	// The bytes stay as they are.
@@ -257,13 +259,12 @@ lessons for this change  (regions map to the files above; avoid repeating these)
 `
 		mixedText = "internal/parse/fresh.go: not in the index (new file, or run `seamark index`)\n\n" +
 			"docs/new.md: not in the index (new file, or run `seamark index`)\n\n" + `store.go
-  usually changes with  load.go                                         3/5 commits, lift 1.7
   defines                1 symbols
   called from outside    save (1) — callers in other non-test files
   effects reachable      fs:write
 
 history suggests also reviewing
-  load.go                                            3 shared commits with store.go, lift 1.7
+  load.go                                            3/5 commits with store.go, lift 1.7
     mostly load · last fix here: fix: State the path trust in load and save (f564665)
 
 lessons for this change  (regions map to the files above; avoid repeating these)

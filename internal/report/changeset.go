@@ -103,25 +103,47 @@ func ChangeSetWith(w io.Writer, st *store.Store, root string, files []string,
 
 	set := newCompanionSet(names)
 
-	for _, file := range indexed {
-		fmt.Fprintf(w, "%s\n", file)
+	// More partners are fetched than printed: the per-file lines stay
+	// six, while the closing list must see past the planned files. The
+	// closing list needs the partners of every file, so they are read
+	// before the first file block.
+	partners := make([][]store.CoChangePartner, len(indexed))
 
-		// More partners are fetched than printed: the per-file lines stay
-		// six, while the closing list must see past the planned files.
-		partners, err := st.CoChangePartners(file, 1.0, set.partnerLimit())
-		if err != nil {
+	for i, file := range indexed {
+		var err error
+
+		if partners[i], err = st.CoChangePartners(file, 1.0, set.partnerLimit()); err != nil {
 			return nil, err
 		}
 
-		for _, p := range partners[:min(len(partners), maxCompanions)] {
+		for _, p := range partners[i] {
+			set.note(file, p)
+		}
+	}
+
+	// A partner prints once. The closing list holds the partners that the
+	// plan leaves out, with their counts and reasons, so a file block
+	// keeps only the partners that the closing list does not show: the
+	// planned files and the partners past its cap.
+	closing := rankCompanions(set.found)
+	listed := make(map[string]bool, len(closing))
+
+	for _, c := range closing {
+		listed[c.file] = true
+	}
+
+	for i, file := range indexed {
+		fmt.Fprintf(w, "%s\n", file)
+
+		for _, p := range partners[i][:min(len(partners[i]), maxCompanions)] {
+			if listed[p.File] {
+				continue
+			}
+
 			// Partner names come from git history, where control
 			// characters are legal, so they are sanitized before the terminal.
 			fmt.Fprintf(w, "  usually changes with  %-46s %2d/%d commits, lift %.1f\n",
 				render.Sanitize(p.File), p.Together, p.Total, p.Lift)
-		}
-
-		for _, p := range partners {
-			set.note(file, p)
 		}
 
 		if err := exposureLines(w, st, file); err != nil {
@@ -131,7 +153,7 @@ func ChangeSetWith(w io.Writer, st *store.Store, root string, files []string,
 		fmt.Fprintln(w)
 	}
 
-	printCompanions(w, st, root, CompanionsTitle, set.found)
+	printCompanions(w, st, root, CompanionsTitle, closing, true)
 
 	// The repository's memory, at the moment it matters (RFC-002 §8):
 	// the pins and recurring lessons governing the files about to

@@ -73,8 +73,15 @@ every partner is in the diff, the index holds no partner, or the read
 failed. On a repo with real history, this section is where the
 surprises live.
 
+`change_set` prints each partner once. A partner that the plan leaves
+out and that the closing `history suggests also reviewing` list shows
+prints only there, with the planned file that it shares the most
+commits with, its `mostly` functions, and its last fix. A file block
+keeps the other partners as `usually changes with` lines: a planned
+file, and a partner past the six that the closing list shows.
+
 In a `usually changed with` line of `why`, and in a `usually changes
-with` line of `change_set`, `6/58  commits` means that 6 commits
+with` line or a closing line of `change_set`, `6/58  commits` means that 6 commits
 changed both files, out of the 58 commits that co-change counts in the
 mined window. That count is the same on every line, and it is not the
 commit count of either file. The window is the latest 5000 commits by
