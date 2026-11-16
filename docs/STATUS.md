@@ -79,9 +79,10 @@ Claude Code 2.1.319 validates the 10 s pre-edit timeout for Write and
 Edit in root and child, and codex-cli 0.169.0 for apply_patch in root
 and child: each honors an in-budget slow deny. One root case of each
 client (a Write, a patch) shows that the client lets the write run
-after 10 s; no child case records it. The other timeout candidates and the benchmark
-script-timeout flake remain open in the same checklist. None is
-completed by documenting it. Doctor keeps all-client coverage and
+after 10 s; no child case records it. The other timeout candidates
+remain open in the same checklist. None is completed by documenting
+it. The benchmark script-timeout flake is fixed in the tests, with no
+benchmark fingerprint change. Doctor keeps all-client coverage and
 warnings.
 
 ## Guard — experimental
