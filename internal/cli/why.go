@@ -72,7 +72,7 @@ func staleNote(w io.Writer, st *store.Store, root string, ws workspace.Workspace
 		return
 	}
 
-	current := index.WorkspaceState(root)
+	current := index.WorkspaceState(root, st.Path())
 	if current == "" || current == indexed {
 		return
 	}

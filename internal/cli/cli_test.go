@@ -88,6 +88,36 @@ func TestVersionCommand(t *testing.T) {
 	assert.Contains(t, out, "seamark")
 }
 
+// TestIndexKeepsAnUntrackedDatabaseInTheWorkspaceCurrent covers --db
+// with an untracked file inside the workspace. The fingerprint hashed the
+// file that every run writes, so every run rebuilt and said that the
+// workspace changed during indexing, and status and why called the index
+// stale. The second run skips now, no run names a change, and status and
+// why read the fingerprint that the run stored.
+func TestIndexKeepsAnUntrackedDatabaseInTheWorkspaceCurrent(t *testing.T) {
+	root := writeFixture(t)
+	gitify(t, root)
+
+	db := filepath.Join(root, "custom.db")
+
+	_, stderr, err := runErr(t, "-C", root, "--db", db, "index")
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "the workspace changed during indexing")
+
+	out, stderr, err := runErr(t, "-C", root, "--db", db, "index")
+	require.NoError(t, err)
+	assert.Contains(t, out, "index already up to date")
+	assert.NotContains(t, stderr, "the workspace changed during indexing")
+
+	status, err := run(t, "-C", root, "--db", db, "status")
+	require.NoError(t, err)
+	assert.Contains(t, status, "workspace      current", status)
+
+	_, stderr, err = runErr(t, "-C", root, "--db", db, "why", "helper")
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "the workspace changed since the last index")
+}
+
 func TestIndexThenWhy(t *testing.T) {
 	root := writeFixture(t)
 

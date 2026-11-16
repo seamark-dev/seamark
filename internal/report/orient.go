@@ -33,7 +33,7 @@ const (
 // tools. The MCP orient tool and the seamark://orient resource call it.
 // The CLI calls OrientCLI instead.
 func Orient(w io.Writer, st *store.Store, root string) error {
-	return orient(w, st, root, orientFooterMCP, time.Now(), index.WorkspaceState)
+	return orient(w, st, root, orientFooterMCP, time.Now(), fingerprintOf(st))
 }
 
 // OrientNamed is Orient with the title of named, the root that the index
@@ -41,13 +41,19 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 // repository, and the title then names that repository, as OrientCLI
 // does. The rest reads root, the workspace of the server.
 func OrientNamed(w io.Writer, st *store.Store, root, named string) error {
-	return orientNamed(w, st, root, named, orientFooterMCP, time.Now(), index.WorkspaceState)
+	return orientNamed(w, st, root, named, orientFooterMCP, time.Now(), fingerprintOf(st))
 }
 
 // OrientCLI writes the same repo overview with the CLI footer, which
 // offers only routes that run in the CLI.
 func OrientCLI(w io.Writer, st *store.Store, root string) error {
-	return orient(w, st, root, orientFooterCLI, time.Now(), index.WorkspaceState)
+	return orient(w, st, root, orientFooterCLI, time.Now(), fingerprintOf(st))
+}
+
+// fingerprintOf returns the workspace fingerprint for the database of st,
+// so the freshness compares what the index run stored.
+func fingerprintOf(st *store.Store) func(string) string {
+	return func(root string) string { return index.WorkspaceState(root, st.Path()) }
 }
 
 // orient writes the repo overview an agent needs before its first edit:

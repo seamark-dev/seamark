@@ -107,7 +107,7 @@ func TestReadsNameTheRootOfAnotherDatabase(t *testing.T) {
 		origin, tree := rootMoveLinked(t, false)
 		dbPath := store.DefaultPath(origin)
 
-		require.Equal(t, index.WorkspaceState(origin), index.WorkspaceState(tree), "the skip needs one fingerprint")
+		require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(tree, ""), "the skip needs one fingerprint")
 
 		before, err := os.ReadFile(dbPath)
 		require.NoError(t, err)

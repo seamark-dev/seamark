@@ -147,7 +147,7 @@ func prepareFreshness(st *store.Store, root, mined string) string {
 		return ""
 	}
 
-	if indexhealth.Freshness(recorded, index.WorkspaceState(root)) != indexhealth.FreshStale {
+	if indexhealth.Freshness(recorded, index.WorkspaceState(root, st.Path())) != indexhealth.FreshStale {
 		return ""
 	}
 

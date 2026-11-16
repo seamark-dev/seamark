@@ -556,6 +556,14 @@ model-boundary delivery.
   `lessons --prepare` finds the index behind the workspace. `mined_root`
   names the repository that the index of a `change_set` call records
   when it is another one. Both text forms say it in one line.
+- **A database inside the workspace no longer forces a rebuild on every
+  run.** With `--db ./custom.db` as an untracked file, the freshness
+  fingerprint included the file that every run writes. So every run
+  rebuilt, logged that the workspace changed during indexing, and
+  `status` and `why` called the index stale. The fingerprint now leaves
+  out a database file inside the workspace (outside `.seamark`) and its
+  SQLite sidecars, so the second run skips. The default database and a
+  database outside the workspace keep their fingerprint.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

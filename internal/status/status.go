@@ -157,7 +157,9 @@ func gatherAs(reg *integration.Registry, st *store.Store, root string,
 	// The shared reader gives the facts that orient also shows. A
 	// recorded fingerprint decides the freshness; without one it stays
 	// unknown, because a non-git workspace has no change signal.
-	health, err := indexhealth.Read(st, root, index.WorkspaceState)
+	// The fingerprint leaves out the files of the database that st reads,
+	// as the index run did when it stored its fingerprint.
+	health, err := indexhealth.Read(st, root, func(root string) string { return index.WorkspaceState(root, st.Path()) })
 	if err != nil {
 		return nil, err
 	}

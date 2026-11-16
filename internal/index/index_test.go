@@ -2997,7 +2997,7 @@ func TestWorkspaceStateIgnoresGitConfig(t *testing.T) {
 			for i, set := range states {
 				set()
 
-				want[i] = WorkspaceState(root)
+				want[i] = WorkspaceState(root, "")
 				require.NotEmpty(t, want[i])
 			}
 
@@ -3020,7 +3020,7 @@ func TestWorkspaceStateIgnoresGitConfig(t *testing.T) {
 
 			for i, set := range states {
 				set()
-				assert.Equal(t, want[i], WorkspaceState(root), "state %d", i)
+				assert.Equal(t, want[i], WorkspaceState(root, ""), "state %d", i)
 			}
 
 			assert.NoFileExists(t, marker, "no external program runs")
@@ -3150,21 +3150,21 @@ func TestWorkspaceStateKeepsGitIndex(t *testing.T) {
 	root := gitIndexRepo(t)
 	touched := filepath.Join(root, "internal", "util", "util.go")
 
-	fingerprint := WorkspaceState(root)
+	fingerprint := WorkspaceState(root, "")
 	require.NotEmpty(t, fingerprint)
 
 	touchOlder(t, touched, 2*time.Hour)
 
 	before := readGitIndex(t, root)
 
-	assert.Equal(t, fingerprint, WorkspaceState(root), "a touch changes the fingerprint")
-	assert.Equal(t, fingerprint, WorkspaceState(root), "a second call changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a touch changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a second call changes the fingerprint")
 	assertGitIndexKept(t, root, before, "WorkspaceState")
 
 	// A plain git status refreshes the stat cache. The fingerprint stays,
 	// because only the output of git goes into it.
 	configGit(t, root, "status", "--porcelain")
-	assert.Equal(t, fingerprint, WorkspaceState(root), "a refreshed stat cache changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a refreshed stat cache changes the fingerprint")
 
 	// Controls: each plain command writes the index after a new touch, so
 	// the fixture can show the write that WorkspaceState avoids.

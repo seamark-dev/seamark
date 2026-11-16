@@ -299,7 +299,7 @@ func TestStatusRootLineIsTheSameOverMCP(t *testing.T) {
 	copied := rootWriteCopy(t, origin)
 	flags := []string{"-C", copied, "--db", store.DefaultPath(origin)}
 
-	require.Equal(t, index.WorkspaceState(origin), index.WorkspaceState(copied), "the copy starts at one fingerprint")
+	require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(copied, ""), "the copy starts at one fingerprint")
 
 	want := "root           this database records another repository (" + origin + "), so this report describes " +
 		origin + ", not this workspace"

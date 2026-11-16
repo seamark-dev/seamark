@@ -310,7 +310,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 	}
 
 	state, _ := st.GetMeta(store.MetaIndexedState)
-	current := index.WorkspaceState(root)
+	current := index.WorkspaceState(root, st.Path())
 
 	r := &Report{
 		Repo:       repoName(root),

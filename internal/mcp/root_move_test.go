@@ -372,7 +372,7 @@ func TestToolsKeepARootOnADetachedDisk(t *testing.T) {
 
 	sibling := filepath.Join(parent, "sibling")
 	require.NoError(t, os.CopyFS(sibling, os.DirFS(origin)))
-	require.Equal(t, index.WorkspaceState(origin), index.WorkspaceState(sibling))
+	require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(sibling, ""))
 	require.NoError(t, os.Rename(origin, filepath.Join(parent, "away")))
 
 	resps := serveDB(t, sibling, shared, t.Logf, rootMoveCall(1, "orient", `{}`))

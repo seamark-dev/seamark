@@ -212,7 +212,7 @@ func TestTUIReadOnlyGitKeepsTheGitIndex(t *testing.T) {
 	touch(3 * time.Hour)
 
 	before = read()
-	require.NotEmpty(t, index.WorkspaceState(root))
+	require.NotEmpty(t, index.WorkspaceState(root, ""))
 	assert.Equal(t, before, read(), "the freshness check rewrote .git/index")
 }
 

@@ -191,7 +191,7 @@ func TestIndexMoveRootMovesTheRecordedRoot(t *testing.T) {
 		tree := rootWriteWorktree(t, origin)
 		db := store.DefaultPath(origin)
 
-		require.Equal(t, index.WorkspaceState(origin), index.WorkspaceState(tree), "a plain run would skip")
+		require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(tree, ""), "a plain run would skip")
 
 		_, err := run(t, "-C", tree, "--db", db, "index", "--move-root")
 		require.NoError(t, err)
@@ -545,7 +545,7 @@ func TestIndexInASiblingWorktree(t *testing.T) {
 	tree := rootWriteWorktree(t, origin)
 	db := store.DefaultPath(origin)
 
-	require.Equal(t, index.WorkspaceState(origin), index.WorkspaceState(tree))
+	require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(tree, ""))
 
 	before := rootWriteFiles(t, []string{origin})
 
@@ -786,7 +786,7 @@ func TestIndexMoveRootDoesNotSkipBehindALock(t *testing.T) {
 	tree := rootWriteWorktree(t, origin)
 	db := store.DefaultPath(origin)
 
-	require.Equal(t, index.WorkspaceState(origin), index.WorkspaceState(tree), "a skip must be possible")
+	require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(tree, ""), "a skip must be possible")
 
 	wait := rootWriteLock(t, db)
 
@@ -841,7 +841,7 @@ func rootMoveDetached(t *testing.T) (origin, sibling, shared string, attach func
 	require.NoError(t, os.Rename(store.DefaultPath(origin), shared))
 
 	sibling = rootWriteCopy(t, origin)
-	require.Equal(t, index.WorkspaceState(origin), index.WorkspaceState(sibling), "a plain run must be able to skip")
+	require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(sibling, ""), "a plain run must be able to skip")
 
 	away := filepath.Join(rootWriteDir(t), "away")
 	require.NoError(t, os.Rename(origin, away))
@@ -945,7 +945,7 @@ func TestIndexKeepsTheFileOfAnotherCheckoutOfAGoneRoot(t *testing.T) {
 			db := place(t, origin, moved)
 			route := "use another --db"
 
-			require.Equal(t, index.WorkspaceState(moved), index.WorkspaceState(third), "a plain run must be able to skip")
+			require.Equal(t, index.WorkspaceState(moved, ""), index.WorkspaceState(third, ""), "a plain run must be able to skip")
 
 			out, err := run(t, "-C", third, "--db", db, "index")
 			require.NoError(t, err)

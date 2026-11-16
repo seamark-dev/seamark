@@ -208,7 +208,7 @@ func TestGatherAgreesWithTheSharedReader(t *testing.T) {
 	s, err := Gather(st, root)
 	require.NoError(t, err)
 
-	h, err := indexhealth.Read(st, root, index.WorkspaceState)
+	h, err := indexhealth.Read(st, root, func(root string) string { return index.WorkspaceState(root, st.Path()) })
 	require.NoError(t, err)
 
 	assert.Equal(t, h.Coverage, s.Coverage)
