@@ -265,7 +265,7 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 	// fourth repeat. The config decides what surfaces (mute/pin/threshold).
 	// The section reads the full list and shows a prefix of it, so it can
 	// count the lessons that it leaves out.
-	lessons, _, pins, err := scopeLessons(st, cfg, file, 0, 0)
+	lessons, _, pins, err := scopeLessons(st, "", cfg, file, 0, 0)
 	if err != nil {
 		return err
 	}
@@ -433,7 +433,15 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 // filter. A limit of 0 means no cap, so a deliberate view can list every
 // lesson.
 func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
-	out, _, err := LessonsForScopeBudget(st, cfg, file, limit, 0)
+	return LessonsForScopeAt(st, "", cfg, file, limit)
+}
+
+// LessonsForScopeAt is LessonsForScope for a view that describes the
+// checkout at root. The confidence rank looks for the cited files under
+// root, for the reason that ReadEvidenceAt gives. An empty root uses the
+// root that the index records.
+func LessonsForScopeAt(st *store.Store, root string, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
+	out, _, _, err := scopeLessons(st, root, cfg, file, limit, 0)
 
 	return out, err
 }
@@ -445,7 +453,7 @@ func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit in
 // point at them instead of hiding them. Mined lessons that the limit
 // cuts are not counted, because the pointer names pins only.
 func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) ([]model.Lesson, int, error) {
-	out, trimmed, _, err := scopeLessons(st, cfg, file, limit, pinBudget)
+	out, trimmed, _, err := scopeLessons(st, "", cfg, file, limit, pinBudget)
 
 	return out, trimmed, err
 }
@@ -453,7 +461,8 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 // scopeLessons is LessonsForScopeBudget that also returns the number of
 // pins in out. The pins come first in out. The count uses the rule of
 // surfacedMined, so a list header can name pins apart from mined lessons.
-func scopeLessons(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) (
+// root is the root of the dead-path check, as in LessonsForScopeAt.
+func scopeLessons(st *store.Store, root string, cfg *reviews.Config, file string, limit, pinBudget int) (
 	out []model.Lesson, trimmed, pins int, err error,
 ) {
 	// A pin budget above the surface's own cap selects pins that the cap
@@ -497,7 +506,7 @@ func scopeLessons(st *store.Store, cfg *reviews.Config, file string, limit, pinB
 		mined = kept
 	}
 
-	annotate, err := confidenceAnnotator(st, applied, pinBudget > 0)
+	annotate, err := confidenceAnnotator(st, applied, root, pinBudget > 0)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -538,9 +547,10 @@ func surfacedMined(cfg *reviews.Config, mined []model.Lesson) int {
 // supporting evidence for every matched pin. Manually created pins have
 // no proposal history and are treated as strong. It is nil without
 // applied proposals. The multi-file selection uses the same pinAssessor
-// through ReadEvidence, so both selectors rank and annotate alike.
-func confidenceAnnotator(st *store.Store, applied []model.Proposal, ambient bool) (reviews.PinAnnotator, error) {
-	assessor, err := newPinAssessor(st, applied, time.Now())
+// through ReadEvidence, so both selectors rank and annotate alike. root
+// is the root of the dead-path check, as in newPinAssessor.
+func confidenceAnnotator(st *store.Store, applied []model.Proposal, root string, ambient bool) (reviews.PinAnnotator, error) {
+	assessor, err := newPinAssessor(st, applied, root, time.Now())
 	if err != nil {
 		return nil, err
 	}

@@ -593,7 +593,9 @@ model-boundary delivery.
   preparation for the `-C` checkout. `lessons --file` follows the same
   rule, so the view that each omission names shows the pins of the
   checkout. An absolute path inside the original root, as `why` names
-  it there, still reads the original root.
+  it there, still reads the original root. Both commands look for the
+  cited files of a pin's confidence tier in the checkout, so after a
+  move an applied pin keeps its tier and its place under the budget.
 - **A database inside the workspace no longer forces a rebuild on every
   run.** With `--db ./custom.db` as an untracked file, the freshness
   fingerprint included the file that every run writes. So every run

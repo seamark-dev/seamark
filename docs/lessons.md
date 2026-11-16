@@ -436,7 +436,11 @@ Every distilled pin carries a tier — **strong / fair / weak** —
 recomputed on each read from what its citations still support: distinct
 events (a review comment and the fix commit answering it count once),
 source corroboration (review AND fix beats either alone), recency, and
-whether the cited files still exist in the workspace. Nothing is stored
+whether the cited files still exist in the workspace. In a copied or
+moved checkout whose index still records the original root, a
+preparation and `--file` describe the checkout, so they look for the
+cited files there. The other surfaces look in the root that the index
+records. Nothing is stored
 and nothing is model-scored, so a pin's tier honestly decays as its
 evidence does. Confidence is not decoration: pins compete for the
 hook's injection budget by tier before specificity, a weak pin that

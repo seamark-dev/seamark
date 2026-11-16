@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,8 +19,10 @@ import (
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/store/storetest"
 )
 
 // The tests of lessons --prepare. Every test builds a temporary
@@ -1138,5 +1141,79 @@ func TestLessonsFileInACopiedCheckout(t *testing.T) {
 		view, err := run(t, "-C", copied, "lessons", "--file", path)
 		require.NoError(t, err)
 		assert.Equal(t, append(slices.Clone(rules), "origin-only"), pinLines(view), "the view that why names shows the pins that why counts")
+	})
+}
+
+// prepareRankLessons holds an applied pin and a hand-written pin on src
+// under a change budget of one. guard comes first, so it wins a tie.
+const prepareRankLessons = `change_budget: 1
+pin:
+  - rule: guard
+    region: src
+    note: Guard the handler input.
+  - rule: prefer-errors-is
+    region: src/
+    note: Compare errors with errors.Is.
+`
+
+// TestLessonsPrepareRanksPinsInAMovedCheckout covers the confidence rank
+// in a moved checkout. The applied pin cites three files that exist in
+// the checkout, so it keeps its strong rank and the one slot, as in
+// place. The recorded root no longer exists, so a rank from its tree
+// would count every cited file as deleted and give the slot to the
+// hand-written pin. The --file view ranks and annotates the same way.
+func TestLessonsPrepareRanksPinsInAMovedCheckout(t *testing.T) {
+	root := prepareRepo(t, true)
+	verifyWrite(t, root, ".seamark/lessons.yaml", prepareRankLessons)
+
+	recorded, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+
+	// Three recent events from two sources give strong evidence.
+	created := time.Now().Add(-time.Hour).Unix()
+	finding := func(id int64, path, source string) model.Finding {
+		return model.Finding{ID: id, LessonKey: "src\x00guard", Path: path, PR: int(id),
+			Body: "guard the input", CreatedAt: created, Source: source}
+	}
+
+	st, err := store.Open(store.DefaultPath(recorded))
+	require.NoError(t, err)
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+		finding(1, "src/handler.go", model.SourceReview),
+		finding(2, "a.go", model.SourceReview),
+		finding(3, "docs/readme.md", model.SourceFixConventional),
+	}))
+	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
+		Signature: "sig-guard", Rule: "guard", Region: "src", Note: "Guard the handler input.",
+		Members: []int64{1, 2, 3}, Agent: "claude/v6", Status: model.ProposalApplied,
+	}))
+	require.NoError(t, st.Close())
+
+	ranked := func(t *testing.T, dir string) delivery.Preparation {
+		t.Helper()
+
+		p := prepareJSON(t, dir, filepath.Join(dir, "src", "handler.go"))
+		assert.Equal(t, []string{"guard"}, preparedRules(p), "the applied pin keeps the slot")
+		require.Len(t, p.Omitted, 1)
+		assert.Equal(t, "prefer-errors-is", p.Omitted[0].Rule)
+
+		view, err := run(t, "-C", dir, "lessons", "--file", "src/handler.go")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"guard", "prefer-errors-is"}, pinLines(view))
+		assert.Contains(t, view, "strong: 3 event(s)")
+		assert.NotContains(t, view, "deleted", "every cited file exists in the checkout")
+
+		return p
+	}
+
+	t.Run("in place", func(t *testing.T) {
+		assert.Empty(t, ranked(t, recorded).Guidance.MinedRoot)
+	})
+
+	t.Run("moved", func(t *testing.T) {
+		moved := filepath.Join(rootWriteDir(t), "moved")
+		require.NoError(t, os.Rename(recorded, moved))
+
+		assert.Equal(t, recorded, ranked(t, moved).Guidance.MinedRoot)
 	})
 }
