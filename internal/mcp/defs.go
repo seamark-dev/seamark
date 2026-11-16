@@ -154,9 +154,19 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 			}
 
 			// The root line and the stale route come from the same facts as
-			// in seamark status. So for one workspace and database, both
-			// surfaces print the same root line and workspace line.
+			// in seamark status, so both surfaces print the same root line.
 			health.NoteOwnership(owner)
+
+			// A skip proves that the index matches this workspace, and the
+			// note of the answer says so. The line then reads current, also
+			// when the recorded root changed: a run there would make the
+			// index differ from the code that this server serves. seamark
+			// status has no refresh, so it still compares with that root
+			// alone. In every other state both surfaces print the same
+			// workspace line.
+			if r.matched() {
+				health.NoteWorkspaceMatch()
+			}
 
 			var b bytes.Buffer
 			status.Print(&b, health)

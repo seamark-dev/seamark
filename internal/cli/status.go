@@ -47,7 +47,9 @@ and asks how much its answers can be trusted.`,
 			// The equal case starts no git process. Status runs often, so
 			// that cost counts. The MCP status resource reads the same root
 			// and the same facts, so for one workspace and database both
-			// print the same root line and workspace line.
+			// print the same root line. They print the same workspace line
+			// too, unless the MCP refresh skips because the index matches
+			// its workspace: that resource then reads current.
 			if !store.SameDirectory(probe.Root, ws.Root) {
 				s.NoteOwnership(ownership.Gather(ws.Root, ws.AbsoluteDB()))
 			}

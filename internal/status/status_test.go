@@ -1113,3 +1113,26 @@ func TestPrintNamesTheRecordedRootAndItsRoute(t *testing.T) {
 		assert.Empty(t, s.RecordedRoot, name)
 	}
 }
+
+// TestNoteWorkspaceMatchClearsOnlyAChangedTree proves the bound of the
+// match that a surface proves. A changed tree reads current, and its
+// reason goes, so the JSON keeps the bytes of a current index. An index of
+// another version stays stale, because only a rebuild adds its facts. An
+// unknown or a current freshness stays as it is.
+func TestNoteWorkspaceMatchClearsOnlyAChangedTree(t *testing.T) {
+	for _, tc := range []struct {
+		name, freshness, reason   string
+		wantFreshness, wantReason string
+	}{
+		{"a changed tree", FreshStale, StaleWorkspaceChanged, FreshCurrent, ""},
+		{"another version", FreshStale, StaleOtherVersion, FreshStale, StaleOtherVersion},
+		{"no fingerprint", FreshUnknown, "", FreshUnknown, ""},
+		{"a current index", FreshCurrent, "", FreshCurrent, ""},
+	} {
+		s := &Status{Freshness: tc.freshness, StaleReason: tc.reason}
+		s.NoteWorkspaceMatch()
+
+		assert.Equal(t, tc.wantFreshness, s.Freshness, tc.name)
+		assert.Equal(t, tc.wantReason, s.StaleReason, tc.name)
+	}
+}

@@ -310,8 +310,9 @@ func statusLines(text string) []string {
 // resource prints the root line and the workspace line of seamark status.
 // Both compare the index with the origin. An edit in the copy alone
 // leaves the line current, because the origin still matches the index.
-// An edit in the origin makes the line stale, and the route of the line
-// makes it current again.
+// An edit in the origin as well makes the line stale, and the route of
+// the line makes it current again. An edit in the origin alone is the one
+// state that differs (see the test after this one).
 func TestStatusRootAndWorkspaceLinesAreTheSameOverMCP(t *testing.T) {
 	origin := rootWriteRepo(t)
 	copied := rootWriteCopy(t, origin)
@@ -353,6 +354,35 @@ func TestStatusRootAndWorkspaceLinesAreTheSameOverMCP(t *testing.T) {
 		text := mcpStatusText(t, flags...)
 		assert.Equal(t, cli, statusLines(text), "%s: %s", step.name, text)
 	}
+}
+
+// TestStatusOverMCPReadsCurrentWhileTheIndexMatchesItsWorkspace covers
+// the one state in which the two surfaces print another workspace line.
+// A copy reads the database of its origin, and only the origin has an
+// edit. seamark status compares the index with the origin, so it prints
+// the stale route into the origin. The MCP refresh skips, because the
+// index matches the copy. Its answer opens with the note that says so, and
+// its line reads current, because the run in the origin would make the
+// index differ from the copy. Both print the same root line.
+func TestStatusOverMCPReadsCurrentWhileTheIndexMatchesItsWorkspace(t *testing.T) {
+	origin := rootWriteRepo(t)
+	copied := rootWriteCopy(t, origin)
+	flags := []string{"-C", copied, "--db", store.DefaultPath(origin)}
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "c.go"), []byte("package main\n\nfunc c() {}\n"), 0o644))
+
+	schema := " (schema v" + strconv.Itoa(store.SupportedSchema()) + ")"
+
+	out, err := run(t, append(flags, "status")...)
+	require.NoError(t, err)
+
+	cli := statusLines(out)
+	require.Len(t, cli, 2, out)
+	assert.Equal(t, "workspace      STALE — run `seamark index` in "+origin+schema, cli[1], out)
+
+	text := mcpStatusText(t, flags...)
+	assert.True(t, strings.HasPrefix(text, "note: this index records another repository ("+origin+"); it matches this workspace now"), text)
+	assert.Equal(t, []string{cli[0], "workspace      current" + schema}, statusLines(text), text)
 }
 
 // TestStaleHintsNameTheRouteOfTheDatabase covers a stale index that a

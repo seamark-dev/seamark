@@ -207,7 +207,12 @@ records this workspace. `--json` carries the root as `recorded_root`.
 The `workspace` line then compares the index with that root, not with
 this workspace, so an edit in this workspace alone leaves it current.
 The MCP resource `seamark://status` prints the same `root` and
-`workspace` lines for the same workspace and database. When the index
+`workspace` lines for the same workspace and database, with one
+difference. While the index still matches the workspace of the server,
+the server skips its refresh, its answers open with a note that says so,
+and its `workspace` line reads current, also after an edit in the
+recorded root. A run in that root would make the index differ from the
+code that the server serves. When the index
 is stale and a plain `seamark index` in this workspace would be
 refused, because the database belongs to another repository, the
 `workspace` line names the route of that state instead, for example

@@ -196,6 +196,82 @@ func TestReadsNameTheRootOfAnotherDatabase(t *testing.T) {
 	})
 }
 
+// TestStatusResourceReadsCurrentWhileTheIndexMatchesItsWorkspace covers a
+// skip under the index of another root, after that root changed or went
+// away. The skip opens the answer with "it matches this workspace now".
+// The workspace line said STALE and named a run in the recorded root. That
+// run makes the index differ from this workspace. The line now reads
+// current, as the note and the orient resource of the server say, and the
+// root line stays.
+func TestStatusResourceReadsCurrentWhileTheIndexMatchesItsWorkspace(t *testing.T) {
+	current := func(t *testing.T, text, note string) {
+		t.Helper()
+
+		assert.True(t, strings.HasPrefix(text, note+"root           "), text)
+		assert.Len(t, rootLines(text), 1, text)
+		assert.Contains(t, text, "\nworkspace      current (schema v", text)
+		assert.NotContains(t, text, "STALE", text)
+	}
+
+	t.Run("an edit in the recorded root", func(t *testing.T) {
+		origin, tree := rootMoveLinked(t, false)
+		dbPath := store.DefaultPath(origin)
+
+		fixtureWrite(t, origin, "c.go", "package main\n\nfunc c() {}\n")
+		require.NotEqual(t, index.WorkspaceState(origin, ""), index.WorkspaceState(tree, ""))
+
+		resps := serveDB(t, tree, dbPath, t.Logf, resourceRead(1, statusURI), resourceRead(2, orientURI))
+
+		status := resourceText(t, resps["1"])
+		current(t, status, matchText(origin))
+		assert.Equal(t, []string{foreignRootLine(origin)}, rootLines(status))
+		assert.Contains(t, resourceText(t, resps["2"]), "freshness current", "one server reads one freshness")
+	})
+
+	t.Run("a recorded root that is gone", func(t *testing.T) {
+		origin, err := filepath.EvalSymlinks(writeFixture(t))
+		require.NoError(t, err)
+
+		shared := filepath.Join(t.TempDir(), "shared.db")
+
+		_, err = index.Run(index.Options{Root: origin, DBPath: shared})
+		require.NoError(t, err)
+
+		parent, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+
+		sibling := filepath.Join(parent, "sibling")
+		require.NoError(t, os.CopyFS(sibling, os.DirFS(origin)))
+		require.NoError(t, os.Rename(origin, filepath.Join(parent, "away")))
+
+		// The root line keeps the run that records this workspace.
+		status := resourceText(t, serveDB(t, sibling, shared, t.Logf, resourceRead(1, statusURI))["1"])
+		current(t, status, goneText(matchText(origin)))
+		assert.Contains(t, strings.Join(rootLines(status), "\n"), "--move-root", status)
+	})
+
+	t.Run("a copied database file in the workspace", func(t *testing.T) {
+		origin, err := filepath.EvalSymlinks(writeFixture(t))
+		require.NoError(t, err)
+
+		require.NoError(t, os.WriteFile(filepath.Join(origin, ".gitignore"), []byte(".seamark/\n"), 0o644))
+		rootMoveGit(t, origin, "add", "-A")
+		rootMoveGit(t, origin, "commit", "-m", "ignore")
+
+		_, err = index.Run(index.Options{Root: origin, DBPath: filepath.Join(origin, "custom.db")})
+		require.NoError(t, err)
+
+		parent, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+
+		copied := filepath.Join(parent, "copy")
+		require.NoError(t, os.CopyFS(copied, os.DirFS(origin)))
+
+		status := resourceText(t, serveDB(t, copied, filepath.Join(copied, "custom.db"), t.Logf, resourceRead(1, statusURI))["1"])
+		current(t, status, matchText(origin))
+	})
+}
+
 // TestStatusResourceKeepsItsOwnDatabaseText bounds the rule. A server on
 // its own database prints no root line and no new note, and a stale index
 // still names the plain index run, byte for byte.

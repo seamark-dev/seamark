@@ -305,6 +305,15 @@ func describedRoot(o ownership.State, root string) string {
 	return root
 }
 
+// matched reports a skip under the index of another root. A skip happens
+// only when the fingerprint of this workspace equals the recorded one, so
+// the index matches this workspace, although its answer describes the
+// recorded root. The note and the workspace line of the status resource
+// both read this one test.
+func (r refreshed) matched() bool {
+	return r.failure == nil && recordsAnotherRoot(r.owner)
+}
+
 // note returns the note that opens an answer after this refresh, or "".
 // A skip under the index of another root gets the note that names it.
 // The note depends on what the index records, not on the route of a
@@ -312,7 +321,7 @@ func describedRoot(o ownership.State, root string) string {
 // its answer still describes that root.
 func (r refreshed) note() string {
 	switch {
-	case r.failure == nil && recordsAnotherRoot(r.owner):
+	case r.matched():
 		return matchNote(r.owner)
 	case r.failure == nil:
 		return ""

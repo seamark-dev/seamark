@@ -285,6 +285,19 @@ func (s *Status) NoteOwnership(o ownership.State) {
 	s.staleRoute = o.Command().RefusedBuildRoute()
 }
 
+// NoteWorkspaceMatch records that the index matches the workspace of the
+// surface, also when the root that the report describes changed. The MCP
+// server knows this when its refresh skips under the index of another
+// root, and its note says so. The workspace line then reads current,
+// because a run in that root would make the index differ from the code
+// that the server serves. An index of another version stays stale,
+// because only a rebuild adds the facts that it lacks.
+func (s *Status) NoteWorkspaceMatch() {
+	if s.Freshness == FreshStale && s.StaleReason == StaleWorkspaceChanged {
+		s.Freshness, s.StaleReason = FreshCurrent, ""
+	}
+}
+
 // RootNotice says that the index records another root than the
 // workspace, so a report describes that root. It returns "" when the two
 // are one directory. The CLI status and the MCP status resource print it
