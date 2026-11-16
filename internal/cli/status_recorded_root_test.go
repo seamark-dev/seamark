@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -290,39 +291,67 @@ func mcpStatusText(t *testing.T, flags ...string) string {
 	return resp.Result.Contents[0].Text
 }
 
-// TestStatusRootLineIsTheSameOverMCP covers one workspace and one
-// database through both surfaces. The MCP status resource prints the root
-// line of seamark status once, at a matching fingerprint and after the
-// refused refresh of a differing one.
-func TestStatusRootLineIsTheSameOverMCP(t *testing.T) {
+// statusLines returns the root lines and the workspace lines of a status
+// text, in their order.
+func statusLines(text string) []string {
+	var lines []string
+
+	for line := range strings.SplitSeq(text, "\n") {
+		if strings.HasPrefix(line, "root ") || strings.HasPrefix(line, "workspace ") {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
+}
+
+// TestStatusRootAndWorkspaceLinesAreTheSameOverMCP covers a copy that
+// reads the database of its origin, through both surfaces. The MCP status
+// resource prints the root line and the workspace line of seamark status.
+// Both compare the index with the origin. An edit in the copy alone
+// leaves the line current, because the origin still matches the index.
+// An edit in the origin makes the line stale, and the route of the line
+// makes it current again.
+func TestStatusRootAndWorkspaceLinesAreTheSameOverMCP(t *testing.T) {
 	origin := rootWriteRepo(t)
 	copied := rootWriteCopy(t, origin)
 	flags := []string{"-C", copied, "--db", store.DefaultPath(origin)}
 
 	require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(copied, ""), "the copy starts at one fingerprint")
 
-	want := "root           this database records another repository (" + origin + "), so this report describes " +
+	schema := " (schema v" + strconv.Itoa(store.SupportedSchema()) + ")"
+	root := "root           this database records another repository (" + origin + "), so this report describes " +
 		origin + ", not this workspace"
+	current := "workspace      current" + schema
+	stale := "workspace      STALE — run `seamark index` in " + origin + schema
 
-	for _, state := range []string{"a matching fingerprint", "a differing fingerprint"} {
-		if state == "a differing fingerprint" {
+	for _, step := range []struct {
+		name string
+		edit func()
+		want string
+	}{
+		{"a matching fingerprint", func() {}, current},
+		{"an edit in the copy", func() {
 			require.NoError(t, os.WriteFile(filepath.Join(copied, "b.go"), []byte("package main\n"), 0o644))
-		}
+		}, current},
+		{"an edit in the origin", func() {
+			require.NoError(t, os.WriteFile(filepath.Join(origin, "c.go"), []byte("package main\n\nfunc c() {}\n"), 0o644))
+		}, stale},
+		{"the route of the stale line", func() {
+			_, err := run(t, "-C", origin, "index")
+			require.NoError(t, err)
+		}, current},
+	} {
+		step.edit()
 
-		cli := statusRootLine(t, flags...)
-		require.Equal(t, want, cli, state)
+		out, err := run(t, append(flags, "status")...)
+		require.NoError(t, err)
+
+		cli := statusLines(out)
+		require.Equal(t, []string{root, step.want}, cli, "%s: %s", step.name, out)
 
 		text := mcpStatusText(t, flags...)
-
-		var lines []string
-
-		for line := range strings.SplitSeq(text, "\n") {
-			if strings.HasPrefix(line, "root ") {
-				lines = append(lines, line)
-			}
-		}
-
-		assert.Equal(t, []string{cli}, lines, "%s: %s", state, text)
+		assert.Equal(t, cli, statusLines(text), "%s: %s", step.name, text)
 	}
 }
 

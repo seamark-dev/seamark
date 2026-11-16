@@ -143,6 +143,10 @@ type Status struct {
 }
 
 // Gather assembles the health report from the store and the workspace.
+// root is the root that the report describes. The CLI, the console, and
+// the MCP server pass the root that the index records, or the workspace
+// when the index records none. The freshness then compares the index
+// with that root, so a stale route into that root refreshes the index.
 func Gather(st *store.Store, root string) (*Status, error) {
 	return gather(integration.Builtin(), st, root)
 }

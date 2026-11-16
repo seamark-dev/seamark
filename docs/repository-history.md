@@ -204,11 +204,13 @@ When the index records another root than the workspace, as in a copied
 or moved checkout, a `root` line comes first. It names that root, says
 that the report describes it, and names the `seamark index` run that
 records this workspace. `--json` carries the root as `recorded_root`.
-The MCP resource `seamark://status` prints the same line for the same
-workspace and database. When the index is stale and a plain
-`seamark index` in this workspace would be refused, because the
-database belongs to another repository, the `workspace` line names the
-route of that state instead, for example
+The `workspace` line then compares the index with that root, not with
+this workspace, so an edit in this workspace alone leaves it current.
+The MCP resource `seamark://status` prints the same `root` and
+`workspace` lines for the same workspace and database. When the index
+is stale and a plain `seamark index` in this workspace would be
+refused, because the database belongs to another repository, the
+`workspace` line names the route of that state instead, for example
 ``STALE — run `seamark index` in <root>``. The stale note of `seamark why`,
 `seamark orient`, and `seamark report` does the same. A database of
 this workspace keeps ``STALE — run `seamark index` ``.

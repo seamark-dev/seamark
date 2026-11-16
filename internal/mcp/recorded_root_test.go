@@ -99,8 +99,9 @@ func foreignTexts(t *testing.T, resps map[string]rpcResp) map[string]string {
 // TestReadsNameTheRootOfAnotherDatabase covers a server whose --db
 // records another repository, in the two states of the refresh. Each
 // read opens once with a note that names that repository, the status
-// resource prints the root line of seamark status once, and orient names
-// that repository in its title. A current index keeps the verdict of
+// resource prints the root line of seamark status once, its workspace
+// line compares the index with that repository, and orient names that
+// repository in its title. A current index keeps the verdict of
 // check, and the verdict carries the note. A refused refresh keeps the
 // refusal of check. No call writes to the database of the origin.
 func TestReadsNameTheRootOfAnotherDatabase(t *testing.T) {
@@ -158,12 +159,13 @@ func TestReadsNameTheRootOfAnotherDatabase(t *testing.T) {
 			assert.NotContains(t, text, staleNote, name)
 		}
 
-		// A plain index run is refused here, so the stale line names the
-		// route of this state.
+		// The status line compares the index with origin, as seamark
+		// status does. Origin still matches its index, so the line is
+		// current. A route into origin would change nothing there.
 		status := resourceText(t, resps["1"])
 		assert.Equal(t, []string{foreignRootLine(origin)}, rootLines(status))
-		assert.True(t, strings.HasPrefix(status, note+foreignRootLine(origin)+
-			"\nworkspace      STALE — run `seamark index` in "+origin+" (schema v"), status)
+		assert.True(t, strings.HasPrefix(status, note+foreignRootLine(origin)+"\nworkspace      current (schema v"), status)
+		assert.NotContains(t, status, "run `seamark index` in "+origin, "a route into origin changes nothing")
 
 		res := decodeToolParts(t, resps["6"])
 		assert.Equal(t, res.Content[0].Text, structuredReport(t, res), "the key carries the note")
@@ -176,6 +178,21 @@ func TestReadsNameTheRootOfAnotherDatabase(t *testing.T) {
 		after, err := os.ReadFile(dbPath)
 		require.NoError(t, err)
 		assert.Equal(t, before, after, "no call writes to the database of the origin")
+
+		// An edit in origin makes the line stale. A plain index run here is
+		// refused, so the line names the run in origin, and that run makes
+		// the line current again.
+		fixtureWrite(t, origin, "c.go", "package main\n\nfunc c() {}\n")
+
+		stale := resourceText(t, serveDB(t, other, dbPath, t.Logf, resourceRead(1, statusURI))["1"])
+		assert.True(t, strings.HasPrefix(stale, note+foreignRootLine(origin)+
+			"\nworkspace      STALE — run `seamark index` in "+origin+" (schema v"), stale)
+
+		_, err = index.Run(index.Options{Root: origin})
+		require.NoError(t, err)
+
+		current := resourceText(t, serveDB(t, other, dbPath, t.Logf, resourceRead(1, statusURI))["1"])
+		assert.True(t, strings.HasPrefix(current, note+foreignRootLine(origin)+"\nworkspace      current (schema v"), current)
 	})
 }
 

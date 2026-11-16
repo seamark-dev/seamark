@@ -141,16 +141,22 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 		}
 	case statusURI:
 		render = func(st *store.Store, r refreshed) (string, error) {
-			// The lesson checks block identifies each hook binary against
-			// this server binary and its version.
-			health, err := status.GatherAs(st, s.root, integration.SelfIdentity(s.version))
+			owner := s.ownerFacts(r)
+
+			// The report reads the root that the answer describes, as
+			// seamark status does. The workspace line then compares the
+			// index with that root, so its route into that root refreshes
+			// it. The lesson checks block identifies each hook binary
+			// against this server binary and its version.
+			health, err := status.GatherAs(st, describedRoot(owner, s.root), integration.SelfIdentity(s.version))
 			if err != nil {
 				return "", err
 			}
 
-			// The root line and the stale route come from the facts that
-			// seamark status reads, so both print the same for one pair.
-			health.NoteOwnership(s.ownerFacts(r))
+			// The root line and the stale route come from the same facts as
+			// in seamark status. So for one workspace and database, both
+			// surfaces print the same root line and workspace line.
+			health.NoteOwnership(owner)
 
 			var b bytes.Buffer
 			status.Print(&b, health)

@@ -465,8 +465,9 @@ model-boundary delivery.
   `why`, `expand`, `change_set` and both resources) opens with one note
   that names that root, both when the index matches the workspace and
   when the server refuses to refresh it. The `seamark://status` resource
-  prints the same `root` line as `seamark status`, `check` keeps its
-  verdict at a matching fingerprint and carries the note, and the
+  prints the same `root` and `workspace` lines as `seamark status`,
+  because both compare the index with the recorded root. `check` keeps
+  its verdict at a matching fingerprint and carries the note, and the
   `orient` title names the recorded root. Where a plain `seamark index`
   in this workspace would be refused, the stale status line and the
   stale note of the CLI read commands print the route of that state
