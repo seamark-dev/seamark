@@ -152,6 +152,54 @@ func TestOwnedBySeamarkAcceptsTheTargetOfALinkNamedSeamark(t *testing.T) {
 	assert.True(t, OwnedBySeamark(target+" gate --hook", []string{GateMarker(ModeWarn)}))
 }
 
+func TestReadHookReadsAWrapperOfTheRunningBinary(t *testing.T) {
+	// Setup writes the path of the running binary into each hook. So a
+	// wrapper around that path must read like a wrapper around a binary
+	// named seamark, or the gate line misses an enforce gate. Another
+	// build at another path stays another program.
+	runningAs(t, renamedBuild, nil)
+
+	marker := GateMarker(ModeEnforce)
+	sibling := "/x/seamark-1.3"
+
+	assertHookUse(t, []string{marker}, []hookCase{
+		{"a shell condition", "test -x " + renamedBuild + " && " + renamedBuild + " " + marker, HookRuns},
+		{"a shell script", "sh -c '" + renamedBuild + " " + marker + "'", HookRuns},
+		{"an exec prefix", "env SEAMARK_DEBUG=1 " + renamedBuild + " " + marker, HookRuns},
+		{"an unknown wrapper", "/opt/wrapper " + renamedBuild + " " + marker, HookMayRun},
+		{"the loose test", "echo `" + renamedBuild + " " + marker + "`", HookMayRun},
+		{"the loose test for words apart", "sh -c '" + renamedBuild + ` "$@"' _ ` + marker, HookMayRun},
+
+		{"another build in a shell condition", "test -x " + sibling + " && " + sibling + " " + marker, HookNotRun},
+		{"another build in an unknown wrapper", "/opt/wrapper " + sibling + " " + marker, HookNotRun},
+		{"another build in the loose test", "echo `" + sibling + " " + marker + "`", HookNotRun},
+		{"another build with words apart", "sh -c '" + sibling + ` "$@"' _ ` + marker, HookNotRun},
+	})
+
+	// The status of the wrapped gate reaches the client, so it blocks.
+	assert.True(t, HookStatusPasses("test -x "+renamedBuild+" && "+renamedBuild+" "+marker, []string{marker}))
+}
+
+func TestReadHookReadsAQuotedRunningBinaryPath(t *testing.T) {
+	// The loose test splits text at blanks and quotes, so a quoted path
+	// with a blank is several loose words. They must match as a sequence.
+	spaced := "/Apps/My Tools/new"
+	runningAs(t, spaced, nil)
+
+	quoted := ShellQuote(spaced)
+	marker := GateMarker(ModeWarn)
+
+	assertHookUse(t, []string{marker}, []hookCase{
+		{"a shell condition", "test -x " + quoted + " && " + quoted + " " + marker, HookRuns},
+		{"an unknown wrapper", "/opt/wrapper " + quoted + " " + marker, HookMayRun},
+		{"the loose test", "echo `" + quoted + " " + marker + "`", HookMayRun},
+		{"the loose test for words apart", "sh -c '" + spaced + ` "$@"' _ ` + marker, HookMayRun},
+
+		{"another file in the same directory", "echo `'/Apps/My Tools/other' " + marker + "`", HookNotRun},
+		{"the last loose word of the path alone", "echo `Tools/new " + marker + "`", HookNotRun},
+	})
+}
+
 func TestMergeKeepsOneHookSetOfTheRunningBinary(t *testing.T) {
 	runningAs(t, renamedBuild, nil)
 

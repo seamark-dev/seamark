@@ -1,12 +1,14 @@
 package hooks
 
 // This file names the binary that a hook command runs: BinaryPath gives
-// the path that setup writes, and the ownership rule reads it back. Both
-// live here, so setup and every reader agree on that path.
+// the path that setup writes, and the ownership rule and the shell reader
+// read it back. They live here, so setup and every reader agree on that
+// path.
 
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -20,8 +22,9 @@ var executable = os.Executable
 //
 // The hooks invoke this exact install, whatever the PATH of the agent
 // is. The path resolves symbolic links, so its basename can differ from
-// "seamark". The ownership rule therefore also accepts this path. When
-// the path cannot be resolved, the bare name is the fallback.
+// "seamark". The ownership rule and the shell reader therefore also
+// accept this path. When the path cannot be resolved, the bare name is
+// the fallback.
 func BinaryPath() string {
 	exe, err := executable()
 	if err != nil {
@@ -74,4 +77,54 @@ func stableInstallPath(path string) string {
 // foreign. The path is computed only when the basename rule fails.
 func ownsHookBinary(word string) bool {
 	return IsSeamarkBinary(word) || word == BinaryPath()
+}
+
+// hookBinary is the running binary as the shell reader compares it. The
+// reader reads a wrapper, which ownership leaves alone. It finds the
+// path once per reading, because a crafted hook command can hold many
+// words, and each lookup reads the file system.
+type hookBinary struct {
+	// path is the path that BinaryPath gives. Empty means no path.
+	path string
+	// words is path as looseWords splits it. The loose split cuts a path
+	// at each blank, so a path with a blank gives more than one word.
+	words []string
+}
+
+// newHookBinary returns the hookBinary for a path that BinaryPath gives.
+func newHookBinary(path string) hookBinary {
+	return hookBinary{path: path, words: looseWords(path)}
+}
+
+// names reports whether one parsed word names the seamark binary: by the
+// basename rule, or as the path of the running binary. It is the rule of
+// ownsHookBinary, with the path found in advance.
+func (b hookBinary) names(word string) bool {
+	return IsSeamarkBinary(word) || (b.path != "" && word == b.path)
+}
+
+// looseAt returns how many loose words at the start of words name the
+// seamark binary, or zero. A word with the basename "seamark" is one
+// word. The running binary is as many words as its loose split gives.
+func (b hookBinary) looseAt(words []string) int {
+	switch {
+	case len(words) > 0 && IsSeamarkBinary(words[0]):
+		return 1
+	case len(b.words) > 0 && len(words) >= len(b.words) && slices.Equal(words[:len(b.words)], b.words):
+		return len(b.words)
+	default:
+		return 0
+	}
+}
+
+// looseIn reports whether the loose words name the seamark binary
+// anywhere in them.
+func (b hookBinary) looseIn(words []string) bool {
+	for i := range words {
+		if b.looseAt(words[i:]) > 0 {
+			return true
+		}
+	}
+
+	return false
 }

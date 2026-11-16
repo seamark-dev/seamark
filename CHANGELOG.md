@@ -138,7 +138,10 @@ model-boundary delivery.
   see. Each re-run added another hook set, and `--gate-mode warn` after
   `--gate-mode enforce` printed "nothing blocks" while the enforce hook
   stayed. Init, doctor, and status now also own a hook command that
-  names the path of the running binary, for Claude Code and Codex. A
+  names the path of the running binary, for Claude Code and Codex. They
+  also read a wrapper around that path, such as `test -x <path> &&
+  <path> gate --enforce --hook`, so the gate line names its enforce mode
+  in place of "nothing blocks"; setup keeps the wrapper as written. A
   hook that another binary wrote under another name stays foreign.
 - **Codex gate in the Claude Code form.** A `gate --hook` or
   `gate --enforce --hook` handler without `--client codex` in

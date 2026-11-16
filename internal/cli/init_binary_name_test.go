@@ -130,3 +130,35 @@ func TestInitThroughARenamedBinaryOwnsItsCodexHooks(t *testing.T) {
 	assert.Contains(t, out, "codex gate (warn) + lessons hooks installed")
 	assert.NotContains(t, out, "codex no hooks installed")
 }
+
+func TestInitThroughARenamedBinaryReadsAWrapperOfItsGate(t *testing.T) {
+	// A wrapper is the user's definition: setup keeps it as written. It
+	// must still read the wrapper around the running binary like one
+	// around a binary named seamark, or the gate line says "nothing
+	// blocks" while the wrapped enforce gate blocks.
+	bin := renamedBinary(t)
+	root := writeFixture(t)
+	gitify(t, root)
+
+	quoted := hooks.ShellQuote(bin)
+	wrapper := "test -x " + quoted + " && " + quoted + " " + hooks.GateMarker(hooks.ModeEnforce)
+	writeHookDocument(t, root, ".claude/settings.json", "Bash", wrapper)
+
+	want := []string{wrapper, hooks.ClaudeSpecs(hooks.ModeWarn)[0].Command(bin), hooks.ClaudeSpecs(hooks.ModeWarn)[1].Command(bin)}
+
+	for _, args := range [][]string{nil, {"--gate-mode", "warn"}} {
+		out := initAs(t, root, args...)
+		assert.Contains(t, out, "note    .claude/settings.json: also runs `"+wrapper+"` for Bash", args)
+		assert.Contains(t, out, "gate    enforce — .claude/settings.json runs its own gate hook with --enforce", args)
+		assert.NotContains(t, out, "nothing blocks", args)
+		assert.Equal(t, want, commands(t, readSettings(t, root)), "setup keeps the wrapper as written: %v", args)
+	}
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	out, err := run(t, "-C", root, "status")
+	require.NoError(t, err)
+	assert.Contains(t, out, "gate           enforce (claude hook carries --enforce")
+	assert.NotContains(t, out, "no gate hook installed")
+}

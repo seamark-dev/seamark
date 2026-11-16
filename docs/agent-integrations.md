@@ -96,8 +96,11 @@ hook as seamark's when that path has the basename `seamark`, or when it
 is the path of the binary that runs them. So a renamed build, such as
 `seamark-1.2`, or a link named `seamark` to such a file, keeps one hook
 set across re-runs, and doctor and status run through that binary report
-it. Run through another binary, such as `seamark` on your PATH, they
-read the renamed build's hooks as another program's, and a setup run
+it. The same rule names the seamark binary inside a wrapper that you
+wrote, such as `test -x <path> && <path> gate --enforce --hook`: setup
+keeps the wrapper as written, and the gate line names its mode. Run
+through another binary, such as `seamark` on your PATH, they read the
+renamed build's hooks and wrappers as another program's, and a setup run
 adds its own hooks beside them.
 
 Setup keeps the matcher of an existing hook, because a narrow matcher can
@@ -617,7 +620,8 @@ The rules that hold every adapter to the same behavior:
   its basename is `seamark`, or it is exactly the path of the running
   binary (`hooks.BinaryPath`), which setup writes. A wrapper, a shell
   condition, or an environment prefix is someone else's definition:
-  keep it as written, report it, and install
+  keep it as written, report it (the shell reader names seamark inside
+  it by the same two rules), and install
   no second handler when it certainly runs the hook. For a lesson-check
   hook, setup refuses the run instead (`refuseSecondLessonHandler`).
   When the adapter

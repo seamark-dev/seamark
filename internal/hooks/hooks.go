@@ -147,8 +147,8 @@ func shellWord(s string) (string, bool) {
 // binary: exact basename "seamark", tolerating the Windows suffix. The
 // hook owner, the Claude Code registration, and the Codex registration
 // all use this rule, so they agree on a binary named seamark. The hook
-// owner also accepts the path of the running binary, because setup
-// writes that path into each hook command.
+// owner and the shell reader also accept the path of the running binary,
+// because setup writes that path into each hook command.
 func IsSeamarkBinary(command string) bool {
 	return strings.TrimSuffix(filepath.Base(command), ".exe") == "seamark"
 }
