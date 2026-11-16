@@ -732,10 +732,21 @@ one theme never spend two slots:
   nothing to qualify. `mined_freshness` is `stale` here and
   `not-refreshed` from `change_set`. Beside `stale`,
   `mined_stale_reason` says why: `workspace-changed`, or
-  `other-version` when another seamark version built the index. `mined_root` (from `change_set`
-  only) names the root that the index records when that root is another
-  repository. The command prepares for the root that the index records,
-  so it never names one. The command exits 0 also
+  `other-version` when another seamark version built the index. `mined_root`
+  names the root that the index records when that root is another
+  repository. In a copied or moved checkout whose index still records the
+  original root, the command prepares for the `-C` checkout, as
+  `change_set` does: a relative or an absolute path of the checkout
+  resolves there, the pins come from its own `.seamark/lessons.yaml`, and
+  the firing record goes to its log. The mined lessons come from the
+  index, so `mined_root` names the original root, and the text says that
+  the mined lessons come from an index that records it. A path inside the
+  original root is outside the workspace. `lessons --stats` counts these
+  records after `seamark index` runs in the checkout. A `--db` that
+  records another repository gives the same preparation for the `-C`
+  checkout. `change_set`
+  refreshes the index first, and that refresh rebuilds a copied default
+  index, so its document then names no `mined_root`. The command exits 0 also
   when no pin applies, and 1 when it gets no path, when no path is inside
   the workspace, or when another mode flag is given; it never exits 2,
   because it blocks nothing. Preparation keeps no delivery state: every

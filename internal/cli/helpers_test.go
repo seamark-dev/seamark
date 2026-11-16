@@ -45,9 +45,9 @@ func gitRoot(t *testing.T, dir string) string {
 	return string(out[:len(out)-1])
 }
 
-// runMCP serves one MCP request script through `seamark mcp` in root
-// and returns the raw responses.
-func runMCP(t *testing.T, root string, requests ...string) string {
+// runMCP serves one MCP request script through `seamark mcp` with the
+// global flags, for example -C and --db, and returns the raw responses.
+func runMCP(t *testing.T, flags []string, requests ...string) string {
 	t.Helper()
 
 	var out, errOut bytes.Buffer
@@ -56,7 +56,7 @@ func runMCP(t *testing.T, root string, requests ...string) string {
 	cmd.SetIn(strings.NewReader(strings.Join(requests, "\n") + "\n"))
 	cmd.SetOut(&out)
 	cmd.SetErr(&errOut)
-	cmd.SetArgs([]string{"-C", root, "mcp"})
+	cmd.SetArgs(append(append([]string{}, flags...), "mcp"))
 	require.NoError(t, cmd.Execute(), "stderr: %s", errOut.String())
 
 	return out.String() + errOut.String()

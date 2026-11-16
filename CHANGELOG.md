@@ -579,8 +579,18 @@ model-boundary delivery.
   absent in an ordinary document. `mined_freshness` is `not-refreshed`
   when `change_set` could not refresh the index, and `stale` when
   `lessons --prepare` finds the index behind the workspace. `mined_root`
-  names the repository that the index of a `change_set` call records
-  when it is another one. Both text forms say it in one line.
+  names the repository that the index records when it is another one.
+  Both text forms say it in one line.
+- **`lessons --prepare` works in a copied checkout.** In a copied or
+  moved checkout whose index still records the original root, the
+  command rejected every path of the checkout as outside the workspace.
+  A path of the original got the pins of the original's `lessons.yaml`,
+  and its firing record went to the original's log. The command now
+  prepares for the `-C` checkout, with its own `lessons.yaml` and log, as
+  `change_set` does, and `mined_root` names the original root.
+  `lessons --stats` counts these records after `seamark index` runs in
+  the checkout. A `--db` that records another repository gives the same
+  preparation for the `-C` checkout.
 - **A database inside the workspace no longer forces a rebuild on every
   run.** With `--db ./custom.db` as an untracked file, the freshness
   fingerprint included the file that every run writes. So every run

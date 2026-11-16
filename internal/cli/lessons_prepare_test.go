@@ -593,10 +593,11 @@ func TestLessonsPrepareResolvesPathsFromTheProcessDirectory(t *testing.T) {
 	})
 }
 
-// mcpPreparations serves one `seamark mcp` session in root under the
-// 2025-06-18 protocol with one change_set call for each path set. It
-// returns the lesson_preparation of each call, in call order.
-func mcpPreparations(t *testing.T, root string, calls ...[]string) []delivery.Preparation {
+// mcpPreparations serves one `seamark mcp` session with the global
+// flags under the 2025-06-18 protocol with one change_set call for each
+// path set. It returns the lesson_preparation of each call, in call
+// order.
+func mcpPreparations(t *testing.T, flags []string, calls ...[]string) []delivery.Preparation {
 	t.Helper()
 
 	requests := []string{`{"jsonrpc":"2.0","id":0,"method":"initialize",` +
@@ -612,7 +613,7 @@ func mcpPreparations(t *testing.T, root string, calls ...[]string) []delivery.Pr
 
 	byID := map[int]delivery.Preparation{}
 
-	for line := range strings.SplitSeq(runMCP(t, root, requests...), "\n") {
+	for line := range strings.SplitSeq(runMCP(t, flags, requests...), "\n") {
 		// runMCP appends the server log to the protocol frames. Only a
 		// frame starts with a brace.
 		if !strings.HasPrefix(line, "{") {
@@ -684,7 +685,7 @@ func TestLessonsPrepareMatchesChangeSet(t *testing.T) {
 			calls[i] = c.paths
 		}
 
-		served := mcpPreparations(t, root, calls...)
+		served := mcpPreparations(t, []string{"-C", root}, calls...)
 
 		for i, c := range cases {
 			prepared := prepareJSON(t, root, c.paths...)
@@ -860,8 +861,7 @@ func TestLessonsFileShowsWhatTheRoutesLeaveOut(t *testing.T) {
 // a tracked file the index no longer matches the workspace: the document
 // says stale beside mined_status ok, and the text says it in one line. A
 // current index has no key, so an ordinary document keeps its bytes. The
-// root of the preparation is the root that the index records, so the
-// command never names a mined_root.
+// index records this checkout, so the document names no mined_root.
 func TestLessonsPrepareSaysWhenTheIndexIsStale(t *testing.T) {
 	root := prepareRepo(t, true)
 	main := filepath.Join(root, "a.go")
@@ -923,4 +923,159 @@ func TestLessonsPrepareSaysWhenAnotherVersionBuiltTheIndex(t *testing.T) {
 	text, err = prepareRun(t, root, main)
 	require.NoError(t, err)
 	assert.NotContains(t, text, line)
+}
+
+// prepareOriginLessons is the lessons.yaml that prepareCopy gives the
+// origin after the copy. Its one pin covers a.go under another rule, so
+// a preparation that reads the origin's file shows origin-only.
+const prepareOriginLessons = `pin:
+  - rule: origin-only
+    region: a.go
+    note: The pin of the origin.
+`
+
+// prepareCopy builds an indexed repository with prepareRepo and copies
+// it with `cp -R`. The copy keeps the index, so that index still records
+// the origin. The origin then gets prepareOriginLessons, so the two
+// checkouts have different pins. It returns the origin by its resolved
+// path, as the index records it, and the copy.
+func prepareCopy(t *testing.T) (origin, copied string) {
+	t.Helper()
+
+	root := prepareRepo(t, true)
+	copied = rootWriteCopy(t, root)
+
+	origin, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+
+	verifyWrite(t, origin, ".seamark/lessons.yaml", prepareOriginLessons)
+
+	return origin, copied
+}
+
+// TestLessonsPrepareInACopiedCheckout covers a checkout whose index
+// records another root: a copy before its first index run, and a moved
+// checkout. The preparation describes the -C checkout. A relative path
+// and an absolute path of the copy both resolve, the pins come from the
+// lessons.yaml of the copy, and the mined lessons come from the copied
+// index, which the document names in mined_root. The origin stays byte
+// for byte, also its firing log.
+func TestLessonsPrepareInACopiedCheckout(t *testing.T) {
+	origin, copied := prepareCopy(t)
+	before := prepareFiles(t, origin)
+
+	cfg, err := reviews.LoadConfig(copied)
+	require.NoError(t, err)
+
+	t.Chdir(copied)
+
+	t.Run("a relative path", func(t *testing.T) {
+		p := prepareJSON(t, copied, "a.go")
+
+		assert.Equal(t, []string{"a.go"}, preparedPaths(p))
+		assert.Zero(t, p.Request.RejectedCount)
+		assert.Equal(t, []string{"keep-main-small"}, preparedRules(p), "the pins of the copy, not of the origin")
+		assert.Equal(t, cfg.GuidanceDigest(), p.Guidance.GuidanceSHA256, "the guidance is the lessons.yaml of the copy")
+
+		assert.Equal(t, delivery.MinedOK, p.Guidance.MinedStatus)
+		assert.Equal(t, origin, p.Guidance.MinedRoot, "the document names the root that the index records")
+		require.Len(t, p.Lessons, 1, "the mined lessons come from the copied index")
+		assert.Equal(t, "RUF001", p.Lessons[0].Symptom)
+	})
+
+	t.Run("an absolute path", func(t *testing.T) {
+		p := prepareJSON(t, copied, filepath.Join(copied, "src", "handler.go"))
+
+		assert.Equal(t, []string{"src/handler.go"}, preparedPaths(p))
+		assert.Equal(t, []string{"prefer-errors-is"}, preparedRules(p))
+		assert.Equal(t, origin, p.Guidance.MinedRoot)
+	})
+
+	t.Run("the text names the recorded root", func(t *testing.T) {
+		text, err := prepareRun(t, copied, "a.go")
+		require.NoError(t, err)
+
+		assert.Contains(t, text, "  the mined lessons come from an index that records "+origin+"\n")
+		assert.Contains(t, text, "keep-main-small")
+		assert.NotContains(t, text, "origin-only")
+	})
+
+	t.Run("a path in the origin is outside the workspace", func(t *testing.T) {
+		abs := filepath.Join(origin, "a.go")
+
+		got := prepareRefuse(t, copied, "--prepare", abs)
+		assert.Equal(t, `no path of --prepare is inside the workspace: 1 rejected (first "`+abs+`": outside the workspace)`, got)
+	})
+
+	t.Run("the firing records stay in the copy", func(t *testing.T) {
+		assert.Len(t, prepareFirings(t, copied), 3, "one record for each preparation with a selection")
+
+		firings, err := reviews.ReadFirings(origin)
+		require.NoError(t, err)
+		assert.Empty(t, firings)
+		assert.Equal(t, before, prepareFiles(t, origin), "a preparation in the copy writes nothing in the origin")
+	})
+
+	t.Run("a moved checkout", func(t *testing.T) {
+		root := prepareRepo(t, true)
+
+		recorded, err := filepath.EvalSymlinks(root)
+		require.NoError(t, err)
+
+		moved := filepath.Join(rootWriteDir(t), "moved")
+		require.NoError(t, os.Rename(recorded, moved))
+		t.Chdir(moved)
+
+		p := prepareJSON(t, moved, "a.go")
+		assert.Equal(t, []string{"a.go"}, preparedPaths(p))
+		assert.Equal(t, []string{"keep-main-small"}, preparedRules(p))
+		assert.Equal(t, recorded, p.Guidance.MinedRoot, "the document names the root that no longer exists")
+		assert.NoDirExists(t, recorded, "a preparation never creates the recorded root")
+	})
+}
+
+// TestLessonsPrepareMatchesChangeSetInACopy proves that the two
+// preparation surfaces agree in a copy whose index records the origin:
+// MCP change_set and lessons --prepare describe the copy and read its
+// lessons.yaml. Only the surface, the time, and the event ID differ.
+func TestLessonsPrepareMatchesChangeSetInACopy(t *testing.T) {
+	t.Run("the database of the origin", func(t *testing.T) {
+		// The MCP refresh never rebuilds this file and skips, because the
+		// index matches the copy. So both surfaces read the index of the
+		// origin and name it in mined_root.
+		origin, copied := prepareCopy(t)
+		db := []string{"--db", store.DefaultPath(origin)}
+		paths := []string{filepath.Join(copied, "a.go"), filepath.Join(copied, "generated", "b.txt")}
+
+		served := mcpPreparations(t, append([]string{"-C", copied}, db...), paths)[0]
+		prepared := prepareJSON(t, copied, append(paths, db...)...)
+
+		assert.Equal(t, origin, prepared.Guidance.MinedRoot)
+		assert.ElementsMatch(t, []string{"keep-main-small", "frozen-assets"}, preparedRules(prepared))
+		require.Len(t, prepared.Lessons, 1)
+
+		served.Surface, served.PreparedAt, served.EventID = prepared.Surface, prepared.PreparedAt, prepared.EventID
+		assert.Equal(t, prepared, served)
+	})
+
+	t.Run("the default database of the copy", func(t *testing.T) {
+		// The MCP refresh rebuilds a copied default index, so the index
+		// records the copy after the first change_set call. The command
+		// refreshes no index, so before that call it names the origin.
+		origin, copied := prepareCopy(t)
+		paths := []string{filepath.Join(copied, "a.go")}
+
+		first := prepareJSON(t, copied, paths...)
+		assert.Equal(t, origin, first.Guidance.MinedRoot)
+
+		served := mcpPreparations(t, []string{"-C", copied}, paths)[0]
+		assert.Empty(t, served.Guidance.MinedRoot, "the server rebuilt the index for the copy")
+		assert.Equal(t, first.Request, served.Request)
+		assert.Equal(t, first.Pins, served.Pins)
+		assert.Equal(t, first.Guidance.GuidanceSHA256, served.Guidance.GuidanceSHA256)
+
+		prepared := prepareJSON(t, copied, paths...)
+		served.Surface, served.PreparedAt, served.EventID = prepared.Surface, prepared.PreparedAt, prepared.EventID
+		assert.Equal(t, prepared, served)
+	})
 }
