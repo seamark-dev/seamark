@@ -706,6 +706,929 @@
         "after": {
           "f.txt": "a\n"
         }
+      },
+      {
+        "name": "30_context_keeps_trailing_spaces",
+        "shape": "context that matches only without trailing spaces keeps the file line",
+        "before": {
+          "f.txt": "a\nb  \nc\nd\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n b\n-c\n+C\n d\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb  \nC\nd\n"
+        }
+      },
+      {
+        "name": "31_context_keeps_leading_spaces",
+        "shape": "context that matches only without leading spaces keeps the file line",
+        "before": {
+          "f.txt": "  a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "  a\nB\n"
+        }
+      },
+      {
+        "name": "32_context_keeps_tab",
+        "shape": "context with spaces where the file line has a tab",
+        "before": {
+          "f.txt": "\ta\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n     a\n-b\n+B\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "\ta\nB\n"
+        }
+      },
+      {
+        "name": "33_fuzzy_delete_then_equal_add",
+        "shape": "a deleted line that matches only without trailing spaces, then the same text added",
+        "before": {
+          "f.txt": "a  \n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-a\n+a\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\n"
+        }
+      },
+      {
+        "name": "34_fuzzy_delete_then_two_adds",
+        "shape": "a deleted line that matches only without trailing spaces, then two added lines",
+        "before": {
+          "f.txt": "a  \n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-a\n+b\n+a\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "b\na\n"
+        }
+      },
+      {
+        "name": "35_fuzzy_context_then_equal_add",
+        "shape": "fuzzy context followed by an added line with the context text",
+        "before": {
+          "f.txt": "a  \nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n+a\n b\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a  \na\nb\n"
+        }
+      },
+      {
+        "name": "36_eol_first_lf_rest_crlf",
+        "shape": "first line ends with LF, the others with CRLF",
+        "before": {
+          "f.txt": "a\nb\r\nc\r\nd\r\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n b\n-c\n+C\n d\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb\r\nC\nd\r\n"
+        }
+      },
+      {
+        "name": "37_eol_first_crlf_rest_lf",
+        "shape": "first line ends with CRLF, the others with LF",
+        "before": {
+          "f.txt": "a\r\nb\nc\nd\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n b\n-c\n+C\n d\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\r\nb\nC\r\nd\n"
+        }
+      },
+      {
+        "name": "38_eol_crlf_file_lf_last_line",
+        "shape": "CRLF file whose changed last line ends with LF",
+        "before": {
+          "f.txt": "a\r\nb\r\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n b\n-c\n+C\n+D\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\r\nb\r\nC\r\nD\r\n"
+        }
+      },
+      {
+        "name": "39_eol_insertion_first_line_crlf",
+        "shape": "insertion into a file where only the first line ends with CRLF",
+        "before": {
+          "f.txt": "a\r\nb\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n+z\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\r\nb\nc\nz\r\n"
+        }
+      },
+      {
+        "name": "40_single_line_without_final_newline",
+        "shape": "file of one line without a final newline",
+        "before": {
+          "f.txt": "a"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-a\n+A\n+B\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "A\nB\n"
+        }
+      },
+      {
+        "name": "41_crlf_without_final_newline_tail_kept",
+        "shape": "CRLF file without a final newline, the last line stays",
+        "before": {
+          "f.txt": "a\r\nb\r\nc"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-a\n+A\n b\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "A\r\nb\r\nc\r\n"
+        }
+      },
+      {
+        "name": "42_add_after_last_line_without_final_newline",
+        "shape": "added line after a last line without a final newline",
+        "before": {
+          "f.txt": "a\nb"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n b\n+X\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb\nX\n"
+        }
+      },
+      {
+        "name": "43_mixed_eol_without_final_newline",
+        "shape": "mixed line ends and no final newline, the first line changes",
+        "before": {
+          "f.txt": "a\nb\r\nc"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-a\n+A\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "A\nb\r\nc\n"
+        }
+      },
+      {
+        "name": "44_insertion_anchor_goes_to_end",
+        "shape": "insertion with an @@ anchor in the middle of the file",
+        "before": {
+          "f.txt": "func a\nx\nfunc b\ny\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@ func a\n+z\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "func a\nx\nfunc b\ny\nz\n"
+        }
+      },
+      {
+        "name": "45_insertion_after_trailing_blank_line",
+        "shape": "insertion into a file that ends with an empty line",
+        "before": {
+          "f.txt": "a\nb\n\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n+z\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb\n\nz\n"
+        }
+      },
+      {
+        "name": "46_insertion_into_empty_file",
+        "shape": "insertion into an empty file",
+        "before": {
+          "f.txt": ""
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n+z\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "z\n"
+        }
+      },
+      {
+        "name": "47_insertion_with_end_of_file",
+        "shape": "insertion followed by *** End of File",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n+z\n*** End of File\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb\nz\n"
+        }
+      },
+      {
+        "name": "48_insertion_anchor_missing",
+        "shape": "insertion whose @@ anchor does not exist (refusal)",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@ zzz\n+z\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find context 'zzz' in <scratch>/f.txt\n",
+        "after": {
+          "f.txt": "a\nb\n"
+        }
+      },
+      {
+        "name": "49_insertion_without_final_newline",
+        "shape": "insertion into a file without a final newline",
+        "before": {
+          "f.txt": "a\nb"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n+z\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb\nz\n"
+        }
+      },
+      {
+        "name": "50_exact_match_before_fuzzy_match",
+        "shape": "an exact match later in the file wins over an earlier fuzzy match",
+        "before": {
+          "f.txt": "a \nb\na\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a \nb\na\nB\n"
+        }
+      },
+      {
+        "name": "51_anchor_equal_to_context",
+        "shape": "@@ anchor with the text of the first context line",
+        "before": {
+          "f.txt": "x\ny\nx\ny\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@ x\n x\n-y\n+Y\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "x\ny\nx\nY\n"
+        }
+      },
+      {
+        "name": "52_anchor_leading_spaces",
+        "shape": "@@ anchor with leading spaces",
+        "before": {
+          "f.txt": "def f\nx\n  def f\nx\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@   def f\n-x\n+X\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "def f\nx\n  def f\nX\n"
+        }
+      },
+      {
+        "name": "53_anchor_trailing_spaces",
+        "shape": "@@ anchor with trailing spaces",
+        "before": {
+          "f.txt": "func b  \nx\nfunc b\nx\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@ func b  \n-x\n+X\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "func b  \nx\nfunc b\nX\n"
+        }
+      },
+      {
+        "name": "54_end_of_file_context_not_at_end",
+        "shape": "*** End of File on lines that are not the last (refusal)",
+        "before": {
+          "f.txt": "a\nb\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n*** End of File\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\na\nb\n",
+        "after": {
+          "f.txt": "a\nb\nc\n"
+        }
+      },
+      {
+        "name": "55_end_of_file_before_trailing_blank_line",
+        "shape": "*** End of File when the file ends with an empty line (refusal)",
+        "before": {
+          "f.txt": "a\nb\n\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n a\n-b\n+B\n*** End of File\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\na\nb\n",
+        "after": {
+          "f.txt": "a\nb\n\n"
+        }
+      },
+      {
+        "name": "56_end_of_file_overlapping_chunk",
+        "shape": "*** End of File chunk on a line that an earlier chunk used (refusal)",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n@@\n-b\n+C\n*** End of File\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\nb\n",
+        "after": {
+          "f.txt": "a\nb\n"
+        }
+      },
+      {
+        "name": "57_end_of_file_second_equal_chunk",
+        "shape": "two equal chunks, the second with *** End of File",
+        "before": {
+          "f.txt": "x\ny\nx\ny\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n x\n-y\n+Y\n@@\n x\n-y\n+Z\n*** End of File\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "x\nY\nx\nZ\n"
+        }
+      },
+      {
+        "name": "58_end_of_file_with_trailing_empty_context",
+        "shape": "*** End of File after a trailing empty context line",
+        "before": {
+          "f.txt": "a\nb"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n \n*** End of File\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nB\n"
+        }
+      },
+      {
+        "name": "59_retry_empty_delete_and_empty_add",
+        "shape": "chunk that ends with an empty deleted and an empty added line",
+        "before": {
+          "f.txt": "a\nb"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n a\n-b\n+B\n-\n+\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nB\n"
+        }
+      },
+      {
+        "name": "60_retry_context_then_add",
+        "shape": "chunk that ends with an added line and an empty context line",
+        "before": {
+          "f.txt": "a\nb"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n b\n+X\n \n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb\nX\n"
+        }
+      },
+      {
+        "name": "61_retry_empty_delete",
+        "shape": "chunk that ends with an empty deleted line",
+        "before": {
+          "f.txt": "a\nb"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n a\n-b\n+B\n-\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nB\n"
+        }
+      },
+      {
+        "name": "62_retry_empty_file_context",
+        "shape": "empty context line on an empty file",
+        "before": {
+          "f.txt": ""
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n \n+z\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "\nz\n"
+        }
+      },
+      {
+        "name": "63_retry_keeps_fuzzy_context",
+        "shape": "trailing empty context line after fuzzy context",
+        "before": {
+          "f.txt": "a  \nb"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n \n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a  \nB\n"
+        }
+      },
+      {
+        "name": "64_chunks_out_of_order",
+        "shape": "second chunk above the first (refusal)",
+        "before": {
+          "f.txt": "l1\nl2\nl3\nl4\nl5\nl6\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n l5\n-l6\n+L6\n@@\n l1\n-l2\n+L2\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\nl1\nl2\n",
+        "after": {
+          "f.txt": "l1\nl2\nl3\nl4\nl5\nl6\n"
+        }
+      },
+      {
+        "name": "65_chunks_overlap",
+        "shape": "second chunk starts on the last context line of the first (refusal)",
+        "before": {
+          "f.txt": "a\nb\nc\nd\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n c\n@@\n c\n-d\n+D\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\nc\nd\n",
+        "after": {
+          "f.txt": "a\nb\nc\nd\n"
+        }
+      },
+      {
+        "name": "66_insertion_then_replace_last_line",
+        "shape": "insertion chunk, then a chunk that replaces the last line",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n+Z\n@@\n a\n-b\n+B\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nB\nZ\n"
+        }
+      },
+      {
+        "name": "67_insertion_then_add_at_end",
+        "shape": "insertion chunk, then a chunk that adds after the last line",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n+Z\n@@\n a\n b\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb\nZ\nC\n"
+        }
+      },
+      {
+        "name": "68_insertion_then_runs_around_context",
+        "shape": "insertion chunk, then a chunk with added lines before and after context",
+        "before": {
+          "f.txt": "a\nb\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n+Z\n@@\n-a\n+A\n b\n c\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "A\nb\nc\nZ\nC\n"
+        }
+      },
+      {
+        "name": "69_insertions_at_one_line_keep_chunk_order",
+        "shape": "two chunks that insert at the same line",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n+X\n@@\n+Y\n b\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nX\nY\nb\n"
+        }
+      },
+      {
+        "name": "70_second_anchor_line",
+        "shape": "two @@ anchor lines in a row (refusal)",
+        "before": {
+          "f.txt": "class A\n def f\n  x\nclass B\n def f\n  x\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@ class B\n@@  def f\n-  x\n+  y\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Invalid patch hunk on line 4: Unexpected line found in update hunk: '@@  def f'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)\n",
+        "after": {
+          "f.txt": "class A\n def f\n  x\nclass B\n def f\n  x\n"
+        }
+      },
+      {
+        "name": "71_empty_chunk",
+        "shape": "@@ line without change lines (refusal)",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Invalid patch hunk on line 4: Update hunk does not contain any lines\n",
+        "after": {
+          "f.txt": "a\nb\n"
+        }
+      },
+      {
+        "name": "72_lines_after_end_of_file",
+        "shape": "a change line after *** End of File (refusal)",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n*** End of File\n+c\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Invalid patch hunk on line 8: Expected update hunk to start with a @@ context marker, got: '+c'\n",
+        "after": {
+          "f.txt": "a\nb\n"
+        }
+      },
+      {
+        "name": "73_context_only_chunk",
+        "shape": "chunk with context lines only",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n b\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nb\n"
+        }
+      },
+      {
+        "name": "74_delete_every_line",
+        "shape": "chunk that deletes every line",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-a\n-b\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": ""
+        }
+      },
+      {
+        "name": "75_byte_order_mark",
+        "shape": "file that starts with a byte order mark (refusal)",
+        "before": {
+          "f.txt": "﻿a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\na\nb\n",
+        "after": {
+          "f.txt": "﻿a\nb\n"
+        }
+      },
+      {
+        "name": "76_lone_cr_line_ends",
+        "shape": "file whose lines end with a lone CR",
+        "before": {
+          "f.txt": "a\rb\rc\r"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-b\n+B\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\rB\rc\r"
+        }
+      },
+      {
+        "name": "77_lone_cr_inside_line",
+        "shape": "file with a lone CR inside a line",
+        "before": {
+          "f.txt": "a\nb\rc\nd\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\n c\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nB\nc\nd\n"
+        }
+      },
+      {
+        "name": "78_same_file_twice",
+        "shape": "two update sections of one file",
+        "before": {
+          "f.txt": "a\nb\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n-a\n+A\n*** Update File: f.txt\n@@\n-c\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "A\nb\nC\n"
+        }
+      },
+      {
+        "name": "79_add_then_update_same_file",
+        "shape": "add section, then an update section of the same file",
+        "before": {},
+        "patch": "*** Begin Patch\n*** Add File: n.txt\n+a\n*** Update File: n.txt\n@@\n-a\n+b\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nA n.txt\nM n.txt\n",
+        "stderr": "",
+        "after": {
+          "n.txt": "b\n"
+        }
+      },
+      {
+        "name": "80_move_onto_existing_crlf_file",
+        "shape": "*** Move to an existing file, CRLF source",
+        "before": {
+          "f.txt": "a\r\nb\r\n",
+          "g.txt": "x\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n*** Move to: g.txt\n@@\n-b\n+B\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM g.txt\n",
+        "stderr": "",
+        "after": {
+          "g.txt": "a\r\nB\r\n"
+        }
+      },
+      {
+        "name": "81_added_line_with_lone_cr",
+        "shape": "added line that holds a lone CR",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n a\n-b\n+B\rC\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nB\rC\n"
+        }
+      },
+      {
+        "name": "82_line_separators_inside_line",
+        "shape": "file line with U+2028, U+0085, a vertical tab and a form feed inside",
+        "before": {
+          "f.txt": "a\u2028bc\u000bd\fe\nf\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n a\u2028bc\u000bd\fe\n-f\n+F\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\u2028bc\u000bd\fe\nF\n"
+        }
+      },
+      {
+        "name": "83_context_unicode_trailing_whitespace",
+        "shape": "context that matches only without trailing Unicode whitespace",
+        "before": {
+          "f.txt": "a \nb \nc　\nd\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n b\n c\n-d\n+D\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a \nb \nc　\nD\n"
+        }
+      },
+      {
+        "name": "84_normalize_dashes",
+        "shape": "context with an ASCII hyphen for each Unicode dash and the minus sign",
+        "before": {
+          "f.txt": "a‐b\na‑b\na‒b\na–b\na—b\na―b\na−b\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a-b\n a-b\n a-b\n a-b\n a-b\n a-b\n a-b\n-c\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a‐b\na‑b\na‒b\na–b\na—b\na―b\na−b\nC\n"
+        }
+      },
+      {
+        "name": "85_normalize_single_quotes",
+        "shape": "context with an apostrophe for each Unicode single quote",
+        "before": {
+          "f.txt": "a‘b\na’b\na‚b\na‛b\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a'b\n a'b\n a'b\n a'b\n-c\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a‘b\na’b\na‚b\na‛b\nC\n"
+        }
+      },
+      {
+        "name": "86_normalize_double_quotes",
+        "shape": "context with a quotation mark for each Unicode double quote",
+        "before": {
+          "f.txt": "a“b\na”b\na„b\na‟b\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\"b\n a\"b\n a\"b\n a\"b\n-c\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a“b\na”b\na„b\na‟b\nC\n"
+        }
+      },
+      {
+        "name": "87_normalize_spaces",
+        "shape": "context with a space for each mapped Unicode space",
+        "before": {
+          "f.txt": "a b\na b\na b\na b\na b\na b\na b\na b\na b\na b\na b\na b\na　b\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a b\n a b\n a b\n a b\n a b\n a b\n a b\n a b\n a b\n a b\n a b\n a b\n a b\n-c\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a b\na b\na b\na b\na b\na b\na b\na b\na b\na b\na b\na b\na　b\nC\n"
+        }
+      },
+      {
+        "name": "88_normalize_patch_side",
+        "shape": "context with Unicode punctuation where the file has ASCII",
+        "before": {
+          "f.txt": "a-b\n\"a\"\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n a–b\n “a”\n-c\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a-b\n\"a\"\nC\n"
+        }
+      },
+      {
+        "name": "89_unmapped_dash",
+        "shape": "context with an ASCII hyphen for a fullwidth hyphen-minus (refusal)",
+        "before": {
+          "f.txt": "a－b\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a-b\n-c\n+C\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\na-b\nc\n",
+        "after": {
+          "f.txt": "a－b\nc\n"
+        }
+      },
+      {
+        "name": "90_unmapped_single_quote",
+        "shape": "context with an apostrophe for a modifier letter apostrophe (refusal)",
+        "before": {
+          "f.txt": "aʼb\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a'b\n-c\n+C\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\na'b\nc\n",
+        "after": {
+          "f.txt": "aʼb\nc\n"
+        }
+      },
+      {
+        "name": "91_unmapped_double_quote",
+        "shape": "context with a quotation mark for a fullwidth quotation mark (refusal)",
+        "before": {
+          "f.txt": "a＂b\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\"b\n-c\n+C\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\na\"b\nc\n",
+        "after": {
+          "f.txt": "a＂b\nc\n"
+        }
+      },
+      {
+        "name": "92_unmapped_space",
+        "shape": "context with a space for an en quad (refusal)",
+        "before": {
+          "f.txt": "a b\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a b\n-c\n+C\n*** End Patch",
+        "exit_status": 1,
+        "stdout": "",
+        "stderr": "Failed to find expected lines in <scratch>/f.txt:\na b\nc\n",
+        "after": {
+          "f.txt": "a b\nc\n"
+        }
+      },
+      {
+        "name": "93_trailing_unicode_space_before_leading_space",
+        "shape": "a match without trailing Unicode whitespace wins over an earlier match without leading spaces",
+        "before": {
+          "f.txt": " x\ny\nx \ny\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n x\n-y\n+Y\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": " x\ny\nx \nY\n"
+        }
+      },
+      {
+        "name": "94_trimmed_match_before_normalized_match",
+        "shape": "a match without leading spaces wins over an earlier match after normalization",
+        "before": {
+          "f.txt": "a–b\nc\n  a-b\nc\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a-b\n-c\n+C\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a–b\nc\n  a-b\nC\n"
+        }
+      },
+      {
+        "name": "95_anchor_matches_after_normalization",
+        "shape": "@@ anchor with ASCII quotes where the file has Unicode quotes",
+        "before": {
+          "f.txt": "func “b”\nx\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@ func \"b\"\n-x\n+X\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "func “b”\nX\n"
+        }
       }
     ]
   }

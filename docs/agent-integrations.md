@@ -801,9 +801,9 @@ cases come from codex-cli 0.154.0: they record which paths a patch
 names. The decoder is tested against them, and the native check reruns
 them on the installed version to catch parser drift. Its content cases
 come from codex-cli 0.169.0, the version of the native Codex
-recordings: they record the exact before and after bytes of 29 patch
+recordings: they record the exact before and after bytes of 95 patch
 shapes, and the native check replays them when the installed version
-is the recorded one. A recording of the same 29 cases on codex-cli
+is the recorded one. A recording of the first 29 cases on codex-cli
 0.164.0 gave identical results. The guard recording of 0.169.0 holds
 one live Update (case `update-permitted`) with the one-hunk shape of
 the content case `01_one_hunk`.
@@ -880,12 +880,12 @@ Before release:
   `apply_patch` in both contexts, each with a fail-open limit at 10
   seconds.
 - Implement and test the content projection of a Codex Update patch.
-  The before/after oracle that it needs is recorded: 29 content cases
-  in `internal/integration/testdata/codex/apply_patch_oracle.json`,
-  first from codex-cli 0.164.0 and again from codex-cli 0.169.0 with
-  identical results. The check replays them only on the recorded
-  version, 0.169.0; the guard recording of codex-cli 0.169.0 adds one
-  live Update sample. The current conservative unknown/deny behavior
+  The before/after oracle that it needs is recorded: 95 content cases
+  from codex-cli 0.169.0 in
+  `internal/integration/testdata/codex/apply_patch_oracle.json`; the
+  first 29 gave identical results on codex-cli 0.164.0. The check
+  replays them only on the recorded version, 0.169.0; the guard
+  recording of codex-cli 0.169.0 adds one live Update sample. The current conservative unknown/deny behavior
   is not sufficient for the planned release.
 - **Done:** Refuse conflicting duplicate lesson-check handlers consistently
   across clients. Retain Codex strict refusal and add equivalent Claude
