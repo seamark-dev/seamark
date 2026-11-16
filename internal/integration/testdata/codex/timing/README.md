@@ -57,8 +57,11 @@ run starts a new thread.
 | 4 | `multi-file-patch` | one patch of two files gives one payload and one audit record; the reminder names `2 files` | one patch for two files |
 | 5 | `subagent-patch` | a worker patch keeps the parent `session_id`, adds the `agent_id` of SubagentStart and its own `turn_id`, and gives a `child` audit record | a subagent patch |
 
-Every case matches its expected outcome, and every replay subtest
-passes, also "the audit records name turns and lanes".
+Runs 1 to 4 match their expected outcome. Run 5 shows the expected
+worker patch, but the worker also made a failed `change_set` call
+before the patch; the note on run 5 below says why the case stays
+accepted. Every replay subtest passes, also "the audit records name
+turns and lanes".
 
 In each of the four patch calls, the reminder is a hook developer
 record of the rollout. It sits after the `exec` call and before the

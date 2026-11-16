@@ -94,9 +94,10 @@ that starts and returns. The client stops a gate hook that runs past its
 timeout (setup writes 15 seconds), and it cannot start a seamark binary
 that was moved or deleted. Then the gate returns no exit status 2 and
 cannot block the command, and the client's own rule decides. Claude Code
-2.1.319 and codex-cli 0.169.0 let the tool run after a hook timeout
-(recorded for the pre-write lesson hook). No recording shows what Codex
-does when it cannot start the binary. Re-running `init` without `--gate-mode` keeps whatever mode
+2.1.319 and codex-cli 0.169.0 let the tool run after a hook timeout;
+one root case of the pre-write lesson hook records this for each client
+(a Write and a patch). No recording shows a gate hook timeout, and no recording
+shows what Codex does when it cannot start the binary. Re-running `init` without `--gate-mode` keeps whatever mode
 each selected client has installed, and every run ends with a `gate`
 line stating the effective behavior; a selected client whose hook still
 runs without the flag is named under that line. When a client's settings

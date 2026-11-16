@@ -242,11 +242,13 @@ tool and context. A slow-tool result cannot verify another path. Failed
 validation reopens the defaults before release. Claude Code 2.1.319
 validates the pre-edit timeout for `Write` and `Edit` in the root and
 child contexts: it waits for a pre-edit hook that ends after about 7
-seconds and honors its deny, and it stops a hook at 10 seconds and lets
-the write run. codex-cli 0.169.0 validates it for `apply_patch` in the
-root and child contexts in the same way: it waits about 7 seconds for a
-slow deny and honors it, and it stops a hook at 10 seconds and lets the
-patch run, without a message. `MultiEdit` and the post-edit timeout
+seconds and honors its deny. A root `Write` case also shows that it
+stops a hook at 10 seconds and lets the write run. codex-cli 0.169.0
+validates it for `apply_patch` in the root and child contexts in the
+same way: it waits about 7 seconds for a slow deny and honors it. A
+root patch case also shows that it stops a hook at 10 seconds and lets
+the patch run, without a message. No child case of either client
+records the stop at 10 seconds. `MultiEdit` and the post-edit timeout
 remain candidates.
 
 ### Installed, active, and verified are different

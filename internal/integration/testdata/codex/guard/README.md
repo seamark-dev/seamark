@@ -187,9 +187,12 @@ base instructions, the text of every developer message, the encrypted
 reasoning, the rate limits, and the world state of the rollouts with
 the marker `<sanitized>`, and kept the section tags. The `tools` of
 each `additional_tools` record also read `<sanitized>`, because that
-record lists the tools of the operator's environment. Only
-`guard-context.jsonl` keeps the text of the deny outputs and of the
-post-edit records, as the script copied them from the rollouts.
+record lists the tools of the operator's environment. The sanitizer
+kept the tool outputs, so the rollouts still hold the 9 deny outputs as
+`custom_tool_call_output` records. The 4 post-edit records are
+developer messages, so only `guard-context.jsonl` keeps their text, as
+the script copied them from the rollouts. That file also holds a copy
+of the 9 deny outputs.
 
 An ID pass replaced each ID that Codex or its API generated: the
 thread, turn, window, item, exec, call, response, reasoning, message,
