@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -196,4 +197,112 @@ func TestStatusResourceKeepsItsOwnDatabaseText(t *testing.T) {
 	stale := resourceText(t, serve(t, root, resourceRead(1, statusURI))["1"])
 	assert.True(t, strings.HasPrefix(stale, brokenNote+"workspace      STALE — run `seamark index` (schema v"), stale)
 	assert.Empty(t, rootLines(stale))
+}
+
+// TestReadsNameTheRootOfAReadOnlyCopy covers a checkout copied with its
+// index, whose file refuses writes. A rebuild would fail, so the skip
+// stays, and that skip has no route. The reads opened with no note,
+// although orient named the origin in its title and the status resource
+// printed the root line. Each read opens once with the note that names
+// the origin now, and no call writes to the file. An own database that
+// refuses writes still gets no note.
+func TestReadsNameTheRootOfAReadOnlyCopy(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a file with mode 0444")
+	}
+
+	t.Run("a copied checkout", func(t *testing.T) {
+		origin, err := filepath.EvalSymlinks(writeFixture(t))
+		require.NoError(t, err)
+
+		require.NoError(t, os.WriteFile(filepath.Join(origin, ".gitignore"), []byte(".seamark/\n"), 0o644))
+		rootMoveGit(t, origin, "add", "-A")
+		rootMoveGit(t, origin, "commit", "-m", "ignore")
+
+		_, err = index.Run(index.Options{Root: origin})
+		require.NoError(t, err)
+
+		parent, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+
+		copied := filepath.Join(parent, "copy")
+		require.NoError(t, os.CopyFS(copied, os.DirFS(origin)))
+		require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(copied, ""), "the skip needs one fingerprint")
+
+		dbPath := store.DefaultPath(copied)
+		require.NoError(t, os.Chmod(dbPath, 0o444))
+
+		before, err := os.ReadFile(dbPath)
+		require.NoError(t, err)
+
+		resps := serveDB(t, copied, dbPath, t.Logf, foreignReads(t)...)
+		note := matchText(origin)
+
+		for name, text := range foreignTexts(t, resps) {
+			assert.True(t, strings.HasPrefix(text, note), "%s opens with the note: %s", name, text)
+			assert.Equal(t, 1, strings.Count(text, note), "%s names it once", name)
+			assert.NotContains(t, text, "did not refresh", "%s: a skip is current", name)
+		}
+
+		status := resourceText(t, resps["1"])
+		require.Len(t, rootLines(status), 1, status)
+		assert.Contains(t, rootLines(status)[0], "records another repository ("+origin+")")
+
+		orient, _ := rootMoveText(t, resps["4"])
+		assert.True(t, strings.HasPrefix(orient, note+filepath.Base(origin)+" — orientation\n"), orient)
+
+		check, isError := rootMoveText(t, resps["7"])
+		assert.False(t, isError, check)
+		assert.True(t, strings.HasPrefix(check, note), check)
+
+		after, err := os.ReadFile(dbPath)
+		require.NoError(t, err)
+		assert.Equal(t, before, after, "no call writes to the file")
+	})
+
+	t.Run("an own database", func(t *testing.T) {
+		root, err := filepath.EvalSymlinks(writeFixture(t))
+		require.NoError(t, err)
+
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".seamark/\n"), 0o644))
+		rootMoveGit(t, root, "add", "-A")
+		rootMoveGit(t, root, "commit", "-m", "ignore")
+
+		_, err = index.Run(index.Options{Root: root})
+		require.NoError(t, err)
+		require.NoError(t, os.Chmod(store.DefaultPath(root), 0o444))
+
+		resps := serveDB(t, root, store.DefaultPath(root), t.Logf,
+			rootMoveCall(1, "why", `{"query":"helper"}`), rootMoveCall(2, "check", `{}`))
+
+		for id := 1; id <= 2; id++ {
+			text, isError := rootMoveText(t, resps[strconv.Itoa(id)])
+			assert.False(t, isError, text)
+			assert.NotContains(t, text, "note: this index", "an own database records this workspace")
+		}
+	})
+}
+
+// TestCheckOpensWithTheRootNote covers check under the index of another
+// root at one commit. The note qualifies the whole answer, so it is the
+// first line, also with lesson_checks, and the combined line follows it.
+// The combined line came first, and the note sat under the blank line
+// after it.
+func TestCheckOpensWithTheRootNote(t *testing.T) {
+	origin, tree := rootMoveLinked(t, false)
+
+	resps := serveDB(t, tree, store.DefaultPath(origin), t.Logf,
+		rootMoveCall(1, "check", `{}`), rootMoveCall(2, "check", `{"lesson_checks":true}`))
+	note := matchText(origin)
+
+	plain, isError := rootMoveText(t, resps["1"])
+	require.False(t, isError, plain)
+	assert.True(t, strings.HasPrefix(plain, note+"verdict "), plain)
+	assert.Equal(t, 1, strings.Count(plain, note), plain)
+
+	lessons, isError := rootMoveText(t, resps["2"])
+	require.False(t, isError, lessons)
+	assert.True(t, strings.HasPrefix(lessons, note+"combined: "), lessons)
+	assert.Equal(t, 1, strings.Count(lessons, note), lessons)
+	assert.Contains(t, lessons, "\n\nverdict ", "the policy text follows the head")
 }

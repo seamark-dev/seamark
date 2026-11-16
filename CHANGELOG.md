@@ -564,6 +564,14 @@ model-boundary delivery.
   out a database file inside the workspace (outside `.seamark`) and its
   SQLite sidecars, so the second run skips. The default database and a
   database outside the workspace keep their fingerprint.
+- **MCP names the root of a read-only index of another checkout.** A
+  copied or moved checkout whose database does not accept writes keeps
+  its skip, because a rebuild would fail. Its MCP answers opened with no
+  note, although `orient` and `seamark://status` named the other root.
+  Every MCP answer from such an index now opens with the note that names
+  the recorded root, as for a sibling worktree at one commit. With
+  `lesson_checks`, that note is the first line of the `check` answer,
+  and the `combined:` line follows it.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

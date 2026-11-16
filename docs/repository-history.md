@@ -200,7 +200,10 @@ that names that root:
 - When the workspace fingerprint matches the index, as in a sibling
   worktree at the same commit, the note is
   `note: this index records another repository (<root>); it matches this workspace now, and this answer describes <root>.`
-  `check` keeps its verdict and opens with the same note.
+  A copied or moved checkout whose database file does not accept writes
+  gets the same note: the server keeps the skip there, because a rebuild
+  would fail. `check` keeps its verdict and opens with the same note,
+  also with `lesson_checks`, where the `combined:` line follows the note.
 - When the fingerprints differ, the refresh is refused, and the note is
   `note: seamark did not refresh this index, because it records another repository (<root>) and a rebuild here would move its root; this answer describes <root> and can differ from this workspace.`
   The answer can hold symbols and effects that this workspace does not

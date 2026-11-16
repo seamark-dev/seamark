@@ -271,8 +271,8 @@ func refusedNote(o ownership.State) string {
 }
 
 // matchNote follows a skip under the index of another root, as for a
-// sibling worktree at one commit. The answer is current, but it still
-// describes that root.
+// sibling worktree at one commit or a copied checkout whose file refuses
+// writes. The answer is current, but it still describes that root.
 func matchNote(o ownership.State) string {
 	return "note: this index " + status.RecordedClause(o) + "; it matches this workspace now, and this answer describes " +
 		render.Sanitize(o.Recorded) + ".\n"
@@ -286,15 +286,22 @@ type refreshed struct {
 	// or a refusal, so no answer probes it again. It is zero after a build,
 	// which records this workspace, and after any other failure.
 	owner ownership.State
-	// route is the route of a skip under the index of another root
-	// (index.Summary.RootRoute), else "".
-	route string
+}
+
+// recordsAnotherRoot reports an index that records another root than the
+// workspace. The answer then describes that root.
+func (r refreshed) recordsAnotherRoot() bool {
+	return r.owner.Recorded != "" && r.owner.Root != ownership.RootSame
 }
 
 // note returns the note that opens an answer after this refresh, or "".
+// A skip under the index of another root gets the note that names it.
+// The note depends on what the index records, not on the route of a
+// rebuild: a file that refuses writes keeps its skip without a route, and
+// its answer still describes that root.
 func (r refreshed) note() string {
 	switch {
-	case r.failure == nil && r.route != "":
+	case r.failure == nil && r.recordsAnotherRoot():
 		return matchNote(r.owner)
 	case r.failure == nil:
 		return ""
@@ -310,7 +317,7 @@ func (r refreshed) note() string {
 // named returns the root that the answer describes: the root that the
 // index records, else root. The CLI reads that root too.
 func (r refreshed) named(root string) string {
-	if r.owner.Recorded != "" && r.owner.Root != ownership.RootSame {
+	if r.recordsAnotherRoot() {
 		return r.owner.Recorded
 	}
 
@@ -357,23 +364,24 @@ func (s *Server) withRefreshedStore(fn func(st *store.Store, r refreshed) (strin
 // graph: changed lines inside an old symbol still map to it, so a stale
 // graph can allow what a current one denies. So any failed refresh ends
 // the call, as it ends `seamark check`. A current index of another root
-// keeps its verdict, as for a sibling worktree at one commit, and the
-// verdict opens with the note that names that root.
-func (s *Server) withCurrentStore(fn func(st *store.Store) (string, error)) (string, error) {
+// keeps its verdict, as for a sibling worktree at one commit, and note
+// names that root. The caller opens the whole answer with note, because
+// it can put lines before the text of fn.
+func (s *Server) withCurrentStore(fn func(st *store.Store) (string, error)) (text, note string, err error) {
 	r := s.refresh()
 	if r.failure != nil {
-		return "", r.failure
+		return "", "", r.failure
 	}
 
 	st, err := s.open(nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer func() { _ = st.Close() }() // read-only surface, nothing to lose
 
-	text, err := fn(st)
+	text, err = fn(st)
 
-	return withNote(r.note(), text, err)
+	return text, r.note(), err
 }
 
 // refresh refreshes the index and returns what it found. The log names
@@ -393,7 +401,7 @@ func (s *Server) refresh() refreshed {
 		s.logf("mcp: index refreshed")
 	}
 
-	return refreshed{owner: sum.Ownership, route: sum.RootRoute}
+	return refreshed{owner: sum.Ownership}
 }
 
 // ownerFacts returns the facts of the database for the status resource.
@@ -671,7 +679,9 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 			auditErr error
 		)
 
-		text, err := s.withCurrentStore(func(st *store.Store) (string, error) {
+		// The note of the refresh qualifies the whole answer, so it opens
+		// the text, also before the combined line of the lesson checks.
+		text, note, err := s.withCurrentStore(func(st *store.Store) (string, error) {
 			policy, err := gate.LoadPolicy(s.root)
 			if err != nil {
 				return "", err
@@ -699,22 +709,24 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 			return b.String(), nil
 		})
 		if err != nil {
-			return textOutput(text, err)
+			return textOutput(withNote(note, text, err))
 		}
 
 		if !p.LessonChecks {
 			// The agent reads no server log, so a lost audit record is
 			// named in the text. The advisory can list a pin whose check
 			// exists, and the last line says that it did not run.
-			return textOutput(text+trailer(auditNote(auditErr), report.LessonChecksNotRequested(s.root, changed)), nil)
+			return textOutput(note+text+trailer(auditNote(auditErr), report.LessonChecksNotRequested(s.root, changed)), nil)
 		}
 
 		// withCurrentStore has closed the index here. SQLite keeps its WAL
 		// files next to an open index, and the snapshot must not see them
 		// change.
-		return textOutput(s.checkLessons(text, lessonsRoot, decision, checkInputs{
+		text, err = s.checkLessons(text, lessonsRoot, decision, checkInputs{
 			policyInput: policyInput, changed: changed, auditErr: auditErr,
-		}))
+		})
+
+		return textOutput(withNote(note, text, err))
 	},
 }
 
@@ -931,7 +943,8 @@ func trailer(lines ...string) string {
 
 // checkLessons adds the lesson verification to the policy text of one
 // check call, in the layout of report.WriteCheckLessons: the combined
-// line first, then the policy text and the lesson report. The CLI exit
+// line first, then the policy text and the lesson report. The runner puts
+// the note of the refresh before the combined line. The CLI exit
 // code joins the combined line. report.NewCheckLessonsEnvelope derives
 // the combined values, so this text and check --lessons print the same
 // verdict. A failed audit append of either record adds a note at the

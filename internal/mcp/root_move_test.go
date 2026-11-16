@@ -443,7 +443,10 @@ func TestToolsNoteAFailedRefresh(t *testing.T) {
 
 // TestToolsKeepAReadOnlyFileOfAMovedRepository covers a file that moved
 // with its repository and refuses writes. A rebuild would fail on every
-// tool call, so the skip stays and the answer needs no note.
+// tool call, so the skip stays and writes nothing. The index still
+// records the old root, so each read opens once with the note that names
+// it, as every read under an index of another root does. The skip has no
+// route, and the reads opened with no note.
 func TestToolsKeepAReadOnlyFileOfAMovedRepository(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root writes a file with mode 0444")
@@ -470,22 +473,42 @@ func TestToolsKeepAReadOnlyFileOfAMovedRepository(t *testing.T) {
 	custom = filepath.Join(moved, "custom.db")
 	require.NoError(t, os.Chmod(custom, 0o444))
 
+	before, err := os.ReadFile(custom)
+	require.NoError(t, err)
+
 	var log strings.Builder
 
 	logf := func(format string, a ...any) { fmt.Fprintf(&log, format+"\n", a...) }
 
-	resps := serveDB(t, moved, custom, logf, rootMoveCall(1, "why", `{"query":"helper"}`))
+	resps := serveDB(t, moved, custom, logf,
+		rootMoveCall(1, "why", `{"query":"helper"}`),
+		rootMoveCall(2, "orient", `{}`),
+		rootMoveCall(3, "change_set", `{"files":["a.go"]}`),
+		rootMoveCall(4, "expand", `{"ref":"helper"}`),
+	)
 
-	text, isError := rootMoveText(t, resps["1"])
-	assert.False(t, isError, text)
-	assert.NotContains(t, text, "note:")
+	note := goneText(matchText(origin))
+
+	for id := 1; id <= 4; id++ {
+		text, isError := rootMoveText(t, resps[strconv.Itoa(id)])
+		assert.False(t, isError, "tool %d: %s", id, text)
+		assert.True(t, strings.HasPrefix(text, note), "tool %d opens with the note: %s", id, text)
+		assert.Equal(t, 1, strings.Count(text, "note: "), "tool %d names it once", id)
+	}
+
 	assert.NotContains(t, log.String(), "index refresh")
+
+	after, err := os.ReadFile(custom)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "a tool call writes nothing to this database")
 }
 
 // TestToolsKeepAReadOnlyDefaultDatabaseOfAMovedCheckout covers a default
 // database that does not accept writes. A rebuild failed on every call,
-// so a verdict refused and every read carried a note, although the
-// fingerprint proves that the index is current.
+// so a verdict refused and every read carried the note of a failed
+// refresh, although the fingerprint proves that the index is current. The
+// skip keeps the verdict and writes nothing. The index still records the
+// old root, so the verdict and the read open with the note that names it.
 func TestToolsKeepAReadOnlyDefaultDatabaseOfAMovedCheckout(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root writes a file with mode 0444")
@@ -508,14 +531,26 @@ func TestToolsKeepAReadOnlyDefaultDatabaseOfAMovedCheckout(t *testing.T) {
 	require.NoError(t, os.Rename(origin, moved))
 	require.NoError(t, os.Chmod(store.DefaultPath(moved), 0o444))
 
+	before, err := os.ReadFile(store.DefaultPath(moved))
+	require.NoError(t, err)
+
 	resps := serveDB(t, moved, store.DefaultPath(moved), t.Logf,
 		rootMoveCall(1, "check", `{}`), rootMoveCall(2, "why", `{"query":"helper"}`))
+
+	note := goneText(matchText(origin))
 
 	text, isError := rootMoveText(t, resps["1"])
 	assert.False(t, isError, text)
 	assert.Contains(t, text, "verdict")
+	assert.True(t, strings.HasPrefix(text, note), text)
+	assert.NotContains(t, text, "did not refresh", "a skip is current")
 
 	text, isError = rootMoveText(t, resps["2"])
 	assert.False(t, isError, text)
-	assert.NotContains(t, text, "note:")
+	assert.True(t, strings.HasPrefix(text, note), text)
+	assert.Equal(t, 1, strings.Count(text, "note: "), text)
+
+	after, err := os.ReadFile(store.DefaultPath(moved))
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "a tool call writes nothing to this database")
 }

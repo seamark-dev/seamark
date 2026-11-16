@@ -923,7 +923,9 @@ Plain `check --json` stays verdict-shaped. MCP `check` accepts
 keeps its existing policy/advisory behavior.
 
 The text form opens with the combined line, then a blank line, the plain
-check text, a blank line, and the lesson report:
+check text, a blank line, and the lesson report. Over MCP, a note on the
+root that the index records comes before the combined line, because it
+qualifies the whole answer (see [repository history](repository-history.md#how-much-can-the-answers-be-trusted)):
 
 ```text
 combined: fail (policy deny, not blocking in warn mode; lessons violation)
