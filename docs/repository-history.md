@@ -210,7 +210,10 @@ from a half-parsed index is not "no effects."** The same honesty runs
 through the other surfaces — `orient` opens with the index health and
 warns when files failed to parse, and `seamark check` attaches a note
 when a changed file has changes outside every indexed symbol, so absence of evidence never silently reads as evidence of
-safety.
+safety. A change inside a package-level value initializer or a class
+field lies in the symbol of that value or class, and the symbol carries
+the calls there, so the change reports their effects instead of reading
+as reaching nothing.
 
 Installation health is the other half:
 
@@ -287,6 +290,23 @@ table in [Data flow](data-flow.md).
   the callee's effects do not reach the caller. `why` names these rules
   only under `callers (0)`, so a symbol that keeps other callers shows
   no sign of a dropped one.
+- A package-level Go `var`, a module-level JS/TS `const`/`let`/`var`,
+  and a module-level Python assignment carry the calls of their
+  initializer, function literals and lambdas in it included. Such a value
+  is listed as a caller, `why <value>` shows its calls and effects, and
+  `check` reports the effects of a change inside it. Every name of a Go
+  spec with several names (`var a, b = f(), g()`) carries every call of
+  that spec. A Go `const` initializer is not mined, and a function value
+  without a call (`var prepare = delivery.Prepare`) still gets no edge.
+  A JS/TS or Python class carries the calls of its body outside its
+  methods: field initializers, static blocks, class attributes, and a
+  method decorator that the grammar places outside the method (TypeScript
+  and Python; a JavaScript method decorator stays with its method). A
+  method keeps its own calls, and the class does not repeat them. A Go
+  type declares no call, so a struct needs no such rule.
+  An index built before this rule is rebuilt once by the next index run
+  or MCP call, also on an unchanged workspace; a database file that does
+  not accept writes keeps its old edges.
 - A local variable shadowing an import alias can produce a wrong edge
   (declared as such via its origin label). Scope tracking is future work.
 - Python's DB-API has no syntactic read/write split, so `cursor.execute`

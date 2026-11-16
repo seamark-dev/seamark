@@ -3401,3 +3401,241 @@ func Message(f pin.Fault) string { return f.Error() }
 		assert.Contains(t, effectTags(t, st, caller), "fs:write", "%s keeps the effect", caller)
 	}
 }
+
+// TestValueInitializerCallsBecomeEdgesAndEffects proves that a call inside
+// a package-level var initializer gives the var a CALLS edge, so the var
+// shows as a caller of the callee, and that effects reach the var both
+// from a sink called in its literal and through the callee. The JS/TS and
+// Python value bindings get their effects the same way.
+func TestValueInitializerCallsBecomeEdgesAndEffects(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/fx\n",
+		"runners.go": `package main
+
+import (
+	"os"
+	"os/exec"
+)
+
+var toolRunners = map[string]func(string) error{
+	"audit": func(p string) error { return audit(p) },
+	"shell": func(p string) error { return exec.Command(p).Run() },
+}
+
+var plain = map[string]int{"a": 1}
+
+func audit(p string) error {
+	return os.WriteFile(p, nil, 0o600)
+}
+
+func main() {}
+`,
+		"handlers.ts": `import * as fs from "fs";
+
+export const handlers = {
+	save: (p: string, d: string) => fs.writeFileSync(p, d),
+};
+`,
+		"jobs.py": `import os
+
+HANDLERS = {"rm": lambda p: os.remove(p)}
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	runners := mustFind(t, st, "toolRunners")
+	require.Equal(t, model.KindVar, runners.Kind)
+
+	audit := mustFind(t, st, "audit")
+	callers, err := st.Callers(audit.ID)
+	require.NoError(t, err)
+	require.Len(t, callers, 1, "the var is the only caller of audit")
+	assert.Equal(t, runners.ID, callers[0].ID)
+	assert.Equal(t, model.OriginSamePackage, callers[0].Origin)
+
+	effs, err := st.EffectsForSymbol(runners.ID)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []store.Effect{
+		{Tag: "proc:exec", Origin: "direct", Depth: 0},
+		{Tag: "fs:write", Origin: "propagated", Depth: 1},
+	}, effs, "a sink in the literal is direct, the callee's sink is one hop away")
+
+	plain := mustFind(t, st, "plain")
+	effs, err = st.EffectsForSymbol(plain.ID)
+	require.NoError(t, err)
+	assert.Empty(t, effs, "a var without a call reaches nothing")
+
+	for _, query := range []string{"handlers.handlers", "jobs.HANDLERS"} {
+		sym := mustFind(t, st, query)
+		effs, err := st.EffectsForSymbol(sym.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []store.Effect{{Tag: "fs:write", Origin: "direct", Depth: 0}}, effs, query)
+	}
+}
+
+// TestFastPathRebuildsAnIndexOfAnOlderParser proves that an unchanged
+// workspace whose index records an older parse cache version is rebuilt
+// by a plain run, so an upgrade gains the new edges without --force, and
+// that the rebuilt index skips again. A file that does not accept writes
+// keeps the skip, because a rebuild there fails on every run.
+func TestFastPathRebuildsAnIndexOfAnOlderParser(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/fx\n",
+		"main.go": `package main
+
+var runners = map[string]func(){
+	"audit": func() { audit() },
+}
+
+func audit() {}
+
+func main() {}
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	git := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+	git("init", "-b", "main")
+	git("add", "-A")
+	git("commit", "-m", "initial")
+
+	first, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	require.False(t, first.Skipped)
+
+	// An older binary left no edge from the var and recorded its own
+	// parse cache version.
+	dbPath := store.DefaultPath(root)
+	ageIndex := func() {
+		t.Helper()
+
+		db, err := sql.Open("sqlite", dbPath)
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		_, err = db.Exec(`DELETE FROM edge WHERE kind = 'CALLS' AND src IN (SELECT id FROM symbol WHERE kind = 'var')`)
+		require.NoError(t, err)
+		_, err = db.Exec(`UPDATE meta SET value = '2' WHERE key = ?`, store.MetaParseCacheVersion)
+		require.NoError(t, err)
+	}
+
+	varCallers := func() int {
+		t.Helper()
+
+		st, err := store.OpenReadOnly(dbPath)
+		require.NoError(t, err)
+		defer func() { _ = st.Close() }()
+
+		syms, err := st.FindSymbols("audit", 1)
+		require.NoError(t, err)
+		require.NotEmpty(t, syms)
+		callers, err := st.Callers(syms[0].ID)
+		require.NoError(t, err)
+
+		return len(callers)
+	}
+
+	ageIndex()
+	require.Zero(t, varCallers(), "the aged index lacks the edge")
+
+	rebuilt, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, rebuilt.Skipped, "an older parse cache version must not skip")
+	assert.Equal(t, rebuilt.FilesParsed, rebuilt.FilesReparsed, "the old cache is not reused")
+	assert.Equal(t, 1, varCallers(), "the rebuild gains the edge from the var")
+
+	again, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.True(t, again.Skipped, "a current index still skips")
+
+	if os.Geteuid() == 0 {
+		return // root writes a file with mode 0444
+	}
+
+	ageIndex()
+	require.NoError(t, os.Chmod(dbPath, 0o444))
+	t.Cleanup(func() { _ = os.Chmod(dbPath, 0o644) })
+
+	readOnly, err := Run(Options{Root: root})
+	require.NoError(t, err, "a file that does not accept writes must not fail every run")
+	assert.True(t, readOnly.Skipped)
+	assert.True(t, readOnly.ReadOnly)
+}
+
+// TestClassBodyCallsBelongToTheClassOnly proves that a call in a class body
+// outside the methods gives the class its edge and effect, and that a
+// method's call stays on the method: the callee lists the method, not the
+// class, in JS/TS and in Python.
+func TestClassBodyCallsBelongToTheClassOnly(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"store.ts": `import * as fs from "fs";
+
+export class Store {
+	save = (p: string, d: string) => fs.writeFileSync(p, d);
+
+	load(p: string) {
+		return audit(p);
+	}
+}
+
+export function audit(p: string) {
+	return p;
+}
+`,
+		"jobs.py": `import os
+
+
+class Jobs:
+    HANDLERS = {"rm": lambda p: os.remove(p)}
+
+    def run(self, p):
+        return audit(p)
+
+
+def audit(p):
+    return p
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	for _, tc := range []struct{ class, method, callee string }{
+		{"store.Store", "store.Store.load", "store.audit"},
+		{"jobs.Jobs", "jobs.Jobs.run", "jobs.audit"},
+	} {
+		class := mustFind(t, st, tc.class)
+		require.Equal(t, model.KindType, class.Kind, tc.class)
+
+		effs, err := st.EffectsForSymbol(class.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []store.Effect{{Tag: "fs:write", Origin: "direct", Depth: 0}}, effs, tc.class)
+
+		callers, err := st.Callers(mustFind(t, st, tc.callee).ID)
+		require.NoError(t, err)
+		require.Len(t, callers, 1, "callers of %s", tc.callee)
+		assert.Equal(t, tc.method, callers[0].FQN, "the method's call is not copied onto the class")
+	}
+}

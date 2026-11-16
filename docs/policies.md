@@ -200,10 +200,13 @@ writes no audit entry; the MCP `check` tool returns an error result.
 
 Changed lines map to symbols; symbols carry transitively-propagated
 effect tags; the union is what the change can _ultimately_ reach — even
-when the edited function never touches a sink itself. Only added and
-removed lines count: the context lines of a hunk do not. Removed lines
-count as the line directly above them, and for a pure deletion also as
-the line below them, because either line can belong to the symbol that
+when the edited function never touches a sink itself. A package-level
+value is a symbol too and carries the calls of its initializer, and a
+class carries the calls of its body outside its methods, so an edit
+inside a table of handlers or a class field reaches what it calls. Only
+added and removed lines count: the context lines of a hunk do not.
+Removed lines count as the line directly above them, and for a pure
+deletion also as the line below them, because either line can belong to the symbol that
 lost them. When the first removed line with text is indented, the
 nearest line with text above them in the hunk counts too: a Python
 function ends at its last statement, so a blank line between it and the

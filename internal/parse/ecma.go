@@ -155,8 +155,10 @@ func (e *EcmaExtractor) Extract(relPath string, src []byte) (*FileResult, error)
 				e.addDecl(res, src, moduleKey, caps["func.decl"], caps["func.name"], "", model.KindFunction, true)
 			}
 		case caps["class.decl"] != nil:
+			// The class carries the calls of its body outside its methods:
+			// field initializers, static blocks, and decorators of members.
 			if atModuleTopLevel(caps["class.decl"]) {
-				e.addDecl(res, src, moduleKey, caps["class.decl"], caps["class.name"], "", model.KindType, false)
+				e.addDecl(res, src, moduleKey, caps["class.decl"], caps["class.name"], "", model.KindType, true)
 			}
 		case caps["method.decl"] != nil:
 			if class := enclosingClassName(caps["method.decl"], src); class != "" {
@@ -206,6 +208,10 @@ func (e *EcmaExtractor) addDecl(res *FileResult, src []byte, moduleKey string,
 // addBinding classifies a top-level const/let/var declarator: function
 // values (arrow functions, function expressions) become functions — the
 // dominant declaration style in modern JS/TS — everything else a const/var.
+// Every binding carries the calls of its initializer. The span covers the
+// initializer, so a change there counts as attributed, and a table of
+// handlers ({ save: () => fs.writeFileSync(p, d) }) must not read as
+// reaching nothing.
 func (e *EcmaExtractor) addBinding(res *FileResult, src []byte, moduleKey string,
 	caps map[string]*tree_sitter.Node) {
 	decl, spec, nameNode := caps["lex.decl"], caps["lex.spec"], caps["lex.name"]
@@ -218,17 +224,14 @@ func (e *EcmaExtractor) addBinding(res *FileResult, src []byte, moduleKey string
 		kind = model.KindConst
 	}
 
-	mineCalls := false
-
 	if v := spec.ChildByFieldName("value"); v != nil {
 		switch v.Kind() {
 		case "arrow_function", "function_expression", "generator_function":
 			kind = model.KindFunction
-			mineCalls = true
 		}
 	}
 
-	e.addDecl(res, src, moduleKey, spec, nameNode, "", kind, mineCalls)
+	e.addDecl(res, src, moduleKey, spec, nameNode, "", kind, true)
 }
 
 // callsIn runs the call query inside one declaration.
@@ -244,6 +247,10 @@ func (e *EcmaExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 	for m := matches.Next(); m != nil; m = matches.Next() {
 		for i := range m.Captures {
 			node := &m.Captures[i].Node
+
+			if inEcmaMethodOf(node, decl) {
+				continue
+			}
 
 			switch names[m.Captures[i].Index] {
 			case "call.bare":
@@ -280,6 +287,37 @@ func (e *EcmaExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 	}
 
 	return out
+}
+
+// inEcmaMethodOf reports whether node lies in a method that is its own
+// symbol as a member of the class decl. That method carries the call, so
+// the class must not carry it twice. The shape follows the decl query and
+// enclosingClassName: a method_definition named by a property_identifier,
+// directly in the class body. A private (#m) or computed method is no
+// symbol, so its calls stay with the class. For any other decl the shape
+// never matches.
+func inEcmaMethodOf(node, decl *tree_sitter.Node) bool {
+	for p := node.Parent(); p != nil && !sameNode(p, decl); p = p.Parent() {
+		if p.Kind() != "method_definition" {
+			continue
+		}
+
+		name := p.ChildByFieldName("name")
+		body := p.Parent()
+
+		if name != nil && name.Kind() == "property_identifier" &&
+			body != nil && body.Kind() == "class_body" &&
+			body.Parent() != nil && sameNode(body.Parent(), decl) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sameNode reports whether a and b are the same node of one tree.
+func sameNode(a, b *tree_sitter.Node) bool {
+	return a.StartByte() == b.StartByte() && a.EndByte() == b.EndByte() && a.Kind() == b.Kind()
 }
 
 // thisIsReceiver reports whether `this` at node still refers to the
