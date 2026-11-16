@@ -108,8 +108,8 @@ model-boundary delivery.
   offers no command that changes a pin.
 - **Signature redaction in why.** `why <symbol>` now redacts
   secret-shaped text in its `sig` line, as the file outline does.
-- **Expand by symbol.** `expand <symbol>` no longer shows the line after
-  a declaration whose span ends at the start of that line.
+- **Expand by symbol.** MCP `expand` with a symbol no longer shows the
+  line after a declaration whose span ends at the start of that line.
 - **orient health header.** `orient` opens with the index time and age,
   its freshness (current, stale, or unknown), the file coverage, and the
   call-edge origin shares, read by the same rules as `seamark status`. A
@@ -658,7 +658,7 @@ model-boundary delivery.
   line at 200 characters with `…`. A JS/TS binding or a Python
   module-level value stores its whole initializer as its signature, so
   one answer could run past 10 KB. The stored signature does not change,
-  and `expand` still gives the source.
+  and MCP `expand` still gives the source.
 - **`why` prints the Go caller rules only for Go symbols.** `why` on a
   function or a method with no resolved caller prints the two lines that
   start with `in Go` only when the file of the symbol is a Go file.

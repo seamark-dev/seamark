@@ -51,7 +51,8 @@ know how much to trust an edge. Edges of the `[qualified]`,
 `[unique-name]` guesses follow, so the 15-line cut drops guesses first.
 The `sig` line is cut at 200 characters with `…`: a JS/TS binding or a
 Python module-level value keeps its whole initializer as its signature,
-and `seamark expand <symbol>` gives the source.
+and the MCP `expand` tool gives the source. The CLI has no `expand`
+command, so read the file at the `defined` line directly.
 A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
 several methods share, or through a function value, gets no edge, and,
