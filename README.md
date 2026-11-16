@@ -182,9 +182,9 @@ after the agent has constructed the call. For earlier guidance, use
 The `seamark lessons --delivery` reading counts the delivery
 records of each pin version in the audit logs. It counts a write as
 prevented only when a written deny on a natively verified path, today
-Claude Code `Write` and `Edit`, has no later execution record. These
-paths carry one limit: the client lets the write run after its 10 s hook
-timeout.
+Claude Code `Write` and `Edit` and Codex `apply_patch`, has no later
+execution record. These paths carry one limit: the client lets the write
+run after its 10 s hook timeout.
 See the [lesson guide](docs/lessons.md) for executable checks and limits.
 
 [Learning guide: review, tune, dismiss, and update lessons →](docs/lessons.md)

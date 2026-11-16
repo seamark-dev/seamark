@@ -82,9 +82,11 @@ func (codexCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completion
 // stderr never reaches the model. That binary embeds the PostToolUse
 // output schema with hookSpecificOutput and additionalContext. The
 // advisory edit hook uses the same form on PreToolUse, and Codex adds
-// that context to the thread. No reviewed recording shows yet that the
-// PostToolUse context reaches the model, so the post-edit path stays
-// active-unverified.
+// that context to the thread. The guard recording of codex-cli 0.169.0
+// shows the PostToolUse context in the thread too: a hook developer
+// record after the patch and before the next model step, in the root
+// and in a worker. The post-edit path still reads active-unverified,
+// because its evidence (postEditEvidence) names no client version.
 //
 // The text in the reply holds at most codexMaxFindingsBytes. A text
 // that fits keeps every byte, and a longer text loses its last lines.

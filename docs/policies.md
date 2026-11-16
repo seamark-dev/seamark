@@ -94,9 +94,9 @@ that starts and returns. The client stops a gate hook that runs past its
 timeout (setup writes 15 seconds), and it cannot start a seamark binary
 that was moved or deleted. Then the gate returns no exit status 2 and
 cannot block the command, and the client's own rule decides. Claude Code
-2.1.319 lets the tool run after a hook timeout (recorded for the
-pre-write lesson hook). No Codex recording shows what Codex does in
-either case. Re-running `init` without `--gate-mode` keeps whatever mode
+2.1.319 and codex-cli 0.169.0 let the tool run after a hook timeout
+(recorded for the pre-write lesson hook). No recording shows what Codex
+does when it cannot start the binary. Re-running `init` without `--gate-mode` keeps whatever mode
 each selected client has installed, and every run ends with a `gate`
 line stating the effective behavior; a selected client whose hook still
 runs without the flag is named under that line. When a client's settings
@@ -330,11 +330,12 @@ A pin's `enforce` mode requests the separate pre-write guard. It is not
 policy enforcement and does not prove native denial. The ordinary edit
 hook still fails open. Its reminder arrives after the agent constructed
 the call; use preparation before construction rather than claiming the
-hook can reshape the pending arguments. A reviewed Claude Code 2.1.319
-recording verifies native guard denial of `Write` and `Edit`, with the
+hook can reshape the pending arguments. Reviewed recordings of Claude
+Code 2.1.319 and codex-cli 0.169.0 verify native guard denial of
+Claude Code `Write` and `Edit` and of Codex `apply_patch`, with the
 limit that the client lets the write run after its 10 s hook timeout.
-Native denial of `MultiEdit` and of Codex `apply_patch`, and the reply
-evidence, remain pending; v0.9.0 cannot ship without
+Native denial of `MultiEdit` and the reply evidence remain pending;
+v0.9.0 cannot ship without
 [reviewed native evidence and the required fixes](agent-integrations.md#release-checklist).
 
 What Guard can and cannot defend against is stated plainly in

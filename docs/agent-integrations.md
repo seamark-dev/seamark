@@ -137,7 +137,7 @@ minimum supported version.
 | Capability | Claude Code | Codex |
 | --- | --- | --- |
 | Skills (`--skills`) | `.claude/skills/` | `.agents/skills/`; verified on codex-cli 0.152.1 |
-| MCP registration | `seamark` entry in `.mcp.json` | `[mcp_servers.seamark]` in `.codex/config.toml`; `codex mcp list` read it on 0.157.0; live tool calls remain unverified |
+| MCP registration | `seamark` entry in `.mcp.json` | `[mcp_servers.seamark]` in `.codex/config.toml`; `codex mcp list` read it on 0.157.0; live tool calls remain unverified: in the recordings of 0.169.0, `codex exec` with the approval policy `never` refused a seamark tool call in a project set up without `--approve-tools` |
 | Tool grants (`--approve-tools`) | five MCP tool rules and three skill rules in `.claude/settings.json` | `approval_mode = "approve"` for the five tools; native approval behavior remains unverified |
 | Edit hook (lesson reminders) | `PreToolUse` on Edit, Write, MultiEdit | `PreToolUse` on `apply_patch`; verified on codex-cli 0.154.0 |
 | Command gate | `PreToolUse` on Bash | `PreToolUse` on `Bash`; native blocking behavior remains unverified |
@@ -171,10 +171,11 @@ was dry-run only, and trusted-hook isolation was not tested.
 
 v0.9.0 is the planned first release with lesson-check hook handlers. It
 has not shipped. The features below have fixture coverage. Reviewed
-native recordings of Claude Code 2.1.319 cover part of them, as the
-tables below name; the rest still needs the native evidence of the
-[release checklist](#release-checklist). Installing an `enforce`
-configuration is not a claim of verified enforcement.
+native recordings of Claude Code 2.1.319 and codex-cli 0.169.0 cover
+part of them, as the tables below name; the rest still needs the
+native evidence of the [release checklist](#release-checklist).
+Installing an `enforce` configuration is not a claim of verified
+enforcement.
 
 Choose each client's lesson hooks explicitly:
 
@@ -202,7 +203,7 @@ implemented handlers, not verified native prevention:
 | Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offered no MultiEdit tool in the recording. Post-edit reply: seen in the recording, still unverified in the report |
 | Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; reply seen in the next model request on Claude Code 2.1.319, still unverified in the report; main-context repeats reset at compaction, child reminders repeat |
 | Claude Code `NotebookEdit`, `Bash` | No lesson-check hook | No lesson-check hook | Uncovered writers in both contexts; a shell command can write files |
-| Codex `apply_patch` | Baseline or guard; Add/Delete and move metadata supported; Update before/after content projection not yet supported | `PostToolUse` verification; the handler reads a failed exit status, but no recording shows a hook after a failed patch | Root and child paths declared; native deny, timeout, reply and child attribution remain pending or unsupported as detailed below |
+| Codex `apply_patch` | Baseline or guard; Add/Delete and move metadata supported; Update before/after content projection not yet supported | `PostToolUse` verification; the handler reads a failed exit status, but no recording shows a hook after a failed patch | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply: seen in the thread, still unverified in the report. Child call and lane attribution: unsupported |
 | Codex structured `Read` | Unsupported | No exploration hook | Setup prints the no-Read notice and installs nothing for exploration; use preparation |
 | Codex `shell` | No lesson-check hook | No lesson-check hook | Uncovered writer in both contexts |
 
@@ -217,9 +218,12 @@ Codex post-edit findings go back as `additionalContext` in the
 `PostToolUse` hook reply on stdout, with exit 0. The advisory edit hook
 uses the same form on `PreToolUse`. A native recording of codex-cli
 0.164.0 showed that findings on stderr never reached the model, so that
-channel is no longer used. No reviewed recording shows yet that the new
-reply reaches the model, so the Codex post-edit path stays
-`active-unverified` in root and child contexts.
+channel is no longer used. The guard recording of codex-cli 0.169.0
+shows the new reply in the thread: each post-edit reply is a hook
+developer record after the patch and before the next model step, in the
+root and in a worker. The Codex post-edit path still reads
+`active-unverified` in root and child contexts, because its evidence
+names no client version.
 
 Codex bounds model-visible hook context with `additionalContextLimit`,
 about 2,500 tokens by default. So the Codex reply holds at most 3,072
@@ -239,7 +243,10 @@ validation reopens the defaults before release. Claude Code 2.1.319
 validates the pre-edit timeout for `Write` and `Edit` in the root and
 child contexts: it waits for a pre-edit hook that ends after about 7
 seconds and honors its deny, and it stops a hook at 10 seconds and lets
-the write run. `MultiEdit`, the post-edit timeout, and every Codex path
+the write run. codex-cli 0.169.0 validates it for `apply_patch` in the
+root and child contexts in the same way: it waits about 7 seconds for a
+slow deny and honors it, and it stops a hook at 10 seconds and lets the
+patch run, without a message. `MultiEdit` and the post-edit timeout
 remain candidates.
 
 ### Installed, active, and verified are different
@@ -256,10 +263,11 @@ requested mode alone does not establish a working guard. A pin reads
 
 A verified path can carry a limit. A client can stop a slow pre-edit
 hook at its timeout and let the write run (fail-open). Claude Code
-2.1.319 does this at 10 seconds. Such a path reads `active`, and a pin
-`enforced`, only when a reviewed native recording of that client
-version, tool, and context shows a guard that is slow but ends inside
-the timeout, and the client waits for it and honors its deny. The claim
+2.1.319 and codex-cli 0.169.0 do this at 10 seconds. Such a path reads
+`active`, and a pin `enforced`, only when a reviewed native recording
+of that client version, tool, and context shows a guard that is slow
+but ends inside the timeout, and the client waits for it and honors its
+deny. The claim
 then holds only inside the limit, so every surface that shows it names
 the limit too, for example `claude enforced (limit: the client lets the
 write run after its 10 s hook timeout)`. Status, doctor, setup,
@@ -278,8 +286,19 @@ hook. `MultiEdit` has no recorded call, so its paths stay
 `active-unverified`. In enforce mode its guard paths also name
 `native-deny-unverified` and `native-timeout-unverified`, and a Claude
 Code enforce pin reads `enforced-unverified`. In check mode its baseline
-path reads `active-unverified` with no reason. No Codex path is verified
-yet.
+path reads `active-unverified` with no reason.
+
+The reviewed codex-cli 0.169.0 recordings give the same proof for
+`apply_patch` in the root and child contexts, with the same limit. So
+these paths lose `native-deny-unverified` and
+`native-timeout-unverified`, a written Codex deny counts as prevented,
+and the JSON report carries the limit in `verification.limit`. Seamark
+cannot read the Codex trust record, so every installed Codex path keeps
+`trust-unknown` and reads `active-unverified`, and a Codex enforce pin
+reads `enforced-unverified`. An enforce pattern pin also keeps
+`content-unprojectable` (see the Update projection above). Status,
+doctor, and the TUI print a limit only beside an `active` path, so for
+Codex the setup line and the JSON report show it.
 
 Setup keeps warning-and-install behavior for unknown local capability or
 trust. It refuses known-bad enforce states, such as disabled hooks (Claude
@@ -351,24 +370,30 @@ recordings above:
 
 | Item | Claude root | Claude child | Codex root | Codex child |
 | --- | --- | --- | --- | --- |
-| Call match identity | Verified | Verified | Unverified | Unsupported |
-| Receiving-lane identity | Verified | Verified | Unverified | Unsupported |
+| Call match identity | Verified | Verified | Verified | Unsupported |
+| Receiving-lane identity | Verified | Verified | Verified | Unsupported |
 | Context reset | Unverified | Unsupported | Unsupported | Unsupported |
-| Turn boundary | Verified | Unverified | Unverified | Unverified |
+| Turn boundary | Verified | Unverified | Verified | Unverified |
 | Model boundary | Verified | Unverified | Unverified | Unverified |
 
 The reviewed timing recording of Claude Code 2.1.319 verifies the
 Claude items marked Verified, for that client version only. Its one
 child case is a subagent read, which shows no turn or model step of the
 child, so those child items stay unverified. Context reset copies the
-evidence of the reset hook, which the report keeps unverified. No reviewed
-Codex timing recording exists. Own-call advice arrives in the same call
-as the edit that it names, so it is no evidence of guidance before
-construction. A command/MCP preparation names no receiver. The delivery
-report reads every observation window as incomplete. A guard's requested
-deny is not proof of prevention: `prevented` counts only a deny with a
-written reply, no later execution record, and a verified native deny
-path, which today means Claude Code `Write` or `Edit`. See
+evidence of the reset hook, which the report keeps unverified. The
+reviewed timing recording of codex-cli 0.169.0 verifies the Codex root
+call, lane, and turn, for that client version only. Its turn rests on
+the output of a preparation command in one turn and a patch in the next
+turn of the same thread, because the gate hook gives no reply in warn
+mode. No Codex case shows a model step or a turn of a worker, and the
+Codex payloads give no call or lane identity of a worker. Own-call
+advice arrives in the same call as the edit that it names, so it is no
+evidence of guidance before construction. A command/MCP preparation
+names no receiver. The delivery report reads every observation window
+as incomplete. A guard's requested deny is not proof of prevention:
+`prevented` counts only a deny with a written reply, no later execution
+record, and a verified native deny path, which today means Claude Code
+`Write` or `Edit`, or Codex `apply_patch`. See
 [lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
 
 ### Disable and downgrade safely
@@ -754,7 +779,11 @@ names. The decoder is tested against them, and the native check reruns
 them on the installed version to catch parser drift. Its content cases
 come from codex-cli 0.164.0: they record the exact before and after
 bytes of 29 patch shapes, and the native check replays them when the
-installed version is the recorded one.
+installed version is the recorded one. So they say nothing about the
+applier of codex-cli 0.169.0, the version of the native Codex
+recordings. The guard recording of 0.169.0 holds one live Update (case
+`update-permitted`) with the one-hunk shape of the content case
+`01_one_hunk`.
 
 ### Tests and checks
 
@@ -814,20 +843,27 @@ Before release:
   never generalize a successful path to the rest. Claude Code: the
   timing and guard recordings of 2.1.319 are reviewed and committed in
   `internal/integration/testdata/claude/timing` and `.../guard`;
-  `MultiEdit` has no recorded call. Codex: pending.
+  `MultiEdit` has no recorded call. Codex: the timing and guard
+  recordings of codex-cli 0.169.0 are reviewed and committed in
+  `internal/integration/testdata/codex/timing` and `.../guard`; that
+  client refuses a pure move before any hook, no recording shows a hook
+  after a failed patch, and every Codex path keeps `trust-unknown`.
 - Validate the candidate 10-second pre-edit and 15-second post-edit
   timeouts per tool/context, including slow cases. Change defaults if
   validation fails. Verify post-edit reply visibility separately from
   pre-write denial, and verify Codex trust without granting it in setup.
   Claude Code 2.1.319 validates the 10-second pre-edit timeout for
-  `Write` and `Edit` in both contexts, with a fail-open limit at 10
+  `Write` and `Edit` in both contexts, and codex-cli 0.169.0 for
+  `apply_patch` in both contexts, each with a fail-open limit at 10
   seconds.
 - Implement and test the content projection of a Codex Update patch.
   The before/after oracle that it needs is recorded: 29 content cases
   from codex-cli 0.164.0 in
   `internal/integration/testdata/codex/apply_patch_oracle.json`. The
-  current conservative unknown/deny behavior is not sufficient for the
-  planned release.
+  check replays them only on that version; the guard recording of
+  codex-cli 0.169.0 adds one live Update sample. The current
+  conservative unknown/deny behavior is not sufficient for the planned
+  release.
 - **Done:** Refuse conflicting duplicate lesson-check handlers consistently
   across clients. Retain Codex strict refusal and add equivalent Claude
   handling.
