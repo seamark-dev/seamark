@@ -331,7 +331,9 @@ const (
 	// MetaIndexedState holds the workspace fingerprint of the last
 	// index run (index.WorkspaceState). An equal fingerprint lets the
 	// next run skip, and a different one makes the readers report a
-	// stale index.
+	// stale index. A run that saw the workspace change during its reads
+	// stores a mark that equals no fingerprint, so its index reads as
+	// stale.
 	MetaIndexedState = "indexed_state"
 	// MetaHistoryMined holds "true" when the last index run mined the
 	// git history, and "false" when it did not. A skipped run reports

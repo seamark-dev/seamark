@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -290,40 +291,99 @@ func mcpStatusText(t *testing.T, flags ...string) string {
 	return resp.Result.Contents[0].Text
 }
 
-// TestStatusRootLineIsTheSameOverMCP covers one workspace and one
-// database through both surfaces. The MCP status resource prints the root
-// line of seamark status once, at a matching fingerprint and after the
-// refused refresh of a differing one.
-func TestStatusRootLineIsTheSameOverMCP(t *testing.T) {
+// statusLines returns the root lines and the workspace lines of a status
+// text, in their order.
+func statusLines(text string) []string {
+	var lines []string
+
+	for line := range strings.SplitSeq(text, "\n") {
+		if strings.HasPrefix(line, "root ") || strings.HasPrefix(line, "workspace ") {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
+}
+
+// TestStatusRootAndWorkspaceLinesAreTheSameOverMCP covers a copy that
+// reads the database of its origin, through both surfaces. The MCP status
+// resource prints the root line and the workspace line of seamark status.
+// Both compare the index with the origin. An edit in the copy alone
+// leaves the line current, because the origin still matches the index.
+// An edit in the origin as well makes the line stale, and the route of
+// the line makes it current again. An edit in the origin alone differs
+// (see the test after this one), and so does an origin that is gone.
+func TestStatusRootAndWorkspaceLinesAreTheSameOverMCP(t *testing.T) {
 	origin := rootWriteRepo(t)
 	copied := rootWriteCopy(t, origin)
 	flags := []string{"-C", copied, "--db", store.DefaultPath(origin)}
 
 	require.Equal(t, index.WorkspaceState(origin, ""), index.WorkspaceState(copied, ""), "the copy starts at one fingerprint")
 
-	want := "root           this database records another repository (" + origin + "), so this report describes " +
+	schema := " (schema v" + strconv.Itoa(store.SupportedSchema()) + ")"
+	root := "root           this database records another repository (" + origin + "), so this report describes " +
 		origin + ", not this workspace"
+	current := "workspace      current" + schema
+	stale := "workspace      STALE — run `seamark index` in " + origin + schema
 
-	for _, state := range []string{"a matching fingerprint", "a differing fingerprint"} {
-		if state == "a differing fingerprint" {
+	for _, step := range []struct {
+		name string
+		edit func()
+		want string
+	}{
+		{"a matching fingerprint", func() {}, current},
+		{"an edit in the copy", func() {
 			require.NoError(t, os.WriteFile(filepath.Join(copied, "b.go"), []byte("package main\n"), 0o644))
-		}
+		}, current},
+		{"an edit in the origin", func() {
+			require.NoError(t, os.WriteFile(filepath.Join(origin, "c.go"), []byte("package main\n\nfunc c() {}\n"), 0o644))
+		}, stale},
+		{"the route of the stale line", func() {
+			_, err := run(t, "-C", origin, "index")
+			require.NoError(t, err)
+		}, current},
+	} {
+		step.edit()
 
-		cli := statusRootLine(t, flags...)
-		require.Equal(t, want, cli, state)
+		out, err := run(t, append(flags, "status")...)
+		require.NoError(t, err)
+
+		cli := statusLines(out)
+		require.Equal(t, []string{root, step.want}, cli, "%s: %s", step.name, out)
 
 		text := mcpStatusText(t, flags...)
-
-		var lines []string
-
-		for line := range strings.SplitSeq(text, "\n") {
-			if strings.HasPrefix(line, "root ") {
-				lines = append(lines, line)
-			}
-		}
-
-		assert.Equal(t, []string{cli}, lines, "%s: %s", state, text)
+		assert.Equal(t, cli, statusLines(text), "%s: %s", step.name, text)
 	}
+}
+
+// TestStatusOverMCPReadsCurrentWhileTheIndexMatchesItsWorkspace covers
+// a state in which the two surfaces print another workspace line. An
+// origin that is gone is the other such state.
+// A copy reads the database of its origin, and only the origin has an
+// edit. seamark status compares the index with the origin, so it prints
+// the stale route into the origin. The MCP refresh skips, because the
+// index matches the copy. Its answer opens with the note that says so, and
+// its line reads current, because the run in the origin would make the
+// index differ from the copy. Both print the same root line.
+func TestStatusOverMCPReadsCurrentWhileTheIndexMatchesItsWorkspace(t *testing.T) {
+	origin := rootWriteRepo(t)
+	copied := rootWriteCopy(t, origin)
+	flags := []string{"-C", copied, "--db", store.DefaultPath(origin)}
+
+	require.NoError(t, os.WriteFile(filepath.Join(origin, "c.go"), []byte("package main\n\nfunc c() {}\n"), 0o644))
+
+	schema := " (schema v" + strconv.Itoa(store.SupportedSchema()) + ")"
+
+	out, err := run(t, append(flags, "status")...)
+	require.NoError(t, err)
+
+	cli := statusLines(out)
+	require.Len(t, cli, 2, out)
+	assert.Equal(t, "workspace      STALE — run `seamark index` in "+origin+schema, cli[1], out)
+
+	text := mcpStatusText(t, flags...)
+	assert.True(t, strings.HasPrefix(text, "note: this index records another repository ("+origin+"); it matches this workspace now"), text)
+	assert.Equal(t, []string{cli[0], "workspace      current" + schema}, statusLines(text), text)
 }
 
 // TestStaleHintsNameTheRouteOfTheDatabase covers a stale index that a

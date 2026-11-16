@@ -35,16 +35,22 @@ and asks how much its answers can be trusted.`,
 			}
 			defer func() { _ = st.Close() }() // read-only
 
-			// The lesson-check report identifies each hook binary against
-			// this binary and its version.
+			// The report reads the root that the index records, so the
+			// workspace line compares the index with that root. The
+			// lesson-check report identifies each hook binary against this
+			// binary and its version.
 			s, err := status.GatherAs(st, probe.Root, integration.SelfIdentity(version))
 			if err != nil {
 				return err
 			}
 
 			// The equal case starts no git process. Status runs often, so
-			// that cost counts. The MCP status resource reads the same
-			// facts, so both print the same root line for one pair.
+			// that cost counts. The MCP status resource reads the same root
+			// and the same facts, so for one workspace and database both
+			// print the same root line. They print the same workspace line
+			// too, unless the MCP refresh skips because the index matches
+			// its workspace: that resource then reads current, except for
+			// an index that another seamark version built, which stays stale.
 			if !store.SameDirectory(probe.Root, ws.Root) {
 				s.NoteOwnership(ownership.Gather(ws.Root, ws.AbsoluteDB()))
 			}

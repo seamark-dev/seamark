@@ -1,8 +1,11 @@
 package gate
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -485,4 +488,195 @@ func TestEvalDiffOnAClassFieldReachesEffects(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, d.Effects, "the write of dump stays with dump")
 	assert.Empty(t, d.Notes)
+}
+
+// TestEvalDiffOnAFieldReceiverCallReachesEffects proves that an edit of a
+// class field whose arrow function calls this.save() reports the write of
+// save. Another class also has a save method, so the edge must come from
+// the same-class tier, not from the unique-name guess.
+func TestEvalDiffOnAFieldReceiverCallReachesEffects(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{
+		"panel.ts": `import * as fs from "fs";
+
+export class Panel {
+	onClick = () => { this.save(); };
+
+	save() { fs.writeFileSync("a", "b"); }
+}
+`,
+		"other.ts": "export class Other {\n\tsave() { return 2; }\n}\n",
+	})
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: diff-writes-files
+    when: 'diff.effects.exists(e, e == "fs:write")'
+    message: the change can write files
+`), 0o644))
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	diff := `diff --git a/panel.ts b/panel.ts
+--- a/panel.ts
++++ b/panel.ts
+@@ -4,1 +4,1 @@
+-	onClick = () => { this.save(); };
++	onClick = () => { this.save(); this.save(); };
+`
+
+	d, err := EvalDiff(p, st, diff, SourceStdin)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fs:write"}, d.Effects)
+	assert.Equal(t, VerdictApproval, d.Verdict)
+	assert.Empty(t, d.Notes, "the change lies in an indexed symbol")
+}
+
+// privateStore is a class whose private method and accessors write files.
+// Its methods reach them through every kind of private member access.
+const privateStore = `import * as fs from "fs";
+
+export class Store {
+	#persist(p: string) { fs.writeFileSync(p, ""); }
+	get #data() { fs.writeFileSync("d", ""); return 1; }
+	set #value(v: number) { fs.writeFileSync("v", ""); }
+
+	constructor(em: { on(e: string, f: (p: string) => void): void }) {
+		em.on("change", this.#persist);
+	}
+
+	value(ps: string[]) {
+		ps.forEach(this.#persist);
+	}
+
+	bound(p: string) {
+		setTimeout(this.#persist.bind(this, p), 0);
+	}
+
+	called(p: string) {
+		this.#persist.call(this, p);
+	}
+
+	alias(p: string) {
+		const self = this;
+		return function () {
+			self.#persist(p);
+		};
+	}
+
+	thisArg(ps: string[]) {
+		ps.forEach(function (p) {
+			this.#persist(p);
+		}, this);
+	}
+
+	read() {
+		return this.#data;
+	}
+
+	write(p: number) {
+		this.#value = p;
+	}
+
+	pure(p: string) {
+		return p.trim();
+	}
+}
+`
+
+// TestEvalDiffPrivateMemberReferenceReachesEffects proves that an edit of
+// a private member access reports the effects of the private member: a
+// handler passed in the constructor, a value, a bind or call operand, an
+// alias call in a nested function, a call with a this argument, a getter
+// read, a setter write and a call through the class name. Another file
+// declares #persist and #log, so no guess can give the edge. An edit of a
+// method that references no private member still reports them, because
+// the class span covers it and the class reaches its private methods. A
+// private field #run of A never reaches the #run method of B.
+func TestEvalDiffPrivateMemberReferenceReachesEffects(t *testing.T) {
+	other := "export class Other {\n\t#persist(p: string) { return p; }\n\tstatic #log(p: string) { return p; }\n}\n"
+	jobs := `import * as fs from "fs";
+
+export class Jobs {
+	static #log(p: string) { fs.writeFileSync(p, ""); }
+
+	run(p: string) {
+		return Jobs.#log(p);
+	}
+}
+`
+	fieldA := `export class A {
+	#run = (p: string) => p.trim();
+
+	go(p: string) {
+		return this.#run(p);
+	}
+}
+`
+	methodB := `import * as fs from "fs";
+
+export class B {
+	#run(p: string) { fs.writeFileSync(p, ""); }
+
+	start(p: string) { this.#run(p); }
+}
+`
+
+	for _, tc := range []struct {
+		name, path, content, from, to string
+		extra                         map[string]string
+		effects                       []string
+	}{
+		{"ctor handler", "store.ts", privateStore, "\t\tem.on(\"change\", this.#persist);", "\t\tem.on(\"update\", this.#persist);", nil, []string{"fs:write"}},
+		{"value", "store.ts", privateStore, "\t\tps.forEach(this.#persist);", "\t\tps.slice(1).forEach(this.#persist);", nil, []string{"fs:write"}},
+		{"bind", "store.ts", privateStore, "\t\tsetTimeout(this.#persist.bind(this, p), 0);", "\t\tsetTimeout(this.#persist.bind(this, p), 1);", nil, []string{"fs:write"}},
+		{"call", "store.ts", privateStore, "\t\tthis.#persist.call(this, p);", "\t\tthis.#persist.call(this, p + 1);", nil, []string{"fs:write"}},
+		{"alias", "store.ts", privateStore, "\t\t\tself.#persist(p);", "\t\t\tself.#persist(p + 1);", nil, []string{"fs:write"}},
+		{"this argument", "store.ts", privateStore, "\t\t\tthis.#persist(p);", "\t\t\tthis.#persist(p + 1);", nil, []string{"fs:write"}},
+		{"getter", "store.ts", privateStore, "\t\treturn this.#data;", "\t\treturn this.#data + 1;", nil, []string{"fs:write"}},
+		{"setter", "store.ts", privateStore, "\t\tthis.#value = p;", "\t\tthis.#value = p + 1;", nil, []string{"fs:write"}},
+		{"pure method", "store.ts", privateStore, "\t\treturn p.trim();", "\t\treturn p.trimEnd();", nil, []string{"fs:write"}},
+		{"class name", "jobs.ts", jobs, "\t\treturn Jobs.#log(p);", "\t\treturn Jobs.#log(p + 1);", nil, []string{"fs:write"}},
+		{"field of another class", "a.ts", fieldA, "\t\treturn this.#run(p);", "\t\treturn this.#run(p + 1);", map[string]string{"b.ts": methodB}, []string{}},
+	} {
+		files := map[string]string{tc.path: tc.content, "other.ts": other}
+		for rel, content := range tc.extra {
+			files[rel] = content
+		}
+
+		st, root := indexedWorkspace(t, files)
+
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: diff-writes-files
+    when: 'diff.effects.exists(e, e == "fs:write")'
+    message: the change can write files
+`), 0o644))
+
+		p, err := LoadPolicy(root)
+		require.NoError(t, err)
+
+		d, err := EvalDiff(p, st, oneLineDiff(t, tc.path, tc.content, tc.from, tc.to), SourceStdin)
+		require.NoError(t, err, tc.name)
+		assert.Equal(t, tc.effects, d.Effects, tc.name)
+		assert.Empty(t, d.Notes, "%s: the change lies in an indexed symbol", tc.name)
+
+		if len(tc.effects) > 0 {
+			assert.Equal(t, VerdictApproval, d.Verdict, tc.name)
+		} else {
+			assert.Equal(t, VerdictAllow, d.Verdict, tc.name)
+		}
+	}
+}
+
+// oneLineDiff returns a diff of path that replaces the line from of
+// content with the line to.
+func oneLineDiff(t *testing.T, path, content, from, to string) string {
+	t.Helper()
+
+	n := slices.Index(strings.Split(content, "\n"), from) + 1
+	require.Positive(t, n, "the line %q is in %s", from, path)
+
+	return fmt.Sprintf("diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -%d,1 +%d,1 @@\n-%s\n+%s\n",
+		path, path, path, path, n, n, from, to)
 }

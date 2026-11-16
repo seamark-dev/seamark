@@ -143,6 +143,10 @@ type Status struct {
 }
 
 // Gather assembles the health report from the store and the workspace.
+// root is the root that the report describes. The CLI, the console, and
+// the MCP server pass the root that the index records, or the workspace
+// when the index records none. The freshness then compares the index
+// with that root, so a stale route into that root refreshes the index.
 func Gather(st *store.Store, root string) (*Status, error) {
 	return gather(integration.Builtin(), st, root)
 }
@@ -279,6 +283,19 @@ func (s *Status) NoteOwnership(o ownership.State) {
 	}
 
 	s.staleRoute = o.Command().RefusedBuildRoute()
+}
+
+// NoteWorkspaceMatch records that the index matches the workspace of the
+// surface, also when the root that the report describes changed. The MCP
+// server knows this when its refresh skips under the index of another
+// root, and its note says so. The workspace line then reads current,
+// because a run in that root would make the index differ from the code
+// that the server serves. An index of another version stays stale,
+// because only a rebuild adds the facts that it lacks.
+func (s *Status) NoteWorkspaceMatch() {
+	if s.Freshness == FreshStale && s.StaleReason == StaleWorkspaceChanged {
+		s.Freshness, s.StaleReason = FreshCurrent, ""
+	}
 }
 
 // RootNotice says that the index records another root than the

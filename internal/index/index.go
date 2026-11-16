@@ -180,8 +180,16 @@ func buildRefusal(s ownership.State, d ownership.Decision) error {
 
 // afterRead runs after the read loop and before the write when it is
 // not nil. Only tests set it: it is the one point where a test can change
-// a file after its read and before the run records the workspace state.
+// a file after its read and before the run observes the workspace again.
 var afterRead func()
+
+// changedDuringRun is the workspace state that a run records when the
+// workspace changed between its two observations. The graph can then
+// hold content that no workspace state describes, also after the files go
+// back to their first content. WorkspaceState returns hex digits or "",
+// so this value never equals a current state. Every reader then calls the
+// index stale, and the next run rebuilds.
+const changedDuringRun = "changed"
 
 // Run executes a full indexing pass.
 func Run(opts Options) (*Summary, error) {
@@ -211,10 +219,9 @@ func Run(opts Options) (*Summary, error) {
 	refusal := buildRefusal(state, decision)
 
 	// The workspace state is observed before any file is read, and the
-	// run records this state. A file that changes during the run then
-	// makes the record differ from the workspace, so the next run
-	// rebuilds. A state observed after the reads would mark an older parse
-	// as current. The fast path compares the same observation.
+	// run records this state when the workspace still has it after the
+	// reads. A state observed only after the reads would mark an older
+	// parse as current. The fast path compares the same observation.
 	observed := WorkspaceState(root, dbPath)
 
 	// Fast path: an unchanged workspace needs no work. This makes
@@ -410,6 +417,20 @@ func Run(opts Options) (*Summary, error) {
 
 	g := buildGraph(results, readGoModules(root, files), catalog)
 
+	// The second observation comes after the last read of the workspace,
+	// the go.mod files in buildGraph. When the state differs, the reads can
+	// hold content that the first state does not describe. So the run
+	// records the mark that matches no state. A change after this point
+	// does no harm: the graph matches the recorded state, and the next run
+	// sees the change. The git calls run outside the transaction, so they
+	// do not hold the write lock.
+	recorded := observed
+	changed := observed != "" && WorkspaceState(root, dbPath) != observed
+
+	if changed {
+		recorded = changedDuringRun
+	}
+
 	err = st.Rebuild(func(tx *store.Tx) error {
 		if err := g.write(tx); err != nil {
 			return err
@@ -453,7 +474,7 @@ func Run(opts Options) (*Summary, error) {
 		for k, v := range map[string]string{
 			store.MetaRepoRoot:          root,
 			store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
-			store.MetaIndexedState:      observed,
+			store.MetaIndexedState:      recorded,
 			store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
 			store.MetaParseCacheVersion: parseCacheVersion,
 			store.MetaIndexSummary:      string(coverage),
@@ -469,9 +490,9 @@ func Run(opts Options) (*Summary, error) {
 		return nil, err
 	}
 
-	// A change during the run leaves the record behind the workspace, so
-	// the next run rebuilds. The note says why that run is not skipped.
-	if observed != "" && WorkspaceState(root, dbPath) != observed {
+	// The mark is committed now, so the claim of the note is true. The
+	// note says why the next run is not skipped.
+	if changed {
 		logf("note: the workspace changed during indexing; the next run rebuilds")
 	}
 
@@ -500,7 +521,26 @@ func Run(opts Options) (*Summary, error) {
 // Python class carries the calls of its body outside its methods. An old
 // blob decodes with no calls on these symbols, so their edges and effects
 // would stay missing. freshSummary rebuilds an index of another version.
-const parseCacheVersion = "3"
+//
+// Version "4": a call on this in a JS/TS method that is no symbol is a
+// receiver call of the class, because the class carries the calls of such
+// a method. An old blob keeps it a plain call. The rebuild also gives an
+// unchanged index the same-class edges of class bodies.
+//
+// Version "5": a private JS/TS method (#m) is a symbol of its own and
+// carries its calls, so the class no longer carries them. An old blob has
+// no symbol for such a method. A this.#m() call in another method then
+// gets no edge, and that caller misses the effects of the private method.
+//
+// Version "6": every access X.#name in a JS/TS class is a private
+// reference that resolves only in the class that declares the name, and a
+// class references each private method and accessor it declares. An old
+// blob has no such reference: a value, getter or field access of #m gets
+// no edge, and the class misses the effects of its private methods. In an
+// old blob a receiver call this.#m() is a selector call that the
+// same-class tier resolves. A call of #m through any other operand took
+// the guess tier, which now abstains on a # name, so it gets no edge.
+const parseCacheVersion = "6"
 
 // OtherVersion reports an index that another seamark version built: the
 // parse cache version of its last run is not the one of this binary, so
@@ -1190,7 +1230,8 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 // freshSummary returns a Skipped summary when the index at dbPath was
 // built from the current workspace state; nil when a rebuild is needed.
 // current is the WorkspaceState that Run observed before its reads; a
-// rebuild records the same value. open is the opener of the database, so
+// rebuild records the same value when the reads leave it unchanged, else
+// changedDuringRun. open is the opener of the database, so
 // a caller decides whether an older schema migrates. state and decision
 // say whether a rebuild must record root.
 func freshSummary(root, dbPath, current string, start time.Time, open func(string) (*store.Store, error),
@@ -1953,6 +1994,10 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 // writeCallEdges resolves the call references of one declaration, in
 // descending confidence order. Every edge declares its derivation:
 //
+//  0. JS/TS private      → the method or accessor of the   (same-class)
+//     (#name) member       caller's own class with that
+//     reference, never     name, else that class when it
+//     a guess              carries calls
 //  1. bare identifier    → named import target module,     (qualified)
 //     that is a named      else function in the same       (same-package)
 //     import               package/module
@@ -1961,7 +2006,9 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 //     import alias or
 //     namespace import
 //  3. self/cls/this      → the method of the caller's      (same-class)
-//     method call          own class, when declared there
+//     method call of a     own class, when declared there;
+//     method or of a       a class body calls its own class
+//     class body
 //  4. any other          → the single same-family repo     (unique-name)
 //     selector call        symbol with that method name
 //
@@ -2023,7 +2070,29 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	// so a same-class resolution is never reported as a name-match guess.
 	best := map[int64]string{}
 
+	keep := func(dst *model.Symbol, origin string) {
+		if dst == nil || dst.ID == decl.Symbol.ID {
+			return
+		}
+
+		if cur, seen := best[dst.ID]; !seen || originRank(origin) > originRank(cur) {
+			best[dst.ID] = origin
+		}
+	}
+
 	for _, call := range decl.Calls {
+		// A private reference names a member of the caller's own class,
+		// never a catalogue sink, so it skips effect detection. It also
+		// skips every other tier: a guess could pick the private member
+		// of another class, which JavaScript does not allow.
+		if call.Private {
+			for _, dst := range privateTargets(res, &decl.Symbol, call.Name) {
+				keep(dst, model.OriginSameClass)
+			}
+
+			continue
+		}
+
 		// Effect detection runs on the raw reference: the interesting
 		// sinks live in external dependencies and never resolve to edges.
 		g.detectCallEffects(fam, rawImports, rawNamed, decl.Symbol.ID, call)
@@ -2045,11 +2114,10 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 				dst = pickUnique(g.decls[scopedKey(fam, res.Package)][call.Name], model.KindFunction)
 				origin = model.OriginSamePackage
 			}
-		case call.Receiver && decl.Symbol.Kind == model.KindMethod:
+		case call.Receiver && (decl.Symbol.Kind == model.KindMethod || decl.Symbol.Kind == model.KindType):
 			// The receiver shadows any same-named import, so this tier
-			// comes first. The caller's FQN is <pkg>.<Class>.<name>; a
-			// sibling method shares everything but the last segment.
-			want := strings.TrimSuffix(decl.Symbol.FQN, "."+decl.Symbol.Name) + "." + call.Name
+			// comes first.
+			want := receiverClass(&decl.Symbol) + "." + call.Name
 
 			for _, c := range g.decls[scopedKey(fam, res.Package)][call.Name] {
 				if c.Kind == model.KindMethod && c.FQN == want {
@@ -2085,13 +2153,7 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 			dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 		}
 
-		if dst == nil || dst.ID == decl.Symbol.ID {
-			continue
-		}
-
-		if cur, seen := best[dst.ID]; !seen || originRank(origin) > originRank(cur) {
-			best[dst.ID] = origin
-		}
+		keep(dst, origin)
 	}
 
 	for dstID, origin := range best {
@@ -2107,6 +2169,63 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	}
 
 	return nil
+}
+
+// privateTargets returns the symbols that a private (#name) reference of
+// caller resolves to. JavaScript scopes a private name to its class, and
+// the extractor records the reference only for a symbol of the class that
+// declares the name, so the lookup stays in the caller's own class and
+// file. The targets are the method symbols with that name; a get and set
+// pair gives two. A private field is no symbol, so the reference resolves
+// to the class, which carries the field initializer. A class with no
+// calls gives no target, because the edge would add no reach.
+func privateTargets(res *parse.FileResult, caller *model.Symbol, name string) []*model.Symbol {
+	if caller.Kind != model.KindMethod && caller.Kind != model.KindType {
+		return nil
+	}
+
+	class := receiverClass(caller)
+	member := class + "." + name
+
+	var (
+		methods []*model.Symbol
+		owner   *model.Symbol
+	)
+
+	for i := range res.Symbols {
+		sd := &res.Symbols[i]
+
+		switch {
+		case sd.Symbol.Kind == model.KindMethod && sd.Symbol.FQN == member:
+			methods = append(methods, &sd.Symbol)
+		case sd.Symbol.Kind == model.KindType && sd.Symbol.FQN == class && len(sd.Calls) > 0:
+			owner = &sd.Symbol
+		}
+	}
+
+	if len(methods) > 0 {
+		return methods
+	}
+
+	if owner != nil {
+		return []*model.Symbol{owner}
+	}
+
+	return nil
+}
+
+// receiverClass returns the FQN of the class that a receiver call of sym
+// calls into. A method FQN is <pkg>.<Class>.<name>, so the class is all but
+// the last segment. A class carries the calls of its body, such as a field
+// arrow function that calls this.save(), so the class is sym itself. Only
+// a JS/TS class gives such calls: a Python class body binds no receiver
+// name, and no other type carries calls.
+func receiverClass(sym *model.Symbol) string {
+	if sym.Kind == model.KindType {
+		return sym.FQN
+	}
+
+	return strings.TrimSuffix(sym.FQN, "."+sym.Name)
 }
 
 // detectCallEffects records catalogue matches for one call site on the
@@ -2290,6 +2409,13 @@ var commonGoMethodNames = map[string]bool{
 // The rule is Go only. Python and ECMA code often calls a value of a module
 // that the file never imports, so an import there is weak evidence.
 func (g *graph) uniqueMethod(fam, name, callerFile string, imported map[string]bool) (dst *model.Symbol, origin string) {
+	// A JS/TS private (#name) member is visible only inside its class, so
+	// a guess must never give it a caller of another class. Go and Python
+	// names never start with "#".
+	if strings.HasPrefix(name, "#") {
+		return nil, ""
+	}
+
 	var candidates []*model.Symbol
 
 	for _, c := range g.methodsByName[fam][name] {

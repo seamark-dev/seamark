@@ -452,18 +452,29 @@ model-boundary delivery.
   indexing.** An index run recorded the workspace fingerprint after it
   had parsed the files, so a file edited during the run was recorded but
   never parsed. Every later run, `status`, `orient` and `check` then
-  trusted that stale index until a forced rebuild. The run now records
-  the state it saw before reading any file, and it writes that record in
-  the same transaction as the graph, so overlapping runs cannot pair a
-  newer fingerprint with an older graph. An edit during a run costs one
-  extra rebuild on the next call, and the run logs a note that says so.
+  trusted that stale index until a forced rebuild. The run now observes
+  the state before it reads any file and again after its last read, and
+  it writes the record in the same transaction as the graph, so
+  overlapping runs cannot pair a newer fingerprint with an older graph.
+  When the two states differ, the run records a mark that equals no
+  state, so the index reads as stale and the next call rebuilds, also
+  after the edit is taken back, as with `git stash` and `git stash pop`.
+  Such a run logs a note that the next run rebuilds.
 - **MCP answers name the repository that their index records.** Under a
   database that records another repository, every MCP read (`orient`,
   `why`, `expand`, `change_set` and both resources) opens with one note
   that names that root, both when the index matches the workspace and
   when the server refuses to refresh it. The `seamark://status` resource
-  prints the same `root` line as `seamark status`, `check` keeps its
-  verdict at a matching fingerprint and carries the note, and the
+  prints the same `root` line as `seamark status`, and the same
+  `workspace` line, because both compare the index with the recorded
+  root. Two cases differ: while the index still matches the workspace of
+  the server, the resource reads current, as the note says, also after
+  an edit in the recorded root or when that root is gone. An index that
+  another seamark version built stays stale. The `orient` health line
+  compares the index with the workspace of the server instead, so after
+  an edit in that workspace alone `orient` reads `freshness stale` while
+  the resource reads current. `check` keeps
+  its verdict at a matching fingerprint and carries the note, and the
   `orient` title names the recorded root. Where a plain `seamark index`
   in this workspace would be refused, the stale status line and the
   stale note of the CLI read commands print the route of that state
@@ -474,10 +485,24 @@ model-boundary delivery.
   literals and lambdas included. A JS/TS or Python class now carries the
   calls of its body outside its methods, such as field initializers,
   static blocks and class attributes, while each method keeps its own
-  calls. Before, a change in such a place counted as inside a symbol
-  that reached nothing, so `check` gave a clean verdict with no effects
-  and no unknown-reach note. Now `why` lists these symbols as callers
-  with their calls and effects, and `check` reports what the change can
+  calls. A private JS/TS method (`#m`) is now a symbol of its own. Each
+  access to a private member, such as `this.#m()`, `ps.forEach(this.#m)`,
+  `Jobs.#m(p)`, a getter read or a setter write, resolves only in the
+  class that declares the name: to the private method or accessor, or
+  to the class for a private field. It never reaches a member of another
+  class. The class keeps an edge to each of its private methods and
+  accessors, so an edit in the class still reports their effects. A
+  method that is no symbol, such as a JS/TS method with a computed name
+  (`[Symbol.iterator]()`), is code of the class, and the class carries
+  its calls. `check` counts a changed line for every symbol whose span
+  covers it, so an edit inside a method also reports what the class
+  body calls, a known over-report. A JS/TS `this.save()` in a class
+  body, such as in a field arrow function, resolves to the `save` method
+  of that class, as it does in a method. Before, a change in such a
+  place counted as inside a symbol that reached nothing, so `check` gave
+  a clean verdict with no effects and no unknown-reach note. Now `why`
+  lists these symbols as callers with their calls and effects, and
+  `check` reports what the change can
   reach. A Go `const` initializer and a function value without a call
   still get no edge. An index built by an older version is rebuilt once
   by the next index run or MCP call, except a database file that does

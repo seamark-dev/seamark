@@ -208,8 +208,23 @@ effect tags; the union is what the change can _ultimately_ reach — even
 when the edited function never touches a sink itself. A package-level
 value is a symbol too and carries the calls of its initializer, and a
 class carries the calls of its body outside its methods, so an edit
-inside a table of handlers or a class field reaches what it calls. Only
-added and removed lines count: the context lines of a hunk do not.
+inside a table of handlers or a class field reaches what it calls. A
+private JS/TS method (`#m`) is a symbol. Each access to a private
+member, called or not, reaches only the member of the class that
+declares the name, or the class for a private field. The class reaches
+its private methods and accessors, so an edit anywhere in the class
+still reports their effects. A method that is no symbol,
+such as a JS/TS method with a computed name (`[Symbol.iterator]()`) or
+a Python `def` inside an `if` of the class body, is code of its class,
+so an edit inside it reaches what the class reaches. A changed line
+counts for every symbol whose span covers it. A class span covers its
+methods, so an edit inside a method reaches what that method reaches
+and also what the class body calls, such as the calls of its fields.
+This is a known over-report. Seamark keeps it, because a line is the
+finest position of a diff: a rule that counts a line only for the
+method drops the class code on that line, such as a decorator on the
+line of its method, and then misses an effect. Only added and removed
+lines count: the context lines of a hunk do not.
 Removed lines count as the line directly above them, and for a pure
 deletion also as the line below them, because either line can belong to the symbol that
 lost them. When the first removed line with text is indented, the

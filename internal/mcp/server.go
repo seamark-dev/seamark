@@ -288,10 +288,30 @@ type refreshed struct {
 	owner ownership.State
 }
 
-// recordsAnotherRoot reports an index that records another root than the
-// workspace. The answer then describes that root.
-func (r refreshed) recordsAnotherRoot() bool {
-	return r.owner.Recorded != "" && r.owner.Root != ownership.RootSame
+// recordsAnotherRoot reports facts o of an index that records another
+// root than the workspace. The answer then describes that root.
+func recordsAnotherRoot(o ownership.State) bool {
+	return o.Recorded != "" && o.Root != ownership.RootSame
+}
+
+// describedRoot returns the root that an answer over the facts o
+// describes: the root that the index records, else root. The CLI index
+// readers read the same root, so both surfaces describe one root.
+func describedRoot(o ownership.State, root string) string {
+	if recordsAnotherRoot(o) {
+		return o.Recorded
+	}
+
+	return root
+}
+
+// matched reports a skip under the index of another root. A skip happens
+// only when the fingerprint of this workspace equals the recorded one, so
+// the index matches this workspace, although its answer describes the
+// recorded root. The note and the workspace line of the status resource
+// both read this one test.
+func (r refreshed) matched() bool {
+	return r.failure == nil && recordsAnotherRoot(r.owner)
 }
 
 // note returns the note that opens an answer after this refresh, or "".
@@ -301,7 +321,7 @@ func (r refreshed) recordsAnotherRoot() bool {
 // its answer still describes that root.
 func (r refreshed) note() string {
 	switch {
-	case r.failure == nil && r.recordsAnotherRoot():
+	case r.matched():
 		return matchNote(r.owner)
 	case r.failure == nil:
 		return ""
@@ -314,14 +334,9 @@ func (r refreshed) note() string {
 	}
 }
 
-// named returns the root that the answer describes: the root that the
-// index records, else root. The CLI reads that root too.
+// named returns the root that the answer after this refresh describes.
 func (r refreshed) named(root string) string {
-	if r.recordsAnotherRoot() {
-		return r.owner.Recorded
-	}
-
-	return root
+	return describedRoot(r.owner, root)
 }
 
 // withNote opens text, or the error, with note.

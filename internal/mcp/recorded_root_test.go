@@ -99,8 +99,9 @@ func foreignTexts(t *testing.T, resps map[string]rpcResp) map[string]string {
 // TestReadsNameTheRootOfAnotherDatabase covers a server whose --db
 // records another repository, in the two states of the refresh. Each
 // read opens once with a note that names that repository, the status
-// resource prints the root line of seamark status once, and orient names
-// that repository in its title. A current index keeps the verdict of
+// resource prints the root line of seamark status once, its workspace
+// line compares the index with that repository, and orient names that
+// repository in its title. A current index keeps the verdict of
 // check, and the verdict carries the note. A refused refresh keeps the
 // refusal of check. No call writes to the database of the origin.
 func TestReadsNameTheRootOfAnotherDatabase(t *testing.T) {
@@ -158,12 +159,13 @@ func TestReadsNameTheRootOfAnotherDatabase(t *testing.T) {
 			assert.NotContains(t, text, staleNote, name)
 		}
 
-		// A plain index run is refused here, so the stale line names the
-		// route of this state.
+		// The status line compares the index with origin, as seamark
+		// status does. Origin still matches its index, so the line is
+		// current. A route into origin would change nothing there.
 		status := resourceText(t, resps["1"])
 		assert.Equal(t, []string{foreignRootLine(origin)}, rootLines(status))
-		assert.True(t, strings.HasPrefix(status, note+foreignRootLine(origin)+
-			"\nworkspace      STALE — run `seamark index` in "+origin+" (schema v"), status)
+		assert.True(t, strings.HasPrefix(status, note+foreignRootLine(origin)+"\nworkspace      current (schema v"), status)
+		assert.NotContains(t, status, "run `seamark index` in "+origin, "a route into origin changes nothing")
 
 		res := decodeToolParts(t, resps["6"])
 		assert.Equal(t, res.Content[0].Text, structuredReport(t, res), "the key carries the note")
@@ -176,6 +178,98 @@ func TestReadsNameTheRootOfAnotherDatabase(t *testing.T) {
 		after, err := os.ReadFile(dbPath)
 		require.NoError(t, err)
 		assert.Equal(t, before, after, "no call writes to the database of the origin")
+
+		// An edit in origin makes the line stale. A plain index run here is
+		// refused, so the line names the run in origin, and that run makes
+		// the line current again.
+		fixtureWrite(t, origin, "c.go", "package main\n\nfunc c() {}\n")
+
+		stale := resourceText(t, serveDB(t, other, dbPath, t.Logf, resourceRead(1, statusURI))["1"])
+		assert.True(t, strings.HasPrefix(stale, note+foreignRootLine(origin)+
+			"\nworkspace      STALE — run `seamark index` in "+origin+" (schema v"), stale)
+
+		_, err = index.Run(index.Options{Root: origin})
+		require.NoError(t, err)
+
+		current := resourceText(t, serveDB(t, other, dbPath, t.Logf, resourceRead(1, statusURI))["1"])
+		assert.True(t, strings.HasPrefix(current, note+foreignRootLine(origin)+"\nworkspace      current (schema v"), current)
+	})
+}
+
+// TestStatusResourceReadsCurrentWhileTheIndexMatchesItsWorkspace covers a
+// skip under the index of another root, after that root changed or went
+// away. The skip opens the answer with "it matches this workspace now".
+// The workspace line said STALE and named a run in the recorded root. That
+// run makes the index differ from this workspace. The line now reads
+// current, as the note and the orient resource of the server say, and the
+// root line stays.
+func TestStatusResourceReadsCurrentWhileTheIndexMatchesItsWorkspace(t *testing.T) {
+	current := func(t *testing.T, text, note string) {
+		t.Helper()
+
+		assert.True(t, strings.HasPrefix(text, note+"root           "), text)
+		assert.Len(t, rootLines(text), 1, text)
+		assert.Contains(t, text, "\nworkspace      current (schema v", text)
+		assert.NotContains(t, text, "STALE", text)
+	}
+
+	t.Run("an edit in the recorded root", func(t *testing.T) {
+		origin, tree := rootMoveLinked(t, false)
+		dbPath := store.DefaultPath(origin)
+
+		fixtureWrite(t, origin, "c.go", "package main\n\nfunc c() {}\n")
+		require.NotEqual(t, index.WorkspaceState(origin, ""), index.WorkspaceState(tree, ""))
+
+		resps := serveDB(t, tree, dbPath, t.Logf, resourceRead(1, statusURI), resourceRead(2, orientURI))
+
+		status := resourceText(t, resps["1"])
+		current(t, status, matchText(origin))
+		assert.Equal(t, []string{foreignRootLine(origin)}, rootLines(status))
+		assert.Contains(t, resourceText(t, resps["2"]), "freshness current",
+			"orient compares the index with the server workspace, which the edit in the recorded root leaves unchanged")
+	})
+
+	t.Run("a recorded root that is gone", func(t *testing.T) {
+		origin, err := filepath.EvalSymlinks(writeFixture(t))
+		require.NoError(t, err)
+
+		shared := filepath.Join(t.TempDir(), "shared.db")
+
+		_, err = index.Run(index.Options{Root: origin, DBPath: shared})
+		require.NoError(t, err)
+
+		parent, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+
+		sibling := filepath.Join(parent, "sibling")
+		require.NoError(t, os.CopyFS(sibling, os.DirFS(origin)))
+		require.NoError(t, os.Rename(origin, filepath.Join(parent, "away")))
+
+		// The root line keeps the run that records this workspace.
+		status := resourceText(t, serveDB(t, sibling, shared, t.Logf, resourceRead(1, statusURI))["1"])
+		current(t, status, goneText(matchText(origin)))
+		assert.Contains(t, strings.Join(rootLines(status), "\n"), "--move-root", status)
+	})
+
+	t.Run("a copied database file in the workspace", func(t *testing.T) {
+		origin, err := filepath.EvalSymlinks(writeFixture(t))
+		require.NoError(t, err)
+
+		require.NoError(t, os.WriteFile(filepath.Join(origin, ".gitignore"), []byte(".seamark/\n"), 0o644))
+		rootMoveGit(t, origin, "add", "-A")
+		rootMoveGit(t, origin, "commit", "-m", "ignore")
+
+		_, err = index.Run(index.Options{Root: origin, DBPath: filepath.Join(origin, "custom.db")})
+		require.NoError(t, err)
+
+		parent, err := filepath.EvalSymlinks(t.TempDir())
+		require.NoError(t, err)
+
+		copied := filepath.Join(parent, "copy")
+		require.NoError(t, os.CopyFS(copied, os.DirFS(origin)))
+
+		status := resourceText(t, serveDB(t, copied, filepath.Join(copied, "custom.db"), t.Logf, resourceRead(1, statusURI))["1"])
+		current(t, status, matchText(origin))
 	})
 }
 
