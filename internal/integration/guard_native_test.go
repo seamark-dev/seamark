@@ -582,9 +582,9 @@ func assertEmitted(t *testing.T, name string, post lessoncheck.AuditRecord) {
 
 // postEditContext returns the payload role of each guard-context.jsonl
 // record that holds the post-edit findings for the file p after a tool
-// call. The findings name p with its line, so the path ties a record to
-// its case. The script keeps only the records that the model did not
-// write.
+// call. A finding line names p (findingNamesPath), so the path ties a
+// record to its case. The script keeps only the records that the model
+// did not write.
 func (r guardRecording) postEditContext(t *testing.T, tool, p string) []string {
 	t.Helper()
 
@@ -593,21 +593,53 @@ func (r guardRecording) postEditContext(t *testing.T, tool, p string) []string {
 	var roles []string
 
 	for _, line := range timingLines(t, filepath.Join(r.dir, guardContextFile)) {
-		if !bytes.Contains(line, []byte(header)) || !bytes.Contains(line, []byte(p+":")) {
+		if !bytes.Contains(line, []byte(header)) {
 			continue
 		}
 
 		var rec struct {
 			Payload struct {
-				Role string `json:"role"`
+				Role    string `json:"role"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
 			} `json:"payload"`
 		}
 		require.NoError(t, json.Unmarshal(line, &rec), guardContextFile)
 
-		roles = append(roles, rec.Payload.Role)
+		for _, c := range rec.Payload.Content {
+			if strings.Contains(c.Text, header) && findingNamesPath(c.Text, p) {
+				roles = append(roles, rec.Payload.Role)
+
+				break
+			}
+		}
 	}
 
 	return roles
+}
+
+// findingNamesPath reports whether a finding line of a post-edit text
+// names the file p as a word of its own. A path check writes "add p", a
+// pattern check writes "p:<line> adds ...", and an unknown result
+// writes p alone, sometimes in a list with ", ". A whole word keeps a
+// longer path that ends with p, and the path in the "Check again" line,
+// from a match.
+func findingNamesPath(text, p string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+
+		for _, word := range strings.Fields(line) {
+			word = strings.TrimSuffix(word, ",")
+			if word == p || strings.HasPrefix(word, p+":") {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // logCodexPostEditContext logs the rollout records that hold the
@@ -625,17 +657,27 @@ func (r guardRecording) logCodexPostEditContext(t *testing.T, name, p string) {
 }
 
 // TestPostEditContextFindsTheRecordsOfACase checks the reader of the
-// post-edit context on a synthetic guard-context.jsonl. It gives no
-// native proof.
+// post-edit context on a synthetic guard-context.jsonl, in the three
+// finding forms of the post-edit text. It gives no native proof.
 func TestPostEditContextFindsTheRecordsOfACase(t *testing.T) {
 	dir := t.TempDir()
+	record := func(text string) string {
+		data, err := json.Marshal(map[string]any{"type": "response_item", "payload": map[string]any{
+			"type": "message", "role": "developer", "content": []any{map[string]any{"type": "input_text", "text": text}},
+		}})
+		require.NoError(t, err)
+
+		return string(data)
+	}
+	header := "seamark post-edit lesson checks after this apply_patch call: "
 	lines := []string{
-		`{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text",` +
-			`"text":"seamark post-edit lesson checks after this apply_patch call: violation\n- violation: pin a, ` +
-			`check c (no-added-pattern/1): sentinel/checked.txt:1 adds a line that matches the pattern\n"}]}}`,
-		`{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text",` +
-			`"text":"seamark post-edit lesson checks after this apply_patch call: violation\n- violation: pin a, ` +
-			`check c (no-added-pattern/1): sentinel/child-checked.txt:1 adds a line that matches the pattern\n"}]}}`,
+		record(header + "violation\n- violation: pin a, check c (no-added-pattern/1): " +
+			"sentinel/checked.txt:1 adds a line that matches the pattern\n"),
+		record(header + "violation\n- violation: pin a, check c (forbid-path-change/1): add sentinel/child-checked.txt\n" +
+			"Check again: seamark lessons --verify --file /workspace/native/sentinel/child-checked.txt\n"),
+		record(header + "incomplete\n- unknown/missing-baseline: pin a, check c (forbid-path-change/1): sentinel/slow.txt\n"),
+		record(header + "violation\n- violation: pin a, check c (forbid-path-change/1): add archive/sentinel/checked.txt\n" +
+			"Check again: seamark lessons --verify --file sentinel/listed.txt\n"),
 		`{"type":"response_item","payload":{"type":"function_call_output","output":"blocked by policy: sentinel/checked.txt"}}`,
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, guardContextFile), []byte(strings.Join(lines, "\n")+"\n"), 0o600))
@@ -643,8 +685,12 @@ func TestPostEditContextFindsTheRecordsOfACase(t *testing.T) {
 	r := guardRecording{timingRecording: timingRecording{dir: dir}}
 
 	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/checked.txt"),
-		"the path of another case and a deny text are not the findings of this case")
-	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/child-checked.txt"))
+		"the path of another case, a longer path, and a deny text are not the findings of this case")
+	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/child-checked.txt"),
+		"a path check names the change and the path")
+	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/slow.txt"),
+		"an unknown result names the path alone")
+	assert.Empty(t, r.postEditContext(t, codexApplyPatch, "sentinel/listed.txt"), "the Check again line is no finding")
 	assert.Empty(t, r.postEditContext(t, codexApplyPatch, "notes/permitted.txt"))
 	assert.Empty(t, r.postEditContext(t, claudeToolWrite, "sentinel/checked.txt"), "the header names the tool")
 }
