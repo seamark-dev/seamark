@@ -1163,23 +1163,7 @@ guard_vars() {
 # reviews the trust of that copy.
 guard_setup() {
     guard_vars
-    new_repo "$REPO"
-    mkdir -p "$REPO/sentinel" "$REPO/notes" "$REPO/free" "$REPO/.seamark" "$OBS"
-
-    for f in edit update delete move; do
-        printf 'alpha\n' > "$REPO/sentinel/$f.txt"
-    done
-
-    for f in unknown failure update; do
-        printf 'alpha\n' > "$REPO/notes/$f.txt"
-    done
-
-    printf 'alpha\ngamma\n' > "$REPO/notes/multi.txt"
-    printf 'one\ntwo\nthree\n' > "$REPO/free/oracle.txt"
-    git -C "$REPO" add sentinel notes free
-    git -C "$REPO" commit -q -m 'guard fixture'
-
-    guard_lessons
+    guard_files
     cp "$INSTR/lessons-enforce.yaml" "$REPO/.seamark/lessons.yaml"
     ok "fixture files under sentinel/, notes/, and free/; one enforce pin on sentinel/ and one on notes/"
 
@@ -1199,7 +1183,7 @@ guard_setup() {
 
     cp "$SCRIPTS/native-record-observer.py" "$INSTR/observer.py"
     guard_prewrite_script
-    guard_instrument
+    guard_instrument PreToolUse "sh $INSTR/pre-write.sh" 10
     [ "$CLIENT" != codex ] || guard_last
     ok "instrumentation entries added beside the lesson hook entries"
 
@@ -1219,16 +1203,44 @@ guard_setup() {
     fi
 }
 
-# guard_instrument adds the observer entries and the indirection entry
-# after the lesson hook entries of the hook document.
+# guard_files creates the scratch repository with the fixture files of
+# the guard scenario, and writes the lessons.yaml variants.
+guard_files() {
+    new_repo "$REPO"
+    mkdir -p "$REPO/sentinel" "$REPO/notes" "$REPO/free" "$REPO/.seamark" "$OBS"
+
+    for f in edit update delete move; do
+        printf 'alpha\n' > "$REPO/sentinel/$f.txt"
+    done
+
+    for f in unknown failure update; do
+        printf 'alpha\n' > "$REPO/notes/$f.txt"
+    done
+
+    printf 'alpha\ngamma\n' > "$REPO/notes/multi.txt"
+    printf 'one\ntwo\nthree\n' > "$REPO/free/oracle.txt"
+    git -C "$REPO" add sentinel notes free
+    git -C "$REPO" commit -q -m 'guard fixture'
+
+    guard_lessons
+}
+
+# guard_instrument <event> <command> <timeout> adds the observer entries
+# and one indirection entry after the lesson hook entries of the hook
+# document. The indirection entry runs <command> on <event>. The guard
+# scenario passes its pre-write entry.
 guard_instrument() {
     # The observer runs on PreToolUse too, because the guard reads that
-    # event. The indirection entry gets the matcher and the timeout of
-    # the guard spec, so the slow mode meets the timeout of the guard.
-    python3 -I - "$CLIENT" "python3 -I $INSTR/observer.py $OBS $CLIENT" "sh $INSTR/pre-write.sh" "$GUARD_MATCHER" "$GUARD_DOC" <<'PY'
+    # event. The indirection entry gets the edit matcher of the
+    # lesson-check specs. The caller gives it the timeout of the owned
+    # entry that it stands for, so the slow modes meet the timeout of that
+    # owned entry.
+    python3 -I - "$CLIENT" "python3 -I $INSTR/observer.py $OBS $CLIENT" "$GUARD_MATCHER" "$GUARD_DOC" "$1" "$2" "$3" <<'PY'
 import json, os, sys
 
-client, observer, prewrite, matcher, path = sys.argv[1:6]
+# The loop below sets its own timeout per event, so the names of the
+# indirection entry differ from the loop names.
+client, observer, matcher, path, entry_event, entry_command, entry_timeout = sys.argv[1:8]
 tools = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied"}
 
 if client == "claude":
@@ -1253,8 +1265,8 @@ for e in events:
         entry["matcher"] = "*"
     hooks.setdefault(e, []).append(entry)
 
-hooks.setdefault("PreToolUse", []).append(
-    {"matcher": matcher, "hooks": [{"type": "command", "command": prewrite, "timeout": 10}]})
+hooks.setdefault(entry_event, []).append(
+    {"matcher": matcher, "hooks": [{"type": "command", "command": entry_command, "timeout": int(entry_timeout)}]})
 
 os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path, "w") as f:
@@ -1263,22 +1275,30 @@ PY
 }
 
 # guard_last moves the owned guard entry of the Codex hook document into
-# a new PreToolUse group after all other groups. The group keeps the
-# matcher and the other fields of the group that init wrote. Only the
-# position changes, so the guard runs with the same command, matcher,
-# and timeout. The no-guard form then removes the last group, and no
-# other entry changes its trust key.
+# a new PreToolUse group after all other groups (see owned_last). The
+# no-guard form then removes the last group, and no other entry changes
+# its trust key.
 guard_last() {
-    python3 -I - "$GUARD_DOC" "$GUARD_MARKER" <<'PY'
+    owned_last "$GUARD_DOC" PreToolUse "$GUARD_MARKER"
+}
+
+# owned_last <doc> <event> <marker> moves each owned entry of <event>
+# into a new group after all other groups of <event>. An owned entry is a
+# handler whose command ends with <marker>. The new group keeps the
+# matcher and the other fields of the group that init wrote. Only the
+# position changes, so the owned entry runs with the same command,
+# matcher, and timeout.
+owned_last() {
+    python3 -I - "$1" "$2" "$3" <<'PY'
 import json, sys
 
-path, marker = sys.argv[1:3]
+path, event, marker = sys.argv[1:4]
 
 with open(path, encoding="utf-8") as f:
     doc = json.load(f)
 
 kept, moved = [], []
-for entry in doc["hooks"]["PreToolUse"]:
+for entry in doc["hooks"][event]:
     hooks = entry.get("hooks", [])
     owned = [h for h in hooks if h.get("command", "").endswith(" " + marker)]
     others = [h for h in hooks if not h.get("command", "").endswith(" " + marker)]
@@ -1289,19 +1309,16 @@ for entry in doc["hooks"]["PreToolUse"]:
     else:
         kept.append(entry)
 
-doc["hooks"]["PreToolUse"] = kept + moved
+doc["hooks"][event] = kept + moved
 with open(path, "w", encoding="utf-8") as f:
     json.dump(doc, f, indent=2)
 PY
 }
 
 # guard_keys checks the trust keys of the Codex hook forms against the
-# enforce form that setup kept, and that the operator reviews. The enforce
-# form must hold one owned guard entry, alone in the last PreToolUse
-# group. The no-guard form must hold every other entry at the same key
-# (event, group, handler) with the same content, because Codex hashes
-# the content of each entry and compares it per key. It prints the
-# problems on one line, and returns 1 when a problem exists.
+# enforce form that setup kept, and that the operator reviews (see
+# owned_keys). It prints the problems on one line, and returns 1 when a
+# problem exists.
 #
 # The enforce, check-pins, and broken-config phases run with the enforce
 # form itself. The wrapper, slow, and slow-deny phases run with the
@@ -1309,44 +1326,58 @@ PY
 # reads it, and no Codex turn runs with it.
 guard_keys() {
     guard_doc no-guard "$INSTR/hooks-no-guard.json"
-    python3 -I - "$INSTR/hooks-enforce.json" "$INSTR/hooks-no-guard.json" "$GUARD_MARKER" <<'PY'
+    owned_keys "$INSTR/hooks-enforce.json" "$INSTR/hooks-no-guard.json" PreToolUse "$GUARD_MARKER" enforce guard
+}
+
+# owned_keys <kept> <form> <event> <marker> <kept-name> <entry-name>
+# checks the trust keys of the hook document <form> against the kept
+# copy <kept>, which the operator reviews. The kept copy must hold one
+# owned entry of <event>, alone in the last group of <event>. <form> must
+# hold every other entry at the same key (event, group, handler) with the
+# same content, because Codex hashes the content of each entry and
+# compares it per key. The two names only word the problems, for example
+# "the enforce form holds 2 owned guard entries". It prints the problems
+# on one line, and returns 1 when a problem exists.
+owned_keys() {
+    python3 -I - "$1" "$2" "$3" "$4" "$5" "$6" <<'PY'
 import json, sys
 
-enforce_path, form_path, marker = sys.argv[1:4]
+kept_path, form_path, event, marker, kept_name, entry_name = sys.argv[1:7]
 
 
 def entries(path):
-    """Return the entries of a hook document by trust key, and its PreToolUse group count."""
+    """Return the entries of a hook document by trust key, and the group count of the event."""
     with open(path, encoding="utf-8") as f:
         doc = json.load(f)
     out = {}
-    for event, groups in doc.get("hooks", {}).items():
+    for name, groups in doc.get("hooks", {}).items():
         for g, entry in enumerate(groups):
             fields = {k: v for k, v in entry.items() if k != "hooks"}
             for h, hook in enumerate(entry.get("hooks", [])):
-                out["%s:%d:%d" % (event, g, h)] = (fields, hook)
-    return out, len(doc.get("hooks", {}).get("PreToolUse", []))
+                out["%s:%d:%d" % (name, g, h)] = (fields, hook)
+    return out, len(doc.get("hooks", {}).get(event, []))
 
 
-enforce, groups = entries(enforce_path)
+kept, groups = entries(kept_path)
 form, _ = entries(form_path)
 problems = []
 
-owned = [k for k, (_, hook) in enforce.items() if hook.get("command", "").endswith(" " + marker)]
-last = "PreToolUse:%d:0" % (groups - 1)
+owned = [k for k, (_, hook) in kept.items()
+         if k.startswith(event + ":") and hook.get("command", "").endswith(" " + marker)]
+last = "%s:%d:0" % (event, groups - 1)
 if len(owned) != 1:
-    problems.append("the enforce form holds %d owned guard entries, not one" % len(owned))
-elif owned[0] != last or "PreToolUse:%d:1" % (groups - 1) in enforce:
-    problems.append("the owned guard entry is at %s, not alone at %s" % (owned[0], last))
+    problems.append("the %s form holds %d owned %s entries, not one" % (kept_name, len(owned), entry_name))
+elif owned[0] != last or "%s:%d:1" % (event, groups - 1) in kept:
+    problems.append("the owned %s entry is at %s, not alone at %s" % (entry_name, owned[0], last))
 
 for key in sorted(form):
-    if key not in enforce:
-        problems.append("%s is not in the enforce form" % key)
-    elif form[key] != enforce[key]:
-        problems.append("%s holds other content than in the enforce form" % key)
+    if key not in kept:
+        problems.append("%s is not in the %s form" % (key, kept_name))
+    elif form[key] != kept[key]:
+        problems.append("%s holds other content than in the %s form" % (key, kept_name))
 
-for key in sorted(set(enforce) - set(form) - set(owned)):
-    problems.append("%s of the enforce form is missing" % key)
+for key in sorted(set(kept) - set(form) - set(owned)):
+    problems.append("%s of the %s form is missing" % (key, kept_name))
 
 print("; ".join(problems))
 sys.exit(1 if problems else 0)
@@ -1426,12 +1457,29 @@ EOF
 # writes the hook document of the client, or <file> when it is given, so
 # guard_keys can read a form that no client reads.
 guard_doc() {
-    python3 -I - "$INSTR/hooks-enforce.json" "${2:-$GUARD_DOC}" "$GUARD_MARKER" "$1" <<'PY'
+    case "$1" in
+        enforce)        doc_form=kept ;;
+        no-guard)       doc_form=drop ;;
+        inline-wrapper) doc_form=wrap ;;
+        *) printf '%s\n' "guard_doc: unknown form \"$1\"" >&2; return 2 ;;
+    esac
+
+    owned_doc "$INSTR/hooks-enforce.json" "${2:-$GUARD_DOC}" PreToolUse "$GUARD_MARKER" "$doc_form"
+}
+
+# owned_doc <kept> <file> <event> <marker> <form> writes one form of a
+# hook document into <file>, from the kept copy <kept>: kept (the copy
+# itself), drop (without the owned entries of <event>), or wrap (each
+# owned command of <event> with "|| true" after it). An owned entry is a
+# handler whose command ends with <marker>. A group that loses its last
+# handler goes too.
+owned_doc() {
+    python3 -I - "$1" "$2" "$3" "$4" "$5" <<'PY'
 import json, shutil, sys
 
-saved, path, marker, form = sys.argv[1:5]
+saved, path, event, marker, form = sys.argv[1:6]
 
-if form == "enforce":
+if form == "kept":
     shutil.copyfile(saved, path)
     sys.exit(0)
 
@@ -1439,19 +1487,19 @@ with open(saved, encoding="utf-8") as f:
     doc = json.load(f)
 
 entries = []
-for entry in doc.get("hooks", {}).get("PreToolUse", []):
+for entry in doc.get("hooks", {}).get(event, []):
     hooks = []
     for h in entry.get("hooks", []):
         command = h.get("command", "")
         if command.endswith(" " + marker):
-            if form == "no-guard":
+            if form == "drop":
                 continue
             h = dict(h, command=command + " || true")
         hooks.append(h)
     if hooks:
         entries.append(dict(entry, hooks=hooks))
 
-doc["hooks"]["PreToolUse"] = entries
+doc["hooks"][event] = entries
 with open(path, "w", encoding="utf-8") as f:
     json.dump(doc, f, indent=2)
 PY

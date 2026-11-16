@@ -32,6 +32,10 @@ const codexGuardMarker = "lessons --guard --hook --client codex"
 // The phases whose Codex cases run without the owned guard entry.
 var codexPhasesWithoutGuard = []string{"wrapper", "slow", guardPhaseSlowDeny}
 
+// guardInstrument is the guard_instrument call of guard_setup: the
+// pre-write indirection entry with the 10-second timeout of the guard.
+const guardInstrument = "guard_instrument PreToolUse \"sh $INSTR/pre-write.sh\" 10\n"
+
 // trustEntry is one hook entry of a hook document: the fields of its group
 // (for example the matcher) and the handler itself. Codex hashes both.
 type trustEntry struct {
@@ -150,7 +154,10 @@ func (s codexGuardScratch) run(t *testing.T, program string) (output string, sta
 
 	var functions strings.Builder
 
-	for _, name := range []string{"guard_instrument", "guard_last", "guard_doc", "guard_keys", "guard_restore", "guard_phase"} {
+	for _, name := range []string{
+		"guard_instrument", "owned_last", "guard_last", "owned_doc", "guard_doc", "owned_keys", "guard_keys",
+		"guard_restore", "guard_phase",
+	} {
 		functions.WriteString(scriptFunction(t, script, name))
 	}
 
@@ -207,7 +214,7 @@ func TestGuardScenarioCodexCasesKeepTheTrustKeys(t *testing.T) {
 
 	var program strings.Builder
 
-	program.WriteString("guard_instrument\nguard_last\ncp \"$GUARD_DOC\" \"$INSTR/hooks-enforce.json\"\nguard_keys\n")
+	program.WriteString(guardInstrument + "guard_last\ncp \"$GUARD_DOC\" \"$INSTR/hooks-enforce.json\"\nguard_keys\n")
 
 	for i, r := range runs {
 		fmt.Fprintf(&program, "guard_phase %s\ncp \"$GUARD_DOC\" \"$SNAP/case-%02d.json\"\n", r[0], i)
@@ -277,7 +284,7 @@ func TestGuardScenarioCodexGuardMoveKeepsEveryEntry(t *testing.T) {
 	s := newCodexGuardScratch(t)
 	doc := filepath.Join(s.root, ".codex", "hooks.json")
 
-	out, status := s.run(t, "guard_instrument\ncp \"$GUARD_DOC\" \"$SNAP/before.json\"\n")
+	out, status := s.run(t, guardInstrument+"cp \"$GUARD_DOC\" \"$SNAP/before.json\"\n")
 	require.Equal(t, 0, status, out)
 
 	report := func() string {
@@ -324,7 +331,7 @@ func TestGuardScenarioCodexGuardMoveKeepsEveryEntry(t *testing.T) {
 func TestGuardScenarioCodexKeysRefuseTheOldLayout(t *testing.T) {
 	s := newCodexGuardScratch(t)
 
-	out, status := s.run(t, "guard_instrument\ncp \"$GUARD_DOC\" \"$INSTR/hooks-enforce.json\"\nguard_keys\n")
+	out, status := s.run(t, guardInstrument+"cp \"$GUARD_DOC\" \"$INSTR/hooks-enforce.json\"\nguard_keys\n")
 	require.Equal(t, 1, status, out)
 
 	assert.Contains(t, out, "the owned guard entry is at PreToolUse:2:0, not alone at PreToolUse:4:0")
