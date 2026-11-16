@@ -725,11 +725,14 @@ one theme never spend two slots:
   `lessons.yaml` (`mined lessons no-index`). The command refreshes no
   index: when the index no longer matches the workspace, one guidance
   line says that the mined lessons come from an index that does not match
-  the workspace now. `--json` prints the
+  the workspace now, and when another seamark version built the index,
+  the line says that instead. `--json` prints the
   versioned `lesson-preparation/1` document. In it, `guidance` can carry
-  two keys beside `mined_status: ok`. Each one is absent when there is
+  three keys beside `mined_status: ok`. Each one is absent when there is
   nothing to qualify. `mined_freshness` is `stale` here and
-  `not-refreshed` from `change_set`. `mined_root` (from `change_set`
+  `not-refreshed` from `change_set`. Beside `stale`,
+  `mined_stale_reason` says why: `workspace-changed`, or
+  `other-version` when another seamark version built the index. `mined_root` (from `change_set`
   only) names the root that the index records when that root is another
   repository. The command prepares for the root that the index records,
   so it never names one. The command exits 0 also

@@ -3581,6 +3581,56 @@ func main() {}
 	assert.True(t, readOnly.ReadOnly)
 }
 
+// TestOtherVersionReadsTheStoredParseCacheVersion proves the rule that
+// the readers which never rebuild share: an index of this version is not
+// another version, an aged one is, an index with a run and no stored
+// version (from before the version) is, and a database that no run
+// completed is not. A failed read is an error, not a current index.
+func TestOtherVersionReadsTheStoredParseCacheVersion(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+	sum, st := runIndex(t, root)
+
+	other, err := OtherVersion(st)
+	require.NoError(t, err)
+	assert.False(t, other, "a run of this binary")
+
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "2"))
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.True(t, other, "an index of an older parser")
+
+	db, err := sql.Open("sqlite", sum.DBPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, store.MetaParseCacheVersion)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.True(t, other, "a run from before the version was stored")
+
+	_, err = Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.False(t, other, "the rebuild records this version")
+
+	empty, err := store.Open(filepath.Join(t.TempDir(), "index.db"))
+	require.NoError(t, err)
+
+	other, err = OtherVersion(empty)
+	require.NoError(t, err)
+	assert.False(t, other, "no completed run, nothing to compare")
+
+	require.NoError(t, empty.Close())
+
+	_, err = OtherVersion(empty)
+	assert.Error(t, err, "a failed read is not a current index")
+}
+
 // TestClassBodyCallsBelongToTheClassOnly proves that a call in a class body
 // outside the methods gives the class its edge and effect, and that a
 // method's call stays on the method: the callee lists the method, not the

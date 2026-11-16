@@ -118,7 +118,10 @@ footer { margin-top:40px; padding-top:14px; border-top:1px solid var(--line); co
     <div><b>{{.Value}}</b><span>{{.Label}}</span></div>
     {{- end}}
   </div>
-  {{- if .Stale}}
+  {{- if .OtherVersion}}
+  <div class="stale">This index was built by another seamark version — run
+    <code>seamark index</code> and regenerate before trusting these numbers.</div>
+  {{- else if .Stale}}
   <div class="stale">The workspace has changed since this index was built — run
     <code>seamark index</code> and regenerate before trusting these numbers.</div>
   {{- end}}

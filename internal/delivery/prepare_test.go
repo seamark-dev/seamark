@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -1508,6 +1509,30 @@ func TestPrepareSaysWhenTheMinedIndexIsQualified(t *testing.T) {
 		assert.Empty(t, p.Guidance.MinedRoot)
 		assert.Contains(t, preparationText(p, FormFull),
 			intro+"does not match the workspace now (`seamark index` refreshes it)\n")
+
+		req.MinedStaleReason = indexhealth.StaleWorkspaceChanged
+
+		p = mustPrepare(t, prepareMemoryStore(t), req)
+		assert.Equal(t, "workspace-changed", p.Guidance.MinedStaleReason)
+		assert.Contains(t, preparationText(p, FormFull),
+			intro+"does not match the workspace now (`seamark index` refreshes it)\n")
+	})
+
+	t.Run("stale from another seamark version", func(t *testing.T) {
+		req := prepareRequest(root, cfg, "api/handler.go")
+		req.MinedFreshness = MinedStale
+		req.MinedStaleReason = indexhealth.StaleOtherVersion
+
+		p := mustPrepare(t, prepareMemoryStore(t), req)
+
+		assert.Equal(t, "stale", p.Guidance.MinedFreshness)
+		assert.Equal(t, "other-version", p.Guidance.MinedStaleReason)
+
+		for _, form := range []string{FormFull, FormSupplement} {
+			text := preparationText(p, form)
+			assert.Contains(t, text, intro+"was built by another seamark version (`seamark index` rebuilds it)\n", form)
+			assert.NotContains(t, text, "does not match the workspace", form)
+		}
 	})
 
 	t.Run("no mined lessons leave nothing to qualify", func(t *testing.T) {
@@ -1529,5 +1554,19 @@ func TestPrepareSaysWhenTheMinedIndexIsQualified(t *testing.T) {
 
 		_, err := Prepare(context.Background(), prepareMemoryStore(t), req)
 		require.Error(t, err)
+	})
+
+	t.Run("a stale reason needs a stale index from the closed list", func(t *testing.T) {
+		for _, c := range []struct{ freshness, reason string }{
+			{"", indexhealth.StaleOtherVersion},
+			{MinedNotRefreshed, indexhealth.StaleOtherVersion},
+			{MinedStale, "old"},
+		} {
+			req := prepareRequest(root, cfg, "api/handler.go")
+			req.MinedFreshness, req.MinedStaleReason = c.freshness, c.reason
+
+			_, err := Prepare(context.Background(), prepareMemoryStore(t), req)
+			require.Error(t, err, "%+v", c)
+		}
 	})
 }

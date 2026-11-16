@@ -192,6 +192,24 @@ route of that state instead, for example
 `seamark orient`, and `seamark report` does the same. A database of
 this workspace keeps ``STALE — run `seamark index` ``.
 
+An index that another seamark version built can lack facts that this
+version records, such as the calls inside package-level values, also
+when the workspace is unchanged. `seamark index`, `seamark check`, and
+every MCP call rebuild it once. The readers that never rebuild call it
+stale and say why: the `workspace` line reads
+``STALE — this index was built by another seamark version; run `seamark index` ``,
+`--json` keeps `"freshness": "stale"` and adds
+`"stale_reason": "other-version"` (a changed workspace gives
+`"workspace-changed"`; any other freshness has no key), the `orient`
+health line reads `freshness stale (this index was built by another
+seamark version)`, and `why`, `orient`, and `report` print
+``note: this index was built by another seamark version — run `seamark index` to rebuild it``.
+The HTML report and the console overview say the same, and
+`lessons --prepare` qualifies its mined lessons with it. A database that
+records another repository keeps the route of that state on both lines.
+An index from before seamark stored its parser version counts as
+another version.
+
 The MCP server never rebuilds an index that records another repository.
 Every read answer (`orient`, `why`, `expand`, `change_set` with its
 `change_set_report` key, and both resources) then opens with one note

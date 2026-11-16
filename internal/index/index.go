@@ -502,6 +502,31 @@ func Run(opts Options) (*Summary, error) {
 // would stay missing. freshSummary rebuilds an index of another version.
 const parseCacheVersion = "3"
 
+// OtherVersion reports an index that another seamark version built: the
+// parse cache version of its last run is not the one of this binary, so
+// the index can lack facts that this binary records. The readers that
+// never rebuild ask it, so such an index does not read as current. A
+// database with a completed run and no stored version predates the
+// version, so it counts as another version. A database that no run
+// completed has nothing to compare. A current index costs one meta read.
+func OtherVersion(st *store.Store) (bool, error) {
+	v, err := st.GetMeta(store.MetaParseCacheVersion)
+	if err != nil || v == parseCacheVersion {
+		return false, err
+	}
+
+	if v != "" {
+		return true, nil
+	}
+
+	indexedAt, err := st.GetMeta(store.MetaIndexedAt)
+	if err != nil {
+		return false, err
+	}
+
+	return indexedAt != "", nil
+}
+
 // loadParseCache returns the stored per-file parse cache, or an empty map
 // when forced, version-stale, or unreadable — every one of which just
 // means "reparse everything", never a failure.

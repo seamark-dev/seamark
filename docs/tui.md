@@ -100,7 +100,7 @@ The state of the workspace at a glance.
   LEARN (pending proposals, lessons, review mining, distill agent), and
   GUARD (policy mode and rule counts, gate hooks). Missing data says why;
   it never shows as zero. A stale index adds a banner with `b rebuild
-  now`. A narrow terminal folds the cards into the **Workspace summary**
+  now`; an index that another seamark version built says so there. A narrow terminal folds the cards into the **Workspace summary**
   item, which shows every fact in full.
 - **Attention**: actionable problems, optional additions, unsupported
   capabilities, and unknown evidence stay in separate groups, with one

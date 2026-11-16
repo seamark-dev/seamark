@@ -349,14 +349,24 @@ func (o *overview) healthItems(v services.IndexView) []ovItem {
 			source = "index " + o.st.theme.Glyphs.Sep + " built " + ovAge(at, time.Now())
 		}
 
+		body := []string{
+			"Files changed since the last index run, so answers can miss recent changes.",
+			"Co-change, blast radius and lessons for the changed files may be missing or out of date.",
+		}
+
+		// An index of another version can match the files, so the body
+		// names the reason that a rebuild fixes.
+		if s.StaleReason == status.StaleOtherVersion {
+			body = []string{
+				"Another seamark version built this index, so it can lack facts that this version records.",
+				"Callers, calls and effects can be missing until the index is built again.",
+			}
+		}
+
 		items = append(items, ovItem{
 			key: "index:freshness", group: ovActionable, tone: ui.ToneAttention, badge: "stale",
 			title: "Index is stale", source: source, area: "index",
-			body: []string{
-				"Files changed since the last index run, so answers can miss recent changes.",
-				"Co-change, blast radius and lessons for the changed files may be missing or out of date.",
-			},
-			fix: "seamark index", act: ovBuildAction,
+			body: body, fix: "seamark index", act: ovBuildAction,
 		})
 	default:
 		items = append(items, ovItem{

@@ -33,7 +33,7 @@ const (
 // tools. The MCP orient tool and the seamark://orient resource call it.
 // The CLI calls OrientCLI instead.
 func Orient(w io.Writer, st *store.Store, root string) error {
-	return orient(w, st, root, orientFooterMCP, time.Now(), fingerprintOf(st))
+	return orient(w, st, root, orientFooterMCP, time.Now(), fingerprintOf(st), index.OtherVersion)
 }
 
 // OrientNamed is Orient with the title of named, the root that the index
@@ -41,13 +41,13 @@ func Orient(w io.Writer, st *store.Store, root string) error {
 // repository, and the title then names that repository, as OrientCLI
 // does. The rest reads root, the workspace of the server.
 func OrientNamed(w io.Writer, st *store.Store, root, named string) error {
-	return orientNamed(w, st, root, named, orientFooterMCP, time.Now(), fingerprintOf(st))
+	return orientNamed(w, st, root, named, orientFooterMCP, time.Now(), fingerprintOf(st), index.OtherVersion)
 }
 
 // OrientCLI writes the same repo overview with the CLI footer, which
 // offers only routes that run in the CLI.
 func OrientCLI(w io.Writer, st *store.Store, root string) error {
-	return orient(w, st, root, orientFooterCLI, time.Now(), fingerprintOf(st))
+	return orient(w, st, root, orientFooterCLI, time.Now(), fingerprintOf(st), index.OtherVersion)
 }
 
 // fingerprintOf returns the workspace fingerprint for the database of st,
@@ -61,18 +61,20 @@ func fingerprintOf(st *store.Store) func(string) string {
 // travel in groups, and the recent decision trail. One screen, not a
 // tour — every extra line here is paid on every onboarding.
 //
-// now is the time that the index age uses, and fingerprint gives the
-// current workspace fingerprint for the freshness. The callers pass both,
-// so a test fixes the clock and the git state without a shared variable.
+// now is the time that the index age uses, fingerprint gives the current
+// workspace fingerprint for the freshness, and otherVersion reports an
+// index of another seamark version. The callers pass all three, so a test
+// fixes the clock, the git state, and the version without a shared
+// variable.
 func orient(w io.Writer, st *store.Store, root, footer string,
-	now time.Time, fingerprint func(string) string,
+	now time.Time, fingerprint func(string) string, otherVersion func(*store.Store) (bool, error),
 ) error {
-	return orientNamed(w, st, root, root, footer, now, fingerprint)
+	return orientNamed(w, st, root, root, footer, now, fingerprint, otherVersion)
 }
 
 // orientNamed is orient with the title of named.
 func orientNamed(w io.Writer, st *store.Store, root, named, footer string,
-	now time.Time, fingerprint func(string) string,
+	now time.Time, fingerprint func(string) string, otherVersion func(*store.Store) (bool, error),
 ) error {
 	stats, err := st.Stats()
 	if err != nil {
@@ -88,7 +90,7 @@ func orientNamed(w io.Writer, st *store.Store, root, named, footer string,
 		fmt.Fprintf(w, "         %d review lessons (run `seamark index --reviews` to refresh)\n", stats.Lessons)
 	}
 
-	health, err := indexhealth.Read(st, root, fingerprint)
+	health, err := indexhealth.Read(st, root, fingerprint, otherVersion)
 	if err != nil {
 		return err
 	}
@@ -224,6 +226,9 @@ func healthLines(h indexhealth.Health, now time.Time) [3]string {
 		fresh = "freshness current"
 	case indexhealth.FreshStale:
 		fresh = "freshness stale (the workspace changed since this index)"
+		if h.StaleReason == indexhealth.StaleOtherVersion {
+			fresh = "freshness stale (this index was built by another seamark version)"
+		}
 	default:
 		fresh = "freshness unknown (no git fingerprint)"
 	}

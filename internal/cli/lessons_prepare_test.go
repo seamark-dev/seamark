@@ -15,8 +15,10 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/delivery"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/reviews"
+	"github.com/seamark-dev/seamark/internal/store"
 )
 
 // The tests of lessons --prepare. Every test builds a temporary
@@ -880,9 +882,45 @@ func TestLessonsPrepareSaysWhenTheIndexIsStale(t *testing.T) {
 	p := prepareJSON(t, root, main)
 	assert.Equal(t, delivery.MinedOK, p.Guidance.MinedStatus, "the existing value keeps its meaning")
 	assert.Equal(t, delivery.MinedStale, p.Guidance.MinedFreshness)
+	assert.Equal(t, indexhealth.StaleWorkspaceChanged, p.Guidance.MinedStaleReason)
 	assert.Empty(t, p.Guidance.MinedRoot)
 
 	text, err = prepareRun(t, root, main)
 	require.NoError(t, err)
 	assert.Contains(t, text, line)
+}
+
+// TestLessonsPrepareSaysWhenAnotherVersionBuiltTheIndex proves that
+// lessons --prepare, which refreshes no index, calls an index of another
+// seamark version stale in an unchanged workspace: the document says
+// stale with the reason other-version, and the text names the rebuild.
+// After an index run the document has neither key again.
+func TestLessonsPrepareSaysWhenAnotherVersionBuiltTheIndex(t *testing.T) {
+	root := prepareRepo(t, true)
+	main := filepath.Join(root, "a.go")
+	const line = "  the mined lessons come from an index that was built by another seamark version " +
+		"(`seamark index` rebuilds it)\n"
+
+	ageParseCache(t, store.DefaultPath(root))
+
+	p := prepareJSON(t, root, main)
+	assert.Equal(t, delivery.MinedOK, p.Guidance.MinedStatus)
+	assert.Equal(t, delivery.MinedStale, p.Guidance.MinedFreshness)
+	assert.Equal(t, indexhealth.StaleOtherVersion, p.Guidance.MinedStaleReason)
+
+	text, err := prepareRun(t, root, main)
+	require.NoError(t, err)
+	assert.Contains(t, text, line)
+
+	_, err = run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	current, err := prepareRun(t, root, main, "--json")
+	require.NoError(t, err)
+	assert.NotContains(t, current, "mined_freshness")
+	assert.NotContains(t, current, "mined_stale_reason")
+
+	text, err = prepareRun(t, root, main)
+	require.NoError(t, err)
+	assert.NotContains(t, text, line)
 }

@@ -51,25 +51,44 @@ const (
 	FreshUnknown = "unknown"
 )
 
+// Stale reasons: why a stale index is stale. The rebuild fixes both, so
+// another version wins when both hold.
+const (
+	// StaleWorkspaceChanged means that the workspace fingerprint does not
+	// match the one that the index records.
+	StaleWorkspaceChanged = "workspace-changed"
+	// StaleOtherVersion means that another seamark version built the
+	// index, so it can lack facts that this version records.
+	StaleOtherVersion = "other-version"
+)
+
 // Health holds the facts that Read gets from one index database.
 type Health struct {
 	// IndexedAt is the Unix time of the last full index run. A value of
 	// 0 or less means that no readable time exists.
 	IndexedAt int64
 	Freshness string
-	Coverage  Coverage
+	// StaleReason says why a stale index is stale; it is empty for any
+	// other freshness.
+	StaleReason string
+	Coverage    Coverage
 	// EdgeOrigins counts the CALLS edges per resolution origin. It is
 	// nil when the index has no call edge.
 	EdgeOrigins map[string]int
 }
 
 // Read gets the health facts from st. fingerprint returns the current
-// workspace fingerprint of root. Production passes index.WorkspaceState;
-// the caller injects it, so this package does not import the indexer.
-// Read calls fingerprint only when the index records a fingerprint,
-// because the call runs git. Every store error comes back, because a
-// failed read is not the same as an absent fact.
-func Read(st *store.Store, root string, fingerprint func(string) string) (Health, error) {
+// workspace fingerprint of root, and otherVersion reports an index that
+// another seamark version built. Production passes index.WorkspaceState
+// and index.OtherVersion; the caller injects them, so this package does
+// not import the indexer. An index of another version is stale whatever
+// its fingerprint, because only a rebuild adds the facts it lacks. Read
+// calls fingerprint only for an index of this version that records a
+// fingerprint, because the call runs git. Every store error comes back,
+// because a failed read is not the same as an absent fact.
+func Read(st *store.Store, root string, fingerprint func(string) string,
+	otherVersion func(*store.Store) (bool, error),
+) (Health, error) {
 	h := Health{Freshness: FreshUnknown}
 
 	indexedAt, err := st.GetMeta(store.MetaIndexedAt)
@@ -90,8 +109,18 @@ func Read(st *store.Store, root string, fingerprint func(string) string) (Health
 	h.IndexedAt = ParseUnix(indexedAt)
 	h.Coverage = ParseCoverage(summary)
 
-	if recorded != "" {
-		h.Freshness = Freshness(recorded, fingerprint(root))
+	other, err := otherVersion(st)
+	if err != nil {
+		return Health{}, err
+	}
+
+	switch {
+	case other:
+		h.Freshness, h.StaleReason = FreshStale, StaleOtherVersion
+	case recorded != "":
+		if h.Freshness = Freshness(recorded, fingerprint(root)); h.Freshness == FreshStale {
+			h.StaleReason = StaleWorkspaceChanged
+		}
 	}
 
 	if h.EdgeOrigins, err = st.EdgeOriginCounts(); err != nil {

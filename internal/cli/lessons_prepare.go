@@ -83,6 +83,8 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 	// this read, so the narrow reading reads only the hook documents.
 	capability := integration.LessonCapability(integration.Builtin().InspectLessonHooks(root), root, integration.SelfIdentity(version))
 
+	freshness, staleReason := prepareFreshness(st, root, mined)
+
 	// Config and ConfigErr stay nil, so Prepare loads lessons.yaml from
 	// root itself. The guidance status then names a file that does not
 	// decode as invalid, which loadLessonsConfig would hide.
@@ -92,7 +94,7 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 		Paths:          paths,
 		Surface:        delivery.SurfacePrepare,
 		MinedStatus:    mined,
-		MinedFreshness: prepareFreshness(st, root, mined),
+		MinedFreshness: freshness, MinedStaleReason: staleReason,
 		SeamarkVersion: version,
 		Capability:     &capability,
 	})
@@ -131,27 +133,33 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 	return enc.Encode(p)
 }
 
-// prepareFreshness returns delivery.MinedStale when the fingerprint
-// that the index records does not match root now, else "". The command
-// refreshes no index, so a stale index can hold old mined lessons. The
-// rule is the one of status and orient. root is the root that the index
-// records, so the whole preparation describes that root and no other
-// root needs a name. A failed meta read says nothing about freshness.
-func prepareFreshness(st *store.Store, root, mined string) string {
+// prepareFreshness returns delivery.MinedStale and its reason when
+// another seamark version built the index, or when the fingerprint that
+// the index records does not match root now, else two empty strings. The
+// command refreshes no index, so a stale index can hold old mined
+// lessons. The rule is the one of status and orient. root is the root
+// that the index records, so the whole preparation describes that root
+// and no other root needs a name. A failed meta read says nothing about
+// freshness.
+func prepareFreshness(st *store.Store, root, mined string) (freshness, reason string) {
 	if mined != delivery.MinedOK {
-		return ""
+		return "", ""
+	}
+
+	if other, err := index.OtherVersion(st); err == nil && other {
+		return delivery.MinedStale, indexhealth.StaleOtherVersion
 	}
 
 	recorded, err := st.GetMeta(store.MetaIndexedState)
 	if err != nil || recorded == "" {
-		return ""
+		return "", ""
 	}
 
 	if indexhealth.Freshness(recorded, index.WorkspaceState(root, st.Path())) != indexhealth.FreshStale {
-		return ""
+		return "", ""
 	}
 
-	return delivery.MinedStale
+	return delivery.MinedStale, indexhealth.StaleWorkspaceChanged
 }
 
 // openPrepareIndex opens the index for a preparation and returns the

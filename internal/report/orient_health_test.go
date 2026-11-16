@@ -93,13 +93,22 @@ func healthStore(t *testing.T, calls map[string]int, meta map[string]string) (st
 	return st, root
 }
 
-// orientWith runs orient with the fixed clock and a fake fingerprint.
+// orientWith runs orient with the fixed clock, a fake fingerprint, and
+// an index of this seamark version.
 func orientWith(t *testing.T, st *store.Store, root, fingerprint string) string {
+	t.Helper()
+
+	return orientVersion(t, st, root, fingerprint, false)
+}
+
+// orientVersion is orientWith with the version fact: other says that
+// another seamark version built the index.
+func orientVersion(t *testing.T, st *store.Store, root, fingerprint string, other bool) string {
 	t.Helper()
 
 	var b strings.Builder
 	require.NoError(t, orient(&b, st, root, orientFooterMCP, healthNow,
-		func(string) string { return fingerprint }))
+		func(string) string { return fingerprint }, func(*store.Store) (bool, error) { return other, nil }))
 
 	return b.String()
 }
@@ -212,6 +221,19 @@ func TestOrientHealthFreshnessWords(t *testing.T) {
 		assert.True(t, strings.HasSuffix(line, " · "+c.want), "%+v: %s", c, line)
 		assert.NotContains(t, line, "seamark index", "the header offers no index route")
 	}
+}
+
+// TestOrientHealthNamesAnotherVersion proves that the freshness of an
+// index that another seamark version built reads stale with that reason,
+// also when its fingerprint matches the workspace, and offers no index
+// route, like every other freshness word.
+func TestOrientHealthNamesAnotherVersion(t *testing.T) {
+	st, root := healthStore(t, nil, map[string]string{store.MetaIndexedState: "fp"})
+
+	line := headerLines(t, orientVersion(t, st, root, "fp", true))[0]
+	assert.True(t, strings.HasSuffix(line,
+		" · freshness stale (this index was built by another seamark version)"), line)
+	assert.NotContains(t, line, "seamark index", "the header offers no index route")
 }
 
 func TestOrientHealthCoverageLine(t *testing.T) {

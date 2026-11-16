@@ -130,6 +130,31 @@ func renderPage(t *testing.T, st *store.Store, root string) string {
 	return b.String()
 }
 
+// TestReportWarnsOfAnIndexOfAnotherVersion proves that the page carries
+// its own warning when another seamark version built the index: an aged
+// version, or a completed run with no stored version, gets the version
+// warning in place of the workspace one. The seed records no run, so it
+// has nothing to compare and gets no warning. The CLI test of report
+// covers the rebuild that makes the page current again.
+func TestReportWarnsOfAnIndexOfAnotherVersion(t *testing.T) {
+	const warning = "This index was built by another seamark version"
+
+	st, root := seed(t)
+	page := renderPage(t, st, root)
+	assert.NotContains(t, page, warning)
+	assert.NotContains(t, page, `class="stale"`)
+
+	require.NoError(t, st.SetMeta(store.MetaIndexedAt, "1700000000"))
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "2"))
+
+	page = renderPage(t, st, root)
+	assert.Contains(t, page, warning)
+	assert.NotContains(t, page, "The workspace has changed", "one warning names the reason")
+
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, ""))
+	assert.Contains(t, renderPage(t, st, root), warning, "a run from before the version")
+}
+
 func TestReportRendersEverySection(t *testing.T) {
 	st, root := seed(t)
 	page := renderPage(t, st, root)

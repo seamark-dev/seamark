@@ -154,6 +154,27 @@ func TestOverviewNarrowLayoutCollapsesTheCards(t *testing.T) {
 	}
 }
 
+// TestOverviewStaleIndexNamesAnotherVersion proves that the banner and the
+// stale item name the reason when another seamark version built the
+// index: the files can match it, so "the workspace changed" would send
+// the reader looking for a change that does not exist. The rebuild key
+// stays.
+func TestOverviewStaleIndexNamesAnotherVersion(t *testing.T) {
+	f := ovStale()
+	f.index.Status.StaleReason = status.StaleOtherVersion
+	h := newHarness(t, f, 120, 40)
+
+	lines := ovLines(h.view())
+	assert.True(t, strings.HasPrefix(lines[3], " ! Index is stale. Another seamark version built it 2h ago."),
+		"the notice row names the reason: %q", lines[3])
+	assert.True(t, strings.HasSuffix(lines[3], "b rebuild now"))
+
+	frame := h.view()
+	assert.Contains(t, frame, "Another seamark version built this index")
+	assert.NotContains(t, frame, "Files changed since the last index run")
+	assert.NotContains(t, frame, "The workspace changed since the last build")
+}
+
 func TestOverviewStaleIndexShowsTheBanner(t *testing.T) {
 	f := ovStale()
 	h := newHarness(t, f, 120, 40)

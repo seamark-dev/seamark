@@ -572,6 +572,17 @@ model-boundary delivery.
   the recorded root, as for a sibling worktree at one commit. With
   `lesson_checks`, that note is the first line of the `check` answer,
   and the `combined:` line follows it.
+- **The CLI readers call an index of another seamark version stale.**
+  `seamark status`, `orient`, `why`, `report`, `lessons --prepare`, the
+  HTML report and the console overview now treat an index whose stored
+  parser version differs from the one of this binary as stale, also when
+  the workspace is unchanged. Before, after an upgrade they labelled old
+  answers current until something ran an index. The status line and the
+  read notes say that another seamark version built the index and name
+  `seamark index`, or the route of a database that records another
+  repository. `status --json` keeps `"freshness": "stale"` and adds
+  `stale_reason` (`other-version` or `workspace-changed`), and the
+  preparation document adds `mined_stale_reason`.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
