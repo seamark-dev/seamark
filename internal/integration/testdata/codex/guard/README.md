@@ -22,9 +22,10 @@ sanitizer `scripts/native-record-sanitize.py` of a later commit of the
 same branch, with the Codex ID pass and the time shift, made this copy
 from the same raw recording (see "Sanitization").
 
-The script made a scratch Git repository with enforce pins on
-`sentinel/` (`frozen-sentinel`, a path check) and `notes/`
-(`gate5-marker`, a pattern check), and ran each prompt in a new thread
+The script made a scratch Git repository with an enforce pin on
+`sentinel/` (rule `frozen-sentinel`, a path check) and one on `notes/`
+(rule `no-gate5-marker`, the pattern check `gate5-marker`), and ran
+each prompt in a new thread
 with `codex exec --json` on the model `gpt-5.6-luna` with low
 reasoning, in the `workspace-write` sandbox. Every turn context of the
 copy names that model, the effort `low`, and the approval policy

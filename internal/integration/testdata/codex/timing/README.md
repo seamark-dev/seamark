@@ -67,6 +67,10 @@ it. The turn of run 2 rests on the command output of run 1, because
 the gate hook gives no reply in warn mode. Codex names the turn in each
 payload (`turn_id`).
 
+The timing evidence registry reads this copy for the root context
+only: run 3 for the call and the lane, and runs 1 and 2 for the turn.
+No case shows a model step, so that item stays pending.
+
 ### Note on run 5
 
 The worker listed its tools and called `mcp__seamark__change_set`
