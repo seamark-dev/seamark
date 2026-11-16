@@ -121,7 +121,7 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 		// import edit, which can change resolution and reach. The reach of
 		// such a change is unknown, and missing evidence never reads as safe.
 		groups := parsed.groups[f]
-		if len(groups) == 0 || slices.ContainsFunc(groups, func(g []uint32) bool { return !attributed(g, syms) }) {
+		if len(groups) == 0 || slices.ContainsFunc(groups, func(g changeGroup) bool { return !attributed(g.lines, syms) }) {
 			unindexed = append(unindexed, f)
 		}
 	}
@@ -205,41 +205,44 @@ func valueNote(fqns []string) string {
 }
 
 // valueSymbols returns the symbols of syms that the value note names for
-// one change group. A symbol is named when it holds a line of the group,
-// is a value or a type, and carries no effects (effectful is false). Its
-// readers can reach effects, but no edge records a reader of a value.
+// one change group. A symbol is named when it holds a changed place of
+// the group, is a value or a type, and carries no effects (effectful is
+// false). Its readers can reach effects, but no edge records a reader of
+// a value.
 //
-// A line in a function or a method names nothing, because the effects of
-// that code show. A class is not named when the same group edits one of
-// its methods. A removed line counts as the line above it, and in a class
-// that line is often the blank line before a method, which lies in the
-// class and in no method. So a method signature edit does not name its
-// class.
-func valueSymbols(group []uint32, syms []model.Symbol, effectful map[int64]bool) []*model.Symbol {
-	var edited []*model.Symbol
+// A changed place is an added line or a cut. The line above a cut counts
+// for the effects of the group, but it names no symbol by itself. That
+// line often belongs to an unchanged neighbour, for example the const
+// above an edited const.
+//
+// A place in a function or a method names nothing, because the effects of
+// that code show. A class is not named when a recorded line of the same
+// group lies in one of its methods, because the group then reports the
+// effects of that method. Examples are an added method with an added
+// blank line before it, and a comment edit directly below a method.
+func valueSymbols(g changeGroup, syms []model.Symbol, effectful map[int64]bool) []*model.Symbol {
+	edited := holders(syms, func(s *model.Symbol) bool {
+		return isCode(s.Kind) && slices.ContainsFunc(g.lines, func(n uint32) bool { return inSpan(s, n) })
+	})
 
-	for i := range syms {
-		if isCode(syms[i].Kind) && slices.ContainsFunc(group, func(n uint32) bool { return inSpan(&syms[i], n) }) {
-			edited = append(edited, &syms[i])
-		}
+	places := make([][]*model.Symbol, 0, len(g.added)+len(g.cuts))
+
+	for _, n := range g.added {
+		places = append(places, holders(syms, func(s *model.Symbol) bool { return inSpan(s, n) }))
+	}
+
+	for _, c := range g.cuts {
+		places = append(places, holders(syms, func(s *model.Symbol) bool { return holdsCut(s, c) }))
 	}
 
 	var out []*model.Symbol
 
-	for _, n := range group {
-		var holders []*model.Symbol
-
-		for i := range syms {
-			if inSpan(&syms[i], n) {
-				holders = append(holders, &syms[i])
-			}
-		}
-
-		if slices.ContainsFunc(holders, func(s *model.Symbol) bool { return isCode(s.Kind) }) {
+	for _, held := range places {
+		if slices.ContainsFunc(held, func(s *model.Symbol) bool { return isCode(s.Kind) }) {
 			continue
 		}
 
-		for _, s := range holders {
+		for _, s := range held {
 			if effectful[s.ID] || slices.ContainsFunc(edited, func(m *model.Symbol) bool { return encloses(s, m) }) {
 				continue
 			}
@@ -249,6 +252,38 @@ func valueSymbols(group []uint32, syms []model.Symbol, effectful map[int64]bool)
 	}
 
 	return out
+}
+
+// holders returns the symbols of syms for which holds is true.
+func holders(syms []model.Symbol, holds func(s *model.Symbol) bool) []*model.Symbol {
+	var out []*model.Symbol
+
+	for i := range syms {
+		if holds(&syms[i]) {
+			out = append(out, &syms[i])
+		}
+	}
+
+	return out
+}
+
+// holdsCut reports whether the removed lines at c lay inside sym. The new
+// side has no line for them, so their neighbours decide. Lines on both
+// sides of the cut lie in sym when sym has lines before and after the
+// cut, for example a struct or a map literal with a closing line.
+//
+// A Python class has no closing line, so its span ends at its last
+// statement. A removed last attribute then has a line below that lies
+// outside the class. The cut still lies inside sym when it is indented
+// deeper than the start of sym and the line with text above it lies in
+// sym. The indent test keeps a removed Go const of a block from naming the
+// const above it, which starts at the same column.
+func holdsCut(sym *model.Symbol, c cutSite) bool {
+	if c.above > 0 && inSpan(sym, c.above) && inSpan(sym, c.below) {
+		return true
+	}
+
+	return c.indent > sym.Span.StartCol && inSpan(sym, c.textAbove)
 }
 
 // isCode reports whether a symbol of kind k is a function or a method:

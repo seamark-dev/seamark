@@ -262,13 +262,23 @@ A value or type symbol is a Go `const`, `var` or `type`, a JS/TS
 module-level `const`, `let` or `var` that holds no function, an
 `interface`, `type`, `enum` or class, and a Python module-level
 assignment or class. A class field and a class attribute are code of
-their class, so an edit there names the class. A symbol is named when a
-line of a change group lies in it and in no function or method, and the
-symbol carries no effects. A symbol with effects is not named, because
-`diff.effects` shows them. A class is not named when the same change
-group edits one of its methods: the removed line of a method signature
-counts as the line above it, often a blank line of the class. The note
-names at most ten symbols in sorted order and counts the rest, and
+their class, so an edit there names the class. A symbol is named when
+the change adds a line in it or removes lines inside it, outside any
+function or method, and the symbol carries no effects. Removed lines lie
+inside a symbol when the lines on both sides of them lie in it. A Python
+class has no closing line, so a removed last attribute lies inside the
+class too: it is indented deeper than the class line, and the line with
+text above it lies in the class. The line above a replaced or removed
+line counts for `diff.effects` and for the unknown-reach note, but it
+names no symbol, because that line did not change: an edit of one const
+of a block does not name the const above it. A removed top-level value,
+for example a const of a Go const block, leaves no symbol on the new
+side to name, so its removal gets no value note. A symbol with effects
+is not named, because `diff.effects` shows them. A class is not named
+when the same change group counts for one of its methods, for example
+an added method with an added blank line before it; that group reports
+the effects of the method. The note names at most ten symbols in sorted
+order and counts the rest, and
 `diff.unknown_reach_symbols` counts them all. The note and the count
 never change `diff.effects` or the verdict of a rule that does not read
 the count.

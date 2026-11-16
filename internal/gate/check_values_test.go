@@ -246,11 +246,20 @@ func TestEvalDiffNotesAChangedEcmaValue(t *testing.T) {
 	assert.Equal(t, []string{"fs:write"}, d.Effects)
 	assert.Empty(t, d.Notes)
 
-	// A signature edit counts its removed line as the blank line above,
-	// which lies in the class and in no method. The class is not named,
-	// because the same change group edits its method.
+	// The removed signature lies between the blank line above and the
+	// new signature, and both lines lie in the class. The class is not
+	// named, because the same change group edits its method.
 	d, err = EvalDiff(p, st, header+"@@ -10,1 +10,1 @@\n"+
 		"-\tdump(p: string) {\n+\tdump(p: string, q = \"\") {\n", SourceStdin)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fs:write"}, d.Effects)
+	assert.Empty(t, d.Notes)
+
+	// An added method has an added blank line before it, which lies in
+	// the class and in no method. The class is not named, because the
+	// same change group adds its method.
+	d, err = EvalDiff(p, st, header+"@@ -8,0 +9,4 @@\n+\n"+
+		"+\tdump(p: string) {\n+\t\tfs.writeFileSync(p, \"\");\n+\t}\n", SourceStdin)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"fs:write"}, d.Effects)
 	assert.Empty(t, d.Notes)
@@ -304,4 +313,184 @@ func TestEvalDiffNotesAChangedPythonValue(t *testing.T) {
 		assert.Equal(t, []string{"proc:exec"}, d.Effects, name)
 		assert.Empty(t, d.Notes, name)
 	}
+}
+
+// adjacentGoFixture puts values next to each other and next to a
+// function, with no blank line between them. The diff marks the line
+// above a replaced or removed line as touched. That neighbour did not
+// change, so the note must not name it.
+//
+//	 1 package cfg
+//	 2
+//	 3 import "os"
+//	 4
+//	 5 const (
+//	 6 	first  = 1
+//	 7 	second = 2
+//	 8 )
+//	 9
+//	10 var defaults = map[string]int{
+//	11 	"a": 1,
+//	12 	"b": 2,
+//	13 }
+//	14 func write(p string) error {
+//	15 	return os.WriteFile(p, nil, 0o600)
+//	16 }
+//	17
+//	18 type Config struct {
+//	19 	Dir string
+//	20 	Env []string
+//	21 }
+const adjacentGoFixture = "package cfg\n\nimport \"os\"\n\nconst (\n\tfirst  = 1\n\tsecond = 2\n)\n\n" +
+	"var defaults = map[string]int{\n\t\"a\": 1,\n\t\"b\": 2,\n}\n" +
+	"func write(p string) error {\n\treturn os.WriteFile(p, nil, 0o600)\n}\n\n" +
+	"type Config struct {\n\tDir string\n\tEnv []string\n}\n"
+
+// TestEvalDiffNamesOnlyTheChangedGoValue proves that the note names the
+// value that the change edits, and not the unchanged value or function
+// on the line above it. Lines removed inside a value name that value.
+func TestEvalDiffNamesOnlyTheChangedGoValue(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{
+		"go.mod":     "module example.com/cx\n",
+		"cfg/cfg.go": adjacentGoFixture,
+	})
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	const header = "diff --git a/cfg/cfg.go b/cfg/cfg.go\n--- a/cfg/cfg.go\n+++ b/cfg/cfg.go\n"
+
+	cases := []struct {
+		name    string
+		hunk    string
+		effects []string
+		notes   []string
+	}{
+		{
+			name:  "a replaced const below another const of the block",
+			hunk:  "@@ -5,4 +5,4 @@\n const (\n \tfirst  = 1\n-\tsecond = 1\n+\tsecond = 2\n )\n",
+			notes: []string{valueNote1("cfg.second")},
+		},
+		{
+			// The removed const has no symbol on the new side. The const
+			// above it did not change.
+			name: "a removed const of the block",
+			hunk: "@@ -5,5 +5,4 @@\n const (\n \tfirst  = 1\n \tsecond = 2\n-\tthird  = 3\n )\n",
+		},
+		{
+			name:  "a removed entry inside a var",
+			hunk:  "@@ -11,4 +11,3 @@\n \t\"a\": 1,\n \t\"b\": 2,\n-\t\"c\": 3,\n }\n",
+			notes: []string{valueNote1("cfg.defaults")},
+		},
+		{
+			name:  "a removed field inside a struct type",
+			hunk:  "@@ -19,4 +19,3 @@\n \tDir string\n \tEnv []string\n-\tExtra bool\n }\n",
+			notes: []string{valueNote1("cfg.Config")},
+		},
+		{
+			// The closing line of defaults lies directly above the
+			// replaced signature. The change reaches the write of the
+			// function, and defaults did not change.
+			name: "a function signature directly below a var",
+			hunk: "@@ -13,3 +13,3 @@\n }\n-func write(path string) error {\n+func write(p string) error {\n" +
+				" \treturn os.WriteFile(p, nil, 0o600)\n",
+			effects: []string{"fs:write"},
+		},
+	}
+
+	for _, c := range cases {
+		d, err := EvalDiff(p, st, header+c.hunk, SourceStdin)
+		require.NoError(t, err, c.name)
+
+		effects := d.Effects
+		if effects == nil {
+			effects = []string{}
+		}
+
+		want := c.effects
+		if want == nil {
+			want = []string{}
+		}
+
+		assert.Equal(t, want, effects, c.name)
+		assert.Equal(t, VerdictAllow, d.Verdict, c.name)
+		assert.Equal(t, c.notes, d.Notes, c.name)
+	}
+}
+
+// adjacentPyFixture holds two module constants on consecutive lines and
+// a class of attributes with no method.
+//
+//	 1 import subprocess
+//	 2
+//	 3 TIMEOUT = 15
+//	 4 RETRIES = 3
+//	 5
+//	 6
+//	 7 class Color:
+//	 8     RED = 1
+//	 9     GREEN = 2
+//	10
+//	11
+//	12 def run():
+//	13     subprocess.run(["git", "status"], timeout=TIMEOUT)
+const adjacentPyFixture = "import subprocess\n\nTIMEOUT = 15\nRETRIES = 3\n\n\n" +
+	"class Color:\n    RED = 1\n    GREEN = 2\n\n\n" +
+	"def run():\n    subprocess.run([\"git\", \"status\"], timeout=TIMEOUT)\n"
+
+// TestEvalDiffNamesOnlyTheChangedPythonValue proves that a change to one
+// of two consecutive constants names that constant only, that a removed
+// constant names no survivor, and that a removed last attribute of a
+// class names the class, although the class span ends above the removed
+// line.
+func TestEvalDiffNamesOnlyTheChangedPythonValue(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{"settings.py": adjacentPyFixture})
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	const header = "diff --git a/settings.py b/settings.py\n--- a/settings.py\n+++ b/settings.py\n"
+
+	for name, tc := range map[string]struct {
+		hunk  string
+		notes []string
+	}{
+		"a replaced constant below another constant": {
+			hunk:  "@@ -3,2 +3,2 @@\n TIMEOUT = 15\n-RETRIES = 2\n+RETRIES = 3\n",
+			notes: []string{valueNote1("settings.RETRIES")},
+		},
+		"a removed constant below another constant": {
+			hunk: "@@ -4,3 +4,2 @@\n RETRIES = 3\n-MAX = 9\n \n",
+		},
+		"a removed last attribute of a class": {
+			hunk:  "@@ -8,4 +8,3 @@\n     RED = 1\n     GREEN = 2\n-    BLUE = 3\n \n",
+			notes: []string{valueNote1("settings.Color")},
+		},
+	} {
+		d, err := EvalDiff(p, st, header+tc.hunk, SourceStdin)
+		require.NoError(t, err, name)
+
+		assert.Empty(t, d.Effects, name)
+		assert.Equal(t, VerdictAllow, d.Verdict, name)
+		assert.Equal(t, tc.notes, d.Notes, name)
+	}
+}
+
+// TestEvalDiffNamesOnlyTheChangedEcmaValue proves that a change to one of
+// two consecutive JS/TS module consts names that const only.
+func TestEvalDiffNamesOnlyTheChangedEcmaValue(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{
+		"limits.ts": "export const timeout = 15000;\nexport const retries = 3;\n",
+	})
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	d, err := EvalDiff(p, st, "diff --git a/limits.ts b/limits.ts\n--- a/limits.ts\n+++ b/limits.ts\n"+
+		"@@ -1,2 +1,2 @@\n export const timeout = 15000;\n-export const retries = 2;\n+export const retries = 3;\n",
+		SourceStdin)
+	require.NoError(t, err)
+
+	assert.Empty(t, d.Effects)
+	assert.Equal(t, []string{valueNote1("limits.retries")}, d.Notes)
 }

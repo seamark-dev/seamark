@@ -650,55 +650,108 @@ func TestParseDiffChangeGroups(t *testing.T) {
 	// shows that the hunk before it closed its last group.
 	const next = "diff --git a/z.go b/z.go\n--- a/z.go\n+++ b/z.go\n@@ -1 +1 @@\n-x\n+y\n"
 
+	// Each group keeps its added lines and the place of each removed run
+	// apart from the recorded lines. The value note names a symbol by
+	// them, because the line above a run did not change.
 	cases := []struct {
 		name string
 		diff string
-		want [][]uint32
+		want []changeGroup
 	}{
 		{
 			name: "a replacement is one group with the line above",
 			diff: "@@ -3,3 +3,3 @@\n a\n-b\n+c\n d\n",
-			want: [][]uint32{{3, 4}},
+			want: []changeGroup{{
+				lines: []uint32{3, 4},
+				added: []uint32{4},
+				cuts:  []cutSite{{above: 3, textAbove: 3, below: 4}},
+			}},
 		},
 		{
 			name: "a cut is one group with both neighbours",
 			diff: "@@ -3,3 +3,2 @@\n a\n-b\n d\n",
-			want: [][]uint32{{3, 4}},
+			want: []changeGroup{{
+				lines: []uint32{3, 4},
+				cuts:  []cutSite{{above: 3, textAbove: 3, below: 4}},
+			}},
 		},
 		{
 			name: "one context line splits two groups",
 			diff: "@@ -3,4 +3,4 @@\n-a\n+b\n c\n-d\n+e\n",
-			want: [][]uint32{{2, 3}, {4, 5}},
+			want: []changeGroup{
+				{lines: []uint32{2, 3}, added: []uint32{3}, cuts: []cutSite{{above: 2, textAbove: 2, below: 3}}},
+				{lines: []uint32{4, 5}, added: []uint32{5}, cuts: []cutSite{{above: 4, textAbove: 4, below: 5}}},
+			},
 		},
 		{
 			name: "a no-newline line keeps the group open",
 			diff: "@@ -3 +3 @@\n-old\n\\ No newline at end of file\n+new\n",
-			want: [][]uint32{{2, 3}},
+			want: []changeGroup{{
+				lines: []uint32{2, 3},
+				added: []uint32{3},
+				cuts:  []cutSite{{above: 2, textAbove: 2, below: 3}},
+			}},
 		},
 		{
 			name: "a cut before line 1 is one group with no line",
 			diff: "@@ -1,1 +0,0 @@\n-x\n",
-			want: [][]uint32{nil},
+			want: []changeGroup{{}},
 		},
 		{
 			name: "interleaved removed and added lines are one group",
 			diff: "@@ -3,3 +3,2 @@\n-a\n+b\n-c\n d\n",
-			want: [][]uint32{{2, 3, 3, 4}},
+			want: []changeGroup{{
+				lines: []uint32{2, 3, 3, 4},
+				added: []uint32{3},
+				cuts:  []cutSite{{above: 2, textAbove: 2, below: 3}, {above: 3, textAbove: 3, below: 4}},
+			}},
 		},
 		{
 			name: "a hunk that ends at a record start closes its group",
 			diff: "@@ -1,5 +1,6 @@\n-a\n+b\n+c\n",
-			want: [][]uint32{{1, 2}},
+			want: []changeGroup{{
+				lines: []uint32{1, 2},
+				added: []uint32{1, 2},
+				cuts:  []cutSite{{below: 1}},
+			}},
+		},
+		{
+			// The line directly above is blank, so the place also keeps
+			// the line with text above it.
+			name: "an indented cut below a blank line",
+			diff: "@@ -1,4 +1,3 @@\n a\n \n-  b\n c\n",
+			want: []changeGroup{{
+				lines: []uint32{1, 2, 3},
+				cuts:  []cutSite{{above: 2, textAbove: 1, below: 3, indent: 2}},
+			}},
+		},
+		{
+			// A blank removed line shows no indent, so the first removed
+			// line with text sets it. A tab counts as one byte.
+			name: "a cut that starts with a blank line",
+			diff: "@@ -1,3 +1,1 @@\n a\n-\n-\tb\n",
+			want: []changeGroup{{
+				lines: []uint32{1, 2},
+				cuts:  []cutSite{{above: 1, textAbove: 1, below: 2, indent: 1}},
+			}},
 		},
 	}
+
+	z := []changeGroup{{lines: []uint32{1}, added: []uint32{1}, cuts: []cutSite{{below: 1}}}}
 
 	for _, c := range cases {
 		got := parseDiff("--- a/m.go\n+++ b/m.go\n" + c.diff + "--- a/z.go\n+++ b/z.go\n@@ -1 +1 @@\n-x\n+y\n")
 
 		assert.Equal(t, []string{"m.go", "z.go"}, got.paths, c.name)
 		assert.Equal(t, c.want, got.groups["m.go"], c.name)
-		assert.Equal(t, [][]uint32{{1}}, got.groups["z.go"], c.name)
-		assert.Equal(t, slices.Concat(c.want...), got.lines["m.go"], c.name)
+		assert.Equal(t, z, got.groups["z.go"], c.name)
+
+		lines := make([][]uint32, 0, len(c.want))
+		for _, g := range c.want {
+			lines = append(lines, g.lines)
+		}
+
+		assert.Equal(t, slices.Concat(lines...), got.lines["m.go"], c.name)
 
 		got = parseDiff("diff --git a/m.go b/m.go\n--- a/m.go\n+++ b/m.go\n" + c.diff + next)
 		assert.Equal(t, c.want, got.groups["m.go"], c.name)
