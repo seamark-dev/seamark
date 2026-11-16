@@ -1,0 +1,12 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000015",
+  "turn_id": "20000000-0000-4000-8000-000000000016",
+  "agent_id": "10000000-0000-4000-8000-000000000016",
+  "agent_type": "worker",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-02-31-10000000-0000-4000-8000-000000000016.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Use apply_patch exactly once to add the new file sentinel/child-checked.txt with the single line: checked. Do not retry the call. Reply with one line: the check id that a seamark post-edit message named after the call, or the single word none when no such message came."
+}

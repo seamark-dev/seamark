@@ -40,6 +40,14 @@ model-boundary delivery.
   separate baseline/guard/post-edit hooks. Installation differs from
   active or native-verified coverage. Codex Update content projection
   is still incomplete and is required before release.
+- **Codex native evidence.** Reviewed timing and guard recordings of
+  codex-cli 0.169.0 replay offline with `make native-replay
+  CLIENT=codex`. They verify the Codex `apply_patch` deny and in-budget
+  slow deny in the root and child contexts, with the limit that the
+  client lets the patch run after its 10 s hook timeout, and the root
+  call, lane, and turn attribution. Every Codex path stays below
+  `active` with the reason `trust-unknown`, because Seamark cannot read
+  the Codex trust record.
 - **Lesson delivery reading.** `lessons --delivery [--pin <ref>]`
   (`delivery/1` JSON) reads the delivery records of each pin version
   from the audit logs, with separate check and guard counts. The text
@@ -47,8 +55,10 @@ model-boundary delivery.
   field set, and the fields without a source in this build hold fixed
   values. `prevented` counts only a written deny on a natively verified
   path with no later execution record; today that is Claude Code `Write`
-  and `Edit`, from a recording of Claude Code 2.1.319. These paths carry
-  one limit: the client lets the write run after its 10 s hook timeout.
+  and `Edit`, from a recording of Claude Code 2.1.319, and Codex
+  `apply_patch`, from a recording of codex-cli 0.169.0. These paths
+  carry one limit: the client lets the write run after its 10 s hook
+  timeout.
 - **Selection reading.** `lessons --delivery` shows requested and
   effective budgets and splits held-back records by surface and cause. A
   hook record now reads `over-total`, not `over-pin-cap`, when

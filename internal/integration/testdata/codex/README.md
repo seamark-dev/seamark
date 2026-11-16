@@ -14,6 +14,20 @@ of `SubagentStart`, and of the `apply_patch` event inside a subagent. The
 values here stay synthetic. In that run the model wrote every patch path
 as an absolute path inside the workspace.
 
+The native recordings in `timing/` and `guard/` are **not synthetic**
+(codex-cli 0.169.0, 2026-11-16; the README in each directory gives the
+provenance). They show the same field sets of `PreToolUse` and
+`PostToolUse` for `apply_patch` and `Bash`, of `SubagentStart`, and of
+the `apply_patch` event inside a worker. Natively, `tool_use_id` reads
+`exec-<UUID>`: the ID of the item that the call made, not the `call_id`
+of the code-mode `exec` call that ran the tool. The fixtures keep the
+placeholder form `call_synthetic_NNNN`. In those recordings the model
+wrote most patch paths relative to the workspace. Only two Update
+patches, of a timing file and of a sentinel file, used an absolute
+path, so the decoders must read both forms. A worker also gets a
+`UserPromptSubmit` with its `agent_id`, and its `SubagentStart` comes
+before the `PreToolUse` of the parent's wait call.
+
 Documented facts the fixtures encode:
 
 - `hook_event_name`, `session_id`, `cwd`, `transcript_path`, `model`, and
@@ -111,8 +125,10 @@ Files:
   earlier files written. What they do not prove: what
   `tool_input.command` carries in a live `PreToolUse`, how the Codex
   tool call applies a patch inside a session, or any other version. The
-  live tie is a recorded guard run of an Update patch from a real
-  Codex session. `make agents-native-check`
+  guard recording in `guard/` holds one live Update from a real Codex
+  session (case `update-permitted`): the one-hunk shape of case
+  `01_one_hunk`, on codex-cli 0.169.0, so on another version than the
+  oracle. `make agents-native-check`
   replays every content case and skips with the reason when the
   installed version differs from the recorded one. A different version
   never rewrites the file by itself: the recorder runs only when

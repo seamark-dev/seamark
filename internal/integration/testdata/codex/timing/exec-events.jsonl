@@ -1,0 +1,36 @@
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc '/opt/seamark/bin/seamark lessons --prepare timing/prior.txt'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/zsh -lc '/opt/seamark/bin/seamark lessons --prepare timing/prior.txt'","aggregated_output":"lesson preparation (lesson-preparation/1) for 1 path(s) — receiver unknown\nguidance 6787dbe53f1d · change budget 6 · mined lessons no-index · checks valid\n  no index exists, so the selection holds pins only (`seamark index` builds it)\n\npaths\n  timing/prior.txt (file) · 1 pin · 0 checks\n\npins\n- pin 887c5bcb1997 · version 9b9ee36e7c0c · advisory · entry 1 · timing-sentinel — Gate-3 timing lesson. The code word is cobalt-heron. Keep each file under timing/ to one line.\n  scope timing · paths timing/prior.txt\n\nchecks (every check in scope; no budget applies)\n- pin 887c5bcb1997 · version 9b9ee36e7c0c · advisory · does not run (advisory) · check timing-marker (no-added-pattern/1, version 2b9c3019ab99)\n  violation if a line that a change adds in scope matches the Go regular expression 'TIMING-MARKER'; a new file adds every line; binary or unreadable content gives unknown\n  paths timing/prior.txt\n  enforcement claude advisory · codex advisory\n\nprepare again when the file set grows, when .seamark/lessons.yaml changes (guidance 6787dbe53f1d), or when another agent or subagent will construct the change\nPreparation is advisory: it authorizes no write, it does not show that a model read it, and every covered edit still meets its active checks. Plan with it, then construct the change in a later step, not in the same generated program.\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":30672,"cached_input_tokens":22272,"cache_write_input_tokens":0,"output_tokens":122,"reasoning_output_tokens":20}}
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"cobalt-heron"}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/native/timing/prior.txt","kind":"update"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/native/timing/prior.txt","kind":"update"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":62293,"cached_input_tokens":53120,"cache_write_input_tokens":0,"output_tokens":259,"reasoning_output_tokens":67}}
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000002"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"file_change","changes":[{"path":"/workspace/native/timing/same.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"file_change","changes":[{"path":"/workspace/native/timing/same.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":30355,"cached_input_tokens":25984,"cache_write_input_tokens":0,"output_tokens":91,"reasoning_output_tokens":41}}
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000003"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"file_change","changes":[{"path":"/workspace/native/timing/multi-a.txt","kind":"add"},{"path":"/workspace/native/timing/multi-b.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"file_change","changes":[{"path":"/workspace/native/timing/multi-a.txt","kind":"add"},{"path":"/workspace/native/timing/multi-b.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":30431,"cached_input_tokens":29696,"cache_write_input_tokens":0,"output_tokens":112,"reasoning_output_tokens":48}}
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000004"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":""}}
+{"type":"item.started","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"10000000-0000-4000-8000-000000000004","receiver_thread_ids":[],"prompt":"Use apply_patch to add the new file timing/child-patch.txt with the single line: child.","agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"10000000-0000-4000-8000-000000000004","receiver_thread_ids":["10000000-0000-4000-8000-000000000005"],"prompt":"Use apply_patch to add the new file timing/child-patch.txt with the single line: child.","agents_states":{"10000000-0000-4000-8000-000000000005":{"status":"pending_init","message":null}},"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"collab_tool_call","tool":"wait","sender_thread_id":"10000000-0000-4000-8000-000000000004","receiver_thread_ids":["10000000-0000-4000-8000-000000000005"],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"collab_tool_call","tool":"wait","sender_thread_id":"10000000-0000-4000-8000-000000000004","receiver_thread_ids":["10000000-0000-4000-8000-000000000005"],"prompt":null,"agents_states":{"10000000-0000-4000-8000-000000000005":{"status":"completed","message":"Added [timing/child-patch.txt](/workspace/native/timing/child-patch.txt) with the single line `child`."}},"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"collab_tool_call","tool":"close_agent","sender_thread_id":"10000000-0000-4000-8000-000000000004","receiver_thread_ids":["10000000-0000-4000-8000-000000000005"],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"collab_tool_call","tool":"close_agent","sender_thread_id":"10000000-0000-4000-8000-000000000004","receiver_thread_ids":["10000000-0000-4000-8000-000000000005"],"prompt":null,"agents_states":{"10000000-0000-4000-8000-000000000005":{"status":"completed","message":"Added [timing/child-patch.txt](/workspace/native/timing/child-patch.txt) with the single line `child`."}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":86286,"cached_input_tokens":78720,"cache_write_input_tokens":0,"output_tokens":267,"reasoning_output_tokens":46}}

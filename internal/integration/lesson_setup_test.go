@@ -1019,7 +1019,9 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 	t.Run("an inspection that cannot tell installs", func(t *testing.T) {
 		// Seamark cannot read the Codex trust record, so the state is
 		// unknown: setup installs, and the line names the reason. The
-		// enforce pattern pin limits the apply_patch path too.
+		// enforce pattern pin limits the apply_patch path too. The
+		// reviewed Codex recording verifies the native deny and the slow
+		// deny, so the line names the timeout limit of the client.
 		root := t.TempDir()
 		binary := fakeSeamark(t, t.TempDir(), "self")
 		writeRel(t, root, ".seamark/lessons.yaml", lessonPatternYAML)
@@ -1027,7 +1029,7 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		out, findings := applyLessonSetupWithBinary(t, root, binary, enforce(CodexID))
 		assert.Contains(t, readRel(t, root, codexHooksFile), binary+" "+hooks.CodexLessonGuardMarker)
 		assert.Contains(t, out, "  lesson checks  codex enforce — pre-write apply_patch active-unverified "+
-			"(content-unprojectable, native-deny-unverified, native-timeout-unverified, trust-unknown); "+
+			"(content-unprojectable, trust-unknown) (limit: the client lets the write run after its 10 s hook timeout); "+
 			"post-edit apply_patch active-unverified (trust-unknown)\n")
 		assert.Contains(t, findings, codexTrustFinding, "setup never grants trust")
 
@@ -1156,7 +1158,8 @@ func TestSetupLessonChecksPreservesGateAndOtherHooks(t *testing.T) {
 
 		out, _ := applyLessonSetupWithBinary(t, root, fakeSeamark(t, t.TempDir(), "self"),
 			ClientSetup{ClientID: CodexID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
-		assert.Contains(t, out, "  lesson checks  codex check — pre-write apply_patch inactive (configuration-error, trust-unknown); "+
+		assert.Contains(t, out, "  lesson checks  codex check — pre-write apply_patch inactive (configuration-error, trust-unknown) "+
+			"(limit: the client lets the write run after its 10 s hook timeout); "+
 			"post-edit apply_patch inactive (configuration-error, trust-unknown)\n")
 	})
 

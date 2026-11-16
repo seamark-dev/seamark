@@ -59,6 +59,13 @@ type guardProof struct {
 // entries of Claude Code name it.
 const claudeEvidenceVersion = "Claude Code 2.1.319"
 
+// codexEvidenceVersion is the client version of the reviewed Codex
+// recordings in testdata/codex/guard and testdata/codex/timing. Both
+// recordings ran on this version, so the guard, timeout, and timing
+// entries of Codex name it. timeoutLimit finds the timeout outcome by
+// this exact string, so the guard proofs and the timeout key share it.
+const codexEvidenceVersion = "codex-cli 0.169.0"
+
 // guardRecorded lists the pre-write paths that a reviewed native guard
 // recording verifies. A reviewer adds an entry only after a review of
 // the recording in testdata/<client>/guard. The recording must show a
@@ -76,26 +83,35 @@ const claudeEvidenceVersion = "Claude Code 2.1.319"
 // Code stops a slower hook at the timeout and lets the write run
 // (timeoutRecorded), so no Claude Code path has a slowPastTimeout
 // proof. MultiEdit has no entry, because the client offered no
-// MultiEdit tool to the model. Codex has no entry, because no reviewed
-// Codex recording exists yet.
+// MultiEdit tool to the model.
+//
+// The Codex recording shows a blocked deny of apply_patch in the root
+// and the child context, and an in-budget slow deny of each. Codex also
+// stops a slower hook at the timeout and lets the patch run, so its
+// paths have no slowPastTimeout proof either.
 var guardRecorded = map[guardPath]guardProof{
-	{client: ClaudeID, tool: claudeToolEdit, context: lessoncheck.ContextRoot}: claudeInBudgetProof(
-		claudeToolEdit, lessoncheck.ContextRoot),
-	{client: ClaudeID, tool: claudeToolEdit, context: lessoncheck.ContextChild}: claudeInBudgetProof(
-		claudeToolEdit, lessoncheck.ContextChild),
-	{client: ClaudeID, tool: claudeToolWrite, context: lessoncheck.ContextRoot}: claudeInBudgetProof(
-		claudeToolWrite, lessoncheck.ContextRoot),
-	{client: ClaudeID, tool: claudeToolWrite, context: lessoncheck.ContextChild}: claudeInBudgetProof(
-		claudeToolWrite, lessoncheck.ContextChild),
+	{client: ClaudeID, tool: claudeToolEdit, context: lessoncheck.ContextRoot}: inBudgetProof(
+		claudeEvidenceVersion, claudeToolEdit, lessoncheck.ContextRoot),
+	{client: ClaudeID, tool: claudeToolEdit, context: lessoncheck.ContextChild}: inBudgetProof(
+		claudeEvidenceVersion, claudeToolEdit, lessoncheck.ContextChild),
+	{client: ClaudeID, tool: claudeToolWrite, context: lessoncheck.ContextRoot}: inBudgetProof(
+		claudeEvidenceVersion, claudeToolWrite, lessoncheck.ContextRoot),
+	{client: ClaudeID, tool: claudeToolWrite, context: lessoncheck.ContextChild}: inBudgetProof(
+		claudeEvidenceVersion, claudeToolWrite, lessoncheck.ContextChild),
+	{client: CodexID, tool: codexApplyPatch, context: lessoncheck.ContextRoot}: inBudgetProof(
+		codexEvidenceVersion, codexApplyPatch, lessoncheck.ContextRoot),
+	{client: CodexID, tool: codexApplyPatch, context: lessoncheck.ContextChild}: inBudgetProof(
+		codexEvidenceVersion, codexApplyPatch, lessoncheck.ContextChild),
 }
 
-// claudeInBudgetProof returns the proof of one Claude Code pre-write
-// path with an in-budget slow deny. The surface is the surface of the
-// pending evidence of the path, so a review changes the level and the
-// version of a path, not the surface that it names.
-func claudeInBudgetProof(tool string, context lessoncheck.PathContext) guardProof {
+// inBudgetProof returns the proof of one pre-write path with an
+// in-budget slow deny, recorded on the given client version. The
+// surface is the surface of the pending evidence of the path, so a
+// review changes the level and the version of a path, not the surface
+// that it names.
+func inBudgetProof(version, tool string, context lessoncheck.PathContext) guardProof {
 	return guardProof{
-		recordedEvidence: recordedEvidence{clientVersion: claudeEvidenceVersion, surface: guardSurface(tool, context)},
+		recordedEvidence: recordedEvidence{clientVersion: version, surface: guardSurface(tool, context)},
 		slow:             slowInBudget,
 	}
 }
@@ -142,12 +158,15 @@ type timeoutDisposition struct {
 // TestGuardEvidenceMatchesRecordings checks each entry against the
 // recording.
 //
-// In the slow-guard case of the Claude Code recording, the client stops
-// the pre-write hook after 10 s and the write runs. So each verified
-// Claude Code path names that limit. Codex has no entry, because no
-// reviewed Codex recording exists yet.
+// In the slow-guard case of each recording, the client stops the
+// pre-write hook after 10 s and the write runs. Claude Code shows this
+// with its own timeout message. Codex shows it only by the 10 s gap
+// between PreToolUse and PostToolUse, a guard that never logged, and
+// the file that the patch added. So each verified path of both clients
+// names that limit.
 var timeoutRecorded = map[clientVersion]timeoutDisposition{
 	{client: ClaudeID, version: claudeEvidenceVersion}: {outcome: timeoutFailOpen, seconds: 10},
+	{client: CodexID, version: codexEvidenceVersion}:   {outcome: timeoutFailOpen, seconds: 10},
 }
 
 // timeoutLimit returns the limit text of a verified path of the client

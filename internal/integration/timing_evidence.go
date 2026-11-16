@@ -58,28 +58,41 @@ type timingPath struct {
 // and the child context, and the turn and the model step in the root
 // context. Its only child case is a subagent read, which shows no turn
 // or model step of the child, so those two child items stay pending.
-// Codex has no entry, because no reviewed Codex recording exists yet.
+//
+// The Codex recording verifies the call, the lane, and the turn in the
+// root context. The turn rests on the command output of a preparation
+// in one turn and a patch in the next turn of the same thread, because
+// the gate hook gives no reply in warn mode. No Codex case shows a
+// model step or a turn of the child, and the payloads give no child
+// call or lane (payloadIdentities). So those items stay pending or
+// unsupported.
 var timingRecorded = map[timingPath]recordedEvidence{
-	{client: ClaudeID, item: lessoncheck.ItemMatchIdentity, context: lessoncheck.ContextRoot}: claudeTimingProof(
-		lessoncheck.ItemMatchIdentity, lessoncheck.ContextRoot),
-	{client: ClaudeID, item: lessoncheck.ItemMatchIdentity, context: lessoncheck.ContextChild}: claudeTimingProof(
-		lessoncheck.ItemMatchIdentity, lessoncheck.ContextChild),
-	{client: ClaudeID, item: lessoncheck.ItemLaneIdentity, context: lessoncheck.ContextRoot}: claudeTimingProof(
-		lessoncheck.ItemLaneIdentity, lessoncheck.ContextRoot),
-	{client: ClaudeID, item: lessoncheck.ItemLaneIdentity, context: lessoncheck.ContextChild}: claudeTimingProof(
-		lessoncheck.ItemLaneIdentity, lessoncheck.ContextChild),
-	{client: ClaudeID, item: lessoncheck.ItemTurnBoundary, context: lessoncheck.ContextRoot}: claudeTimingProof(
-		lessoncheck.ItemTurnBoundary, lessoncheck.ContextRoot),
-	{client: ClaudeID, item: lessoncheck.ItemModelBoundary, context: lessoncheck.ContextRoot}: claudeTimingProof(
-		lessoncheck.ItemModelBoundary, lessoncheck.ContextRoot),
+	{client: ClaudeID, item: lessoncheck.ItemMatchIdentity, context: lessoncheck.ContextRoot}: timingProof(
+		claudeEvidenceVersion, lessoncheck.ItemMatchIdentity, lessoncheck.ContextRoot),
+	{client: ClaudeID, item: lessoncheck.ItemMatchIdentity, context: lessoncheck.ContextChild}: timingProof(
+		claudeEvidenceVersion, lessoncheck.ItemMatchIdentity, lessoncheck.ContextChild),
+	{client: ClaudeID, item: lessoncheck.ItemLaneIdentity, context: lessoncheck.ContextRoot}: timingProof(
+		claudeEvidenceVersion, lessoncheck.ItemLaneIdentity, lessoncheck.ContextRoot),
+	{client: ClaudeID, item: lessoncheck.ItemLaneIdentity, context: lessoncheck.ContextChild}: timingProof(
+		claudeEvidenceVersion, lessoncheck.ItemLaneIdentity, lessoncheck.ContextChild),
+	{client: ClaudeID, item: lessoncheck.ItemTurnBoundary, context: lessoncheck.ContextRoot}: timingProof(
+		claudeEvidenceVersion, lessoncheck.ItemTurnBoundary, lessoncheck.ContextRoot),
+	{client: ClaudeID, item: lessoncheck.ItemModelBoundary, context: lessoncheck.ContextRoot}: timingProof(
+		claudeEvidenceVersion, lessoncheck.ItemModelBoundary, lessoncheck.ContextRoot),
+	{client: CodexID, item: lessoncheck.ItemMatchIdentity, context: lessoncheck.ContextRoot}: timingProof(
+		codexEvidenceVersion, lessoncheck.ItemMatchIdentity, lessoncheck.ContextRoot),
+	{client: CodexID, item: lessoncheck.ItemLaneIdentity, context: lessoncheck.ContextRoot}: timingProof(
+		codexEvidenceVersion, lessoncheck.ItemLaneIdentity, lessoncheck.ContextRoot),
+	{client: CodexID, item: lessoncheck.ItemTurnBoundary, context: lessoncheck.ContextRoot}: timingProof(
+		codexEvidenceVersion, lessoncheck.ItemTurnBoundary, lessoncheck.ContextRoot),
 }
 
-// claudeTimingProof returns the proof of one Claude Code attribution.
-// The surface is the surface of the pending evidence of the item, so a
-// review changes the level and the version of an item, not the surface
-// that it names.
-func claudeTimingProof(item lessoncheck.AttributionItem, context lessoncheck.PathContext) recordedEvidence {
-	return recordedEvidence{clientVersion: claudeEvidenceVersion, surface: timingSurface(item, context)}
+// timingProof returns the proof of one attribution, recorded on the
+// given client version. The surface is the surface of the pending
+// evidence of the item, so a review changes the level and the version
+// of an item, not the surface that it names.
+func timingProof(version string, item lessoncheck.AttributionItem, context lessoncheck.PathContext) recordedEvidence {
+	return recordedEvidence{clientVersion: version, surface: timingSurface(item, context)}
 }
 
 // timingSurface names the native surface of one attribution: the timing

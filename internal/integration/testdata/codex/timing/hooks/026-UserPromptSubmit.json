@@ -1,0 +1,10 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000004",
+  "turn_id": "20000000-0000-4000-8000-000000000005",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-00-37-10000000-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch to add the new file timing/child-patch.txt with the single line: child.\n2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.\nThen reply with the single word: done"
+}

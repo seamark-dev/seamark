@@ -693,53 +693,6 @@ func TestNativeRecordPassesTheIDMapForClaudeOnly(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(script, "native-record-sanitize.py"), "the script runs the sanitizer once")
 }
 
-// TestNativeRecordSanitizeKeepsCodexIDs proves that the ID pass skips a
-// Codex recording. A Codex thread ID is a UUID. It stays in every file,
-// no map file exists, the manifest has no count key, and the transcripts
-// keep the order of record.json.
-func TestNativeRecordSanitizeKeepsCodexIDs(t *testing.T) {
-	requireTools(t, "python3")
-
-	const thread = "019a0b1c-2d3e-7f40-8a5b-6c7d8e9f0a1b"
-
-	root := t.TempDir()
-	home := filepath.Join(root, "operator-q7")
-	repo := filepath.Join(root, "repo")
-	sessions := filepath.Join(home, ".codex", "sessions", "2026", "11", "07")
-	earlier := filepath.Join(sessions, "rollout-2026-11-07T10-00-00-"+thread+".jsonl")
-	later := filepath.Join(sessions, "rollout-2026-11-07T11-00-00-"+thread+"-b.jsonl")
-	observed := filepath.Join(root, "observed")
-
-	writeLines(t, earlier, `{"type":"session_meta","payload":{"id":"`+thread+`","cwd":"`+repo+`"}}`)
-	writeLines(t, later, `{"type":"session_meta","payload":{"id":"`+thread+`"}}`)
-	writeLines(t, filepath.Join(observed, "p1.json"), `{"session_id":"`+thread+`","turn_id":"`+thread+`","hook_event_name":"Stop"}`)
-	writeLines(t, filepath.Join(observed, "p1.meta.json"), `{"event":"Stop","start_ns":1000,"process_cwd":"`+repo+`"}`)
-
-	f := writeSanitizeRecord(t, root, map[string]any{
-		"client": CodexID, "client_version": "0.164.0", "repo": repo, "home": home,
-		"seamark": filepath.Join(root, "bin", "seamark"), "instrumentation": filepath.Join(repo, ".native-instrumentation"),
-		"observed": observed, "runs": []int{1000}, "transcripts": []string{later, earlier}, "extras": map[string]string{},
-	})
-
-	got, err := f.sanitize(t, f.out)
-	require.NoError(t, err, got)
-
-	for name, data := range outputFiles(t, f.out) {
-		if name != "manifest.json" {
-			assert.Contains(t, data, thread, "%s keeps the thread ID", name)
-		}
-	}
-
-	assert.NoFileExists(t, f.idMap, "a Codex run writes no map file")
-
-	manifest := readJSON(t, filepath.Join(f.out, "manifest.json"))
-	assert.NotContains(t, manifest, "synthetic_ids")
-	assert.Equal(t, []any{
-		"sessions/2026/11/07/rollout-2026-11-07T11-00-00-" + thread + "-b.jsonl",
-		"sessions/2026/11/07/rollout-2026-11-07T10-00-00-" + thread + ".jsonl",
-	}, manifest["transcripts"], "the transcripts keep the order of record.json")
-}
-
 // TestNativeRecordDeniesTheScratchNames runs the record.json step of the
 // script. A Claude Code record denies the distinctive names of the
 // scratch directories, so the sanitizer replaces a shortened scratch path

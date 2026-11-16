@@ -1046,11 +1046,13 @@ a pending baseline that is older than one hour, and writes a
 `baseline-discarded` record for it. The records hold digests of the session and
 tool-call IDs, never the raw IDs.
 
-The guard requests denial. A reviewed recording of Claude Code 2.1.319
-verifies native denial of `Write` and `Edit` in the root and child
-contexts, with one limit: the client lets the write run after its 10 s
-hook timeout. Native denial of `MultiEdit` and of Codex `apply_patch`,
-and the post-edit reply, remain unverified. Codex Update content is
+The guard requests denial. Reviewed recordings verify native denial of
+Claude Code `Write` and `Edit` (Claude Code 2.1.319) and of Codex
+`apply_patch` (codex-cli 0.169.0) in the root and child contexts, with
+one limit: the client lets the write run after its 10 s hook timeout.
+Seamark cannot read the Codex trust record, so a Codex path still reads
+`active-unverified`. Native denial of `MultiEdit` and the post-edit
+reply remain unverified. Codex Update content is
 currently unprojectable for a content predicate, so an armed guard denies that
 unknown result. Verified Update projection and native evidence are
 required before v0.9.0 can ship. See the
@@ -1122,10 +1124,11 @@ A requested deny is not a prevented write. The report separately shows
 requested denies, later execution, no execution observed and verified
 native paths. `prevented` additionally needs a written deny reply, no
 later execution record and a verified native deny path. Today only the
-Claude Code `Write` and `Edit` paths are verified, from a recording of
-Claude Code 2.1.319, so a deny of `MultiEdit` or of Codex `apply_patch`
-never counts as prevented. That recording also shows the limit of these
-paths: Claude Code lets the write run after its 10 s hook timeout.
+Claude Code `Write` and `Edit` paths (from a recording of Claude Code
+2.1.319) and the Codex `apply_patch` paths (from a recording of
+codex-cli 0.169.0) are verified, so a deny of `MultiEdit` never counts
+as prevented. These recordings also show the limit of these paths: the
+client lets the write run after its 10 s hook timeout.
 
 After the totals, the report states what selection applied:
 

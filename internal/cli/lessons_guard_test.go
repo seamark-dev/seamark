@@ -442,7 +442,8 @@ func TestLessonsGuardHookDeniesMultiFileWhole(t *testing.T) {
 		assert.Equal(t, []string{"docs/new.md", "generated/a.txt", "src/ok.go"}, rec.Paths)
 		assert.Equal(t, lessoncheck.GuardCauseViolation, rec.Guard.Cause)
 		assert.Equal(t, integration.CodexID, rec.Client)
-		assert.Equal(t, lessoncheck.GuardNativeUnverified, rec.Guard.NativeBlocking, "no reviewed Codex recording exists")
+		assert.Equal(t, lessoncheck.GuardNativeVerified, rec.Guard.NativeBlocking,
+			"the reviewed codex-cli 0.169.0 recording verifies apply_patch in both contexts")
 	})
 
 	t.Run("one failing step of a MultiEdit denies the whole call", func(t *testing.T) {

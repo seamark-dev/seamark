@@ -81,10 +81,11 @@ of the client (Claude Code `Edit`, `Write`, and `MultiEdit`; Codex
 `apply_patch`). A shell command can write any file, and no lesson guard
 sees it. The guard also needs a process that answers in time. Setup
 gives the guard a 10 s hook timeout, and the guard has a 5 s evaluation
-budget of its own. A recording of Claude Code 2.1.319 shows that the
-client lets the write run after the 10 s timeout. That recording also
-verifies the native deny of `Write` and `Edit` only; the deny of
-`MultiEdit` and of Codex `apply_patch` is not verified.
+budget of its own. Recordings of Claude Code 2.1.319 and codex-cli
+0.169.0 show that each client lets the write run after the 10 s
+timeout. These recordings also verify the native deny of Claude Code
+`Write` and `Edit` and of Codex `apply_patch` only; the deny of
+`MultiEdit` is not verified.
 
 ## Non-goals
 

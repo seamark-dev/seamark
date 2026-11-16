@@ -104,17 +104,6 @@ var (
 // The capability report of each reads every pre-write path as inactive.
 var guardPhasesWithoutGuard = []string{"post-only", "wrapper", "slow", guardPhaseSlowDeny}
 
-// codexAddAttributions are the attributions that a post-edit record of
-// a native Add File section can have. The guard projection
-// (applyPatchOps) joins the added lines with "\n" and adds no final
-// newline. No recording shows yet whether the native applier writes
-// one. With a final newline, the observed content differs from the
-// projection. The replay accepts both and logs the answer for the
-// reviewer, because only native evidence can change the projection.
-var codexAddAttributions = []lessoncheck.Attribution{
-	lessoncheck.AttributionProjectionMatch, lessoncheck.AttributionProjectionDiffers,
-}
-
 // guardState is the state of the fixture directories that the script
 // notes before and after a run: the SHA-256 of every file, the text of
 // every file under free/, and the git status lines.
@@ -593,9 +582,9 @@ func assertEmitted(t *testing.T, name string, post lessoncheck.AuditRecord) {
 
 // postEditContext returns the payload role of each guard-context.jsonl
 // record that holds the post-edit findings for the file p after a tool
-// call. The findings name p with its line, so the path ties a record to
-// its case. The script keeps only the records that the model did not
-// write.
+// call. A finding line names p (findingNamesPath), so the path ties a
+// record to its case. The script keeps only the records that the model
+// did not write.
 func (r guardRecording) postEditContext(t *testing.T, tool, p string) []string {
 	t.Helper()
 
@@ -604,21 +593,53 @@ func (r guardRecording) postEditContext(t *testing.T, tool, p string) []string {
 	var roles []string
 
 	for _, line := range timingLines(t, filepath.Join(r.dir, guardContextFile)) {
-		if !bytes.Contains(line, []byte(header)) || !bytes.Contains(line, []byte(p+":")) {
+		if !bytes.Contains(line, []byte(header)) {
 			continue
 		}
 
 		var rec struct {
 			Payload struct {
-				Role string `json:"role"`
+				Role    string `json:"role"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
 			} `json:"payload"`
 		}
 		require.NoError(t, json.Unmarshal(line, &rec), guardContextFile)
 
-		roles = append(roles, rec.Payload.Role)
+		for _, c := range rec.Payload.Content {
+			if strings.Contains(c.Text, header) && findingNamesPath(c.Text, p) {
+				roles = append(roles, rec.Payload.Role)
+
+				break
+			}
+		}
 	}
 
 	return roles
+}
+
+// findingNamesPath reports whether a finding line of a post-edit text
+// names the file p as a word of its own. A path check writes "add p", a
+// pattern check writes "p:<line> adds ...", and an unknown result
+// writes p alone, sometimes in a list with ", ". A whole word keeps a
+// longer path that ends with p, and the path in the "Check again" line,
+// from a match.
+func findingNamesPath(text, p string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+
+		for _, word := range strings.Fields(line) {
+			word = strings.TrimSuffix(word, ",")
+			if word == p || strings.HasPrefix(word, p+":") {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // logCodexPostEditContext logs the rollout records that hold the
@@ -636,17 +657,27 @@ func (r guardRecording) logCodexPostEditContext(t *testing.T, name, p string) {
 }
 
 // TestPostEditContextFindsTheRecordsOfACase checks the reader of the
-// post-edit context on a synthetic guard-context.jsonl. It gives no
-// native proof.
+// post-edit context on a synthetic guard-context.jsonl, in the three
+// finding forms of the post-edit text. It gives no native proof.
 func TestPostEditContextFindsTheRecordsOfACase(t *testing.T) {
 	dir := t.TempDir()
+	record := func(text string) string {
+		data, err := json.Marshal(map[string]any{"type": "response_item", "payload": map[string]any{
+			"type": "message", "role": "developer", "content": []any{map[string]any{"type": "input_text", "text": text}},
+		}})
+		require.NoError(t, err)
+
+		return string(data)
+	}
+	header := "seamark post-edit lesson checks after this apply_patch call: "
 	lines := []string{
-		`{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text",` +
-			`"text":"seamark post-edit lesson checks after this apply_patch call: violation\n- violation: pin a, ` +
-			`check c (no-added-pattern/1): sentinel/checked.txt:1 adds a line that matches the pattern\n"}]}}`,
-		`{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text",` +
-			`"text":"seamark post-edit lesson checks after this apply_patch call: violation\n- violation: pin a, ` +
-			`check c (no-added-pattern/1): sentinel/child-checked.txt:1 adds a line that matches the pattern\n"}]}}`,
+		record(header + "violation\n- violation: pin a, check c (no-added-pattern/1): " +
+			"sentinel/checked.txt:1 adds a line that matches the pattern\n"),
+		record(header + "violation\n- violation: pin a, check c (forbid-path-change/1): add sentinel/child-checked.txt\n" +
+			"Check again: seamark lessons --verify --file /workspace/native/sentinel/child-checked.txt\n"),
+		record(header + "incomplete\n- unknown/missing-baseline: pin a, check c (forbid-path-change/1): sentinel/slow.txt\n"),
+		record(header + "violation\n- violation: pin a, check c (forbid-path-change/1): add archive/sentinel/checked.txt\n" +
+			"Check again: seamark lessons --verify --file sentinel/listed.txt\n"),
 		`{"type":"response_item","payload":{"type":"function_call_output","output":"blocked by policy: sentinel/checked.txt"}}`,
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, guardContextFile), []byte(strings.Join(lines, "\n")+"\n"), 0o600))
@@ -654,8 +685,12 @@ func TestPostEditContextFindsTheRecordsOfACase(t *testing.T) {
 	r := guardRecording{timingRecording: timingRecording{dir: dir}}
 
 	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/checked.txt"),
-		"the path of another case and a deny text are not the findings of this case")
-	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/child-checked.txt"))
+		"the path of another case, a longer path, and a deny text are not the findings of this case")
+	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/child-checked.txt"),
+		"a path check names the change and the path")
+	assert.Equal(t, []string{"developer"}, r.postEditContext(t, codexApplyPatch, "sentinel/slow.txt"),
+		"an unknown result names the path alone")
+	assert.Empty(t, r.postEditContext(t, codexApplyPatch, "sentinel/listed.txt"), "the Check again line is no finding")
 	assert.Empty(t, r.postEditContext(t, codexApplyPatch, "notes/permitted.txt"))
 	assert.Empty(t, r.postEditContext(t, claudeToolWrite, "sentinel/checked.txt"), "the header names the tool")
 }
@@ -941,6 +976,177 @@ func TestNativeRecordClaudeGuardRecording(t *testing.T) {
 	})
 }
 
+// The parts of the error that codex-cli 0.169.0 returns as the tool
+// output when its own patch check refuses an update section without a
+// hunk. A pure move is such a section: an Update File header, a Move to
+// line, and nothing else. The guard recording of 0.169.0 shows this error
+// for its move case, and no hook ran for that call.
+const (
+	codexPatchCheckFailed = "apply_patch verification failed"
+	codexEmptyUpdate      = "Update file hunk for path"
+	codexEmptyHunk        = "is empty"
+)
+
+// codexRefusedEmptyUpdate reports whether Codex refused the patch of a
+// case in its own patch check, before any hook. The run then holds no
+// PreToolUse apply_patch payload, and a tool output in a rollout of the
+// run holds all parts of the empty-update error. The payloads hold no
+// tool output, so the check reads each rollout that a payload of the run
+// names.
+func (r guardRecording) codexRefusedEmptyUpdate(t *testing.T, name string) bool {
+	t.Helper()
+
+	if r.has(name, "PreToolUse", codexApplyPatch) {
+		return false
+	}
+
+	seen := map[string]bool{}
+
+	for _, e := range r.events[r.runs[name]] {
+		hint := nativeString(e.raw, "transcript_path")
+		if hint == "" || seen[hint] {
+			continue
+		}
+
+		seen[hint] = true
+
+		for _, output := range codexToolOutputs(t, r.transcript(t, hint)) {
+			if strings.Contains(output, codexPatchCheckFailed) && strings.Contains(output, codexEmptyUpdate) &&
+				strings.Contains(output, codexEmptyHunk) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// codexToolOutputs returns the text of each tool output in a Codex
+// rollout. A code-mode call writes its output as a list of text items,
+// and a function call can write one string. The items of one output
+// join with a newline.
+func codexToolOutputs(t *testing.T, rollout string) []string {
+	t.Helper()
+
+	var outputs []string
+
+	for _, line := range timingLines(t, rollout) {
+		var rec struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type   string          `json:"type"`
+				Output json.RawMessage `json:"output"`
+			} `json:"payload"`
+		}
+		require.NoError(t, json.Unmarshal(line, &rec), rollout)
+
+		if rec.Type != "response_item" ||
+			(rec.Payload.Type != "custom_tool_call_output" && rec.Payload.Type != "function_call_output") {
+			continue
+		}
+
+		var text string
+		if json.Unmarshal(rec.Payload.Output, &text) == nil {
+			outputs = append(outputs, text)
+
+			continue
+		}
+
+		var items []struct {
+			Text string `json:"text"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Payload.Output, &items), rollout)
+
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			parts = append(parts, item.Text)
+		}
+
+		outputs = append(outputs, strings.Join(parts, "\n"))
+	}
+
+	return outputs
+}
+
+// codexEmptyUpdateNote is the skip note of a Codex case whose patch the
+// client refused in its own patch check. No hook ran, so the case holds
+// no deny evidence, and the note names that refusal as the cause.
+func codexEmptyUpdateNote(name, version string) string {
+	return "case " + name + ": codex-cli " + version + " refused the patch in its own patch check before any hook " +
+		"(an update section without a hunk is empty), so no PreToolUse apply_patch payload exists"
+}
+
+// TestCodexRefusedEmptyUpdateReadsTheRollout checks the skip condition
+// of a refused pure move on synthetic rollouts. It gives no native proof.
+func TestCodexRefusedEmptyUpdateReadsTheRollout(t *testing.T) {
+	const (
+		home    = "/home/native"
+		refusal = "Script error:\napply_patch verification failed: invalid hunk at line 2, " +
+			"Update file hunk for path 'sentinel/move.txt' is empty"
+	)
+
+	record := func(payload map[string]any) string {
+		data, err := json.Marshal(map[string]any{"type": "response_item", "payload": payload})
+		require.NoError(t, err)
+
+		return string(data)
+	}
+
+	output := func(kind string, value any) string {
+		return record(map[string]any{"type": kind, "call_id": "call_1", "output": value})
+	}
+
+	items := []map[string]string{{"type": "input_text", "text": "Script failed\n"}, {"type": "input_text", "text": refusal}}
+	message := record(map[string]any{"type": "message", "role": "assistant",
+		"content": []map[string]string{{"type": "output_text", "text": refusal}}})
+
+	for _, tc := range []struct {
+		name    string
+		lines   []string
+		pre     bool
+		refused bool
+	}{
+		{"a code-mode output with the error and no PreToolUse", []string{output("custom_tool_call_output", items)}, false, true},
+		{"a function output with the error and no PreToolUse", []string{output("function_call_output", refusal)}, false, true},
+		{"a PreToolUse apply_patch payload", []string{output("custom_tool_call_output", items)}, true, false},
+		{"an error without its patch-check part", []string{output("function_call_output",
+			strings.Replace(refusal, "apply_patch verification failed: ", "", 1))}, false, false},
+		{"an error without its update-path part", []string{output("function_call_output",
+			strings.Replace(refusal, "Update file hunk for path ", "", 1))}, false, false},
+		{"an error without its empty-hunk part", []string{output("function_call_output",
+			strings.TrimSuffix(refusal, " is empty"))}, false, false},
+		{"the error only in a model message", []string{message}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeLines(t, filepath.Join(dir, "sessions", "rollout-1.jsonl"), tc.lines...)
+
+			transcript := home + "/.codex/sessions/rollout-1.jsonl"
+			events := []timingEvent{
+				{hook: nativeHook{Event: "UserPromptSubmit"}, raw: map[string]any{"transcript_path": transcript}},
+			}
+
+			if tc.pre {
+				events = append(events, timingEvent{hook: nativeHook{Event: "PreToolUse"},
+					raw: map[string]any{"transcript_path": transcript, "tool_name": codexApplyPatch}})
+			}
+
+			events = append(events, timingEvent{hook: nativeHook{Event: "Stop"}, raw: map[string]any{"transcript_path": transcript}})
+
+			r := guardRecording{timingRecording: timingRecording{
+				dir: dir, runs: map[string]int{guardMoveViolation: 4}, events: map[int][]timingEvent{4: events},
+			}}
+			r.manifest.Placeholders.Home = home
+
+			assert.Equal(t, tc.refused, r.codexRefusedEmptyUpdate(t, guardMoveViolation))
+		})
+	}
+
+	assert.Equal(t, "case move-violation: codex-cli 0.169.0 refused the patch in its own patch check before any hook "+
+		"(an update section without a hunk is empty), so no PreToolUse apply_patch payload exists",
+		codexEmptyUpdateNote(guardMoveViolation, "0.169.0"))
+}
+
 func TestNativeRecordCodexGuardRecording(t *testing.T) {
 	r := loadGuardRecording(t, CodexID, codexGuardCases...)
 
@@ -961,6 +1167,12 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 			[]string{"notes/multi-ok.txt", "sentinel/multi.txt"}},
 	} {
 		t.Run("the patch of "+tc.name+" is denied before it writes", func(t *testing.T) {
+			// codex-cli 0.169.0 refuses a pure move in its own patch check,
+			// before any hook. That call has no payload to replay.
+			if tc.name == guardMoveViolation && r.codexRefusedEmptyUpdate(t, tc.name) {
+				t.Skip(codexEmptyUpdateNote(tc.name, r.manifest.ClientVersion))
+			}
+
 			e, deny := r.assertDenied(t, tc.name, codexApplyPatch)
 			op := guardOp(t, CodexID, e)
 
@@ -1012,8 +1224,11 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 		assert.Equal(t, lessoncheck.GuardAllow, allow.Guard.Decision)
 		assert.NotEmpty(t, allow.Guard.Pins, "the pattern pin of notes/ was evaluated")
 
+		// The guard projection of an Add ends with the final newline that
+		// the Codex applier writes. So the post-edit record of an Add with
+		// a baseline reads projection-match.
 		r.assertExecuted(t, name, allow, "notes/permitted.txt", lessoncheck.SummaryPassed,
-			codexAddAttributions...)
+			lessoncheck.AttributionProjectionMatch)
 	})
 
 	t.Run("an update outside every pin is a native content case of the update applier", func(t *testing.T) {
@@ -1053,7 +1268,7 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 		assert.Equal(t, lessoncheck.GuardAllow, allow.Guard.Decision, "check-mode findings cannot deny")
 
 		post := r.assertExecuted(t, name, allow, "sentinel/checked.txt", lessoncheck.SummaryViolation,
-			codexAddAttributions...)
+			lessoncheck.AttributionProjectionMatch)
 		assertEmitted(t, name, post)
 		r.logCodexPostEditContext(t, name, "sentinel/checked.txt")
 	})

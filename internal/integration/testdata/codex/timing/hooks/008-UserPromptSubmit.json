@@ -1,0 +1,10 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "turn_id": "20000000-0000-4000-8000-000000000002",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-00-00-10000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Before any tool call, write one line: the code word of the seamark review lesson in the preparation output of the previous turn, or the word none.\n2. Use apply_patch to replace the line alpha with the line beta in timing/prior.txt.\nThen reply with the single word: done"
+}
