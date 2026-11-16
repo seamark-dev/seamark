@@ -801,13 +801,85 @@ func TestLessonCheckProjectPatchUpdate(t *testing.T) {
 		assert.Equal(t, "the current content has a carriage return without a line feed", ch.unprojectable)
 	})
 
-	t.Run("an update of binary content keeps the reason of the before side", func(t *testing.T) {
-		g := newGitRepo(t)
-		g.write("src/logo.bin", "a\x00b\n")
+	// Each content holds a line "x" that the chunk matches. So a missing
+	// refusal projects a TODO and turns the unknown into a violation, and
+	// the test shows that the projector never reads such a side as text.
+	for _, tc := range []struct {
+		name    string
+		content string
+		state   ContentState
+		reason  Reason
+		limit   string
+	}{
+		{"binary content", "a\x00b\nx\n", ContentBinary, ReasonUnsupportedContent, ""},
+		{"content that is not UTF-8", "caf\xe9\nx\n", ContentInvalidUTF8, ReasonUnsupportedContent, ""},
+		{"content above max-file-bytes", strings.Repeat("x\n", 9), ContentTooLarge, ReasonResourceLimit, LimitMaxFileBytes},
+	} {
+		t.Run("an update of "+tc.name+" keeps the reason of the before side", func(t *testing.T) {
+			lim := DefaultLimits()
+			lim.MaxFileBytes = 16
 
-		snap := g.project(codexOp(updateOp("src/logo.bin", plainChunk("+c"))))
-		assert.Equal(t, "the current content is not readable text", changeAt(t, snap, "src/logo.bin").unprojectable)
-		assert.Equal(t, ReasonUnsupportedContent, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Reason)
+			g := newGitRepo(t)
+			g.write("src/l.go", tc.content)
+
+			snap := g.projectWith(lim, codexOp(updateOp("src/l.go", plainChunk("-x", "+TODO(y)"))))
+
+			ch := changeAt(t, snap, "src/l.go")
+			assert.Equal(t, tc.state, ch.Before.Content)
+			assert.Equal(t, "the current content is not readable text", ch.unprojectable)
+			assert.Equal(t, ContentNotRead, ch.After.Content, "no projected side replaces the mark")
+
+			res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
+			assert.Equal(t, OutcomeUnknown, res.Outcome)
+			assert.Equal(t, tc.reason, res.Reason, "the pattern checker reads the before side first")
+			assert.Equal(t, tc.limit, res.Limit)
+		})
+	}
+
+	t.Run("an update of an unreadable file is unprojectable", func(t *testing.T) {
+		if !posixModes || os.Geteuid() == 0 {
+			t.Skip("the file mode does not stop the read here")
+		}
+
+		g := newGitRepo(t)
+		g.write("src/l.go", "x\n")
+		require.NoError(t, os.Chmod(g.path("src/l.go"), 0o000))
+		t.Cleanup(func() { _ = os.Chmod(g.path("src/l.go"), 0o600) })
+
+		snap := g.project(codexOp(updateOp("src/l.go", plainChunk("-x", "+TODO(y)"))))
+
+		ch := changeAt(t, snap, "src/l.go")
+		assert.Equal(t, ContentUnreadable, ch.Before.Content)
+		assert.Equal(t, "the current content is not readable text", ch.unprojectable)
+		assert.Equal(t, OutcomeUnknown, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Outcome)
+	})
+
+	t.Run("an update of a directory is unprojectable", func(t *testing.T) {
+		g := newGitRepo(t)
+		g.write("src/dir/a.go", "x\n")
+
+		snap := g.project(codexOp(updateOp("src/dir", plainChunk("-x", "+TODO(y)"))))
+
+		ch := changeAt(t, snap, "src/dir")
+		assert.Equal(t, ObjectOther, ch.Before.Type)
+		assert.Equal(t, "the path is not a regular file", ch.unprojectable)
+		assert.Equal(t, OutcomeUnknown, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Outcome)
+	})
+
+	t.Run("an update below a linked directory is never read", func(t *testing.T) {
+		outside := t.TempDir()
+		require.NoError(t, os.WriteFile(outside+"/a.go", []byte("x\n"), 0o644))
+
+		g := todoRepo(t)
+		g.symlink(outside, "src/dir")
+
+		snap := g.project(codexOp(updateOp("src/dir/a.go", plainChunk("-x", "+TODO(y)"))))
+
+		ch := changeAt(t, snap, "src/dir/a.go")
+		assert.Equal(t, Side{Type: ObjectFile, Content: ContentUnreadable}, ch.Before)
+		assert.Equal(t, "a parent directory is a symbolic link", ch.unprojectable)
+		assert.False(t, snap.PathsComplete, "the real location of the path is unknown")
+		assert.Equal(t, OutcomeUnknown, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Outcome)
 	})
 
 	t.Run("an update of an absent file is unprojectable", func(t *testing.T) {
