@@ -22,6 +22,13 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   workflow preflight, the co-change variant contract, and four CLI lock
   tests now run in parallel. Each still owns its repositories and
   databases; cases, assertions and lock deadlines are unchanged.
+- **Benchmark interrupt tests no longer time out on a busy machine.**
+  The two interrupted-session tests in `internal/bench` cancel when the
+  stub agent has started and bound only the time from the interrupt to
+  the return, a new test covers a cancel before the first session, and
+  the `CommandVersion` test starts each fresh script once before its
+  timed call. Only test files change, so the benchmark fingerprints are
+  unchanged.
 
 v0.9.0 is the planned first release with lesson-check hook handlers,
 not a published release. Shipping is blocked on the
