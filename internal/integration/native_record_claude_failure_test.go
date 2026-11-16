@@ -185,10 +185,20 @@ type claudeRunner struct {
 	functions                   []string
 }
 
-// claudeRunners are the timing and the guard runner.
+// claudeRunners are the timing runner, and the guard runner in the guard
+// and the post-edit scenario. The post-edit scenario runs its cases with
+// the guard runner, but a limit stop restores its own setup.
 var claudeRunners = []claudeRunner{
 	{"timing", "timing", "timing_claude add-case new 'add a file'", "run 1 (add-case)", []string{"timing_claude"}},
 	{"guard", "guard", "gcase=add-violation\nguard_claude", "run 1 (add-violation)", []string{"guard_claude"}},
+	{"post-edit", "post-edit", "gcase=slow-post-edit\nguard_claude", "run 1 (slow-post-edit)", []string{"guard_claude"}},
+}
+
+// claudeRestored maps a scenario to the line that its restore stub in
+// runClaudeRunner prints. The timing scenario restores nothing.
+var claudeRestored = map[string]string{
+	"guard":     "guard setup restored\n",
+	"post-edit": "post-edit setup restored\n",
 }
 
 // fakeClaudeResult is the stand-in claude program of the runner tests. It
@@ -234,6 +244,7 @@ func runClaudeRunner(t *testing.T, runner claudeRunner, result, stderr, status s
 		"FAKE_RESULT='" + resultPath + "'\nFAKE_STDERR='" + stderrPath + "'\nFAKE_EXIT=" + status + "\n" +
 		"export FAKE_RESULT FAKE_STDERR FAKE_EXIT\n" +
 		"timing_start() { RUN=1; }\nguard_restore() { echo 'guard setup restored'; }\n" +
+		"post_restore() { echo 'post-edit setup restored'; }\n" +
 		runner.call + "\necho 'next run starts'\n"
 
 	functions := append([]string{"summary", "claude_print", "claude_advisor", "claude_failure", "limit_stop"},
@@ -248,8 +259,8 @@ func runClaudeRunner(t *testing.T, runner claudeRunner, result, stderr, status s
 // runners stop the record call at the recorded limit result, whatever
 // the exit status of claude. The limit run keeps its advisor line and
 // its advisor record, because the stop comes after the advisor check.
-// The guard runner first restores the enforce setup, which a stub
-// records.
+// The guard scenario first restores the enforce setup, and the post-edit
+// scenario its check setup. A stub records each restore.
 func TestNativeRecordClaudeRunnersStopAtLimit(t *testing.T) {
 	for _, runner := range claudeRunners {
 		for _, status := range []string{"0", "1"} {
@@ -269,6 +280,7 @@ func TestNativeRecordClaudeRunnersStopAtLimit(t *testing.T) {
 				assert.NotContains(t, got, "finished (session")
 				assert.NotContains(t, got, "  cost")
 				assert.Equal(t, runner.scenario == "guard", strings.Contains(got, "guard setup restored"), got)
+				assert.Equal(t, runner.scenario == "post-edit", strings.Contains(got, "post-edit setup restored"), got)
 			})
 		}
 
@@ -276,14 +288,9 @@ func TestNativeRecordClaudeRunnersStopAtLimit(t *testing.T) {
 			text := `You've hit your weekly limit · resets C:\new \c (UTC)`
 			got, code, _ := runClaudeRunner(t, runner, claudeResult(t, true, text), "", "1")
 
-			between := ""
-			if runner.scenario == "guard" {
-				between = "guard setup restored\n"
-			}
-
 			assert.Equal(t, 1, code, got)
 			assert.Contains(t, got, "  FAIL     run 1 stopped at a Claude Code usage or account limit: "+text+"\n"+
-				between+"  note     no later run starts;")
+				claudeRestored[runner.scenario]+"  note     no later run starts;")
 		})
 	}
 }

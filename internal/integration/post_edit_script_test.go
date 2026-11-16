@@ -456,6 +456,60 @@ func TestPostEditScenarioPhaseRefusesAnUnknownPhase(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(s.snap, "capability-slow.json"))
 }
 
+// TestPostEditScenarioLimitStopRestoresTheCheckSetup runs limit_stop in
+// each slow phase, on the form functions of the script. The stop leaves
+// the hook document that setup kept, the indirection entry off, and the
+// check lessons.yaml. So a reused repository keeps the form that the
+// operator trusted, and no later run starts.
+func TestPostEditScenarioLimitStopRestoresTheCheckSetup(t *testing.T) {
+	script := nativeRecordScript(t)
+
+	var stop strings.Builder
+
+	stop.WriteString("FAILED=0\nOK=0\nBLOCKED=0\nMODE=record\nSCENARIO=post-edit\n")
+
+	for _, prefix := range []string{"ok()", "fail()", "blocked()", "note()"} {
+		stop.WriteString(scriptLine(t, script, prefix))
+	}
+
+	stop.WriteString(scriptFunction(t, script, "summary") + scriptFunction(t, script, "limit_stop"))
+
+	for _, client := range []string{ClaudeID, CodexID} {
+		for _, phase := range []string{postEditPhaseSlow, postEditPhaseTimeout} {
+			t.Run(client+" "+phase, func(t *testing.T) {
+				s := newPostEditScratch(t, client)
+
+				program := s.setUp() + "post_phase " + phase + "\n" +
+					"cp \"$GUARD_DOC\" \"$SNAP/phase.json\"\ncp \"$INSTR/post-edit-mode\" \"$SNAP/phase-mode.txt\"\n" +
+					"printf '# changed\\n' > \"$REPO/.seamark/lessons.yaml\"\n" + stop.String() +
+					"fail 'run 3 (case) stopped at a usage or account limit'\nlimit_stop\necho 'next run starts'\n"
+
+				out, status := s.run(t, program)
+				assert.Equal(t, 1, status, out)
+				assert.Contains(t, out, "no later run starts")
+				assert.Contains(t, out, "result: FAIL")
+				assert.NotContains(t, out, "next run starts")
+
+				read := func(path string) string {
+					data, err := os.ReadFile(path)
+					require.NoError(t, err)
+
+					return string(data)
+				}
+
+				check := read(filepath.Join(s.instr, "hooks-check.json"))
+				require.NotEqual(t, check, read(filepath.Join(s.snap, "phase.json")), "the phase changed the hook document")
+				require.Equal(t, phase+"\n", read(filepath.Join(s.snap, "phase-mode.txt")))
+
+				assert.Equal(t, check, read(s.doc), "the stop restores the hook document that setup kept")
+				assert.Equal(t, "off\n", read(filepath.Join(s.instr, "post-edit-mode")), "the stop sets the indirection entry off")
+				assert.Equal(t, "# check\n", read(filepath.Join(s.root, ".seamark", "lessons.yaml")),
+					"the stop restores the check lessons.yaml")
+			})
+		}
+	}
+}
+
 // TestPostEditScenarioCaseLineHoldsThePostEditLines runs guard_run with
 // stand-ins for the phase, the fixture, and the client run. The stand-in
 // client run logs the lines of a slow hook. The post-edit case line holds
