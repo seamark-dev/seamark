@@ -49,10 +49,13 @@ edge declares how it was derived (`[qualified]`, `[same-package]`,
 know how much to trust an edge. Edges of the `[qualified]`,
 `[same-package]`, and `[same-class]` tiers lead each list, and
 `[unique-name]` guesses follow, so the 15-line cut drops guesses first.
+The `sig` line is cut at 200 characters with `…`: a JS/TS binding or a
+Python module-level value keeps its whole initializer as its signature,
+and `seamark expand <symbol>` gives the source.
 A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
-several methods share, or through a function value, gets no edge, and
-in Go neither does a common method name (`Close`, `Err`, …) from a file
+several methods share, or through a function value, gets no edge, and,
+for a symbol in a Go file only, in Go neither does a common method name (`Close`, `Err`, …) from a file
 that neither shares the method's directory nor imports its package, a
 call whose operand
 starts at a package outside the repository, or an unexported method of

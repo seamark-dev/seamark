@@ -100,6 +100,13 @@ func asIndexedFile(st *store.Store, root, query string) (string, bool) {
 	return candidates[0], false
 }
 
+// whySigCap is the largest number of runes on the sig line of why
+// <symbol>. A JS/TS binding or a Python module-level value stores its
+// whole initializer as its signature, which can run to thousands of
+// runes, while expand gives the source. 200 runes keep a long Go
+// function header whole.
+const whySigCap = 200
+
 func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string, sym model.Symbol) error {
 	fmt.Fprintf(w, "%s  (%s)\n", sym.FQN, sym.Kind)
 	fmt.Fprintf(w, "  defined  %s\n", location(sym))
@@ -107,8 +114,8 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string
 	if sym.Sig != "" {
 		// Signatures come from source text. A var initializer can carry
 		// control bytes or a secret, so the line gets the scrub of the file
-		// outline. It is not cut, because this report is the full view.
-		fmt.Fprintf(w, "  sig      %s\n", scrubSource(sym.Sig))
+		// outline, and the cap keeps it to one line.
+		fmt.Fprintf(w, "  sig      %s\n", render.Truncate(scrubSource(sym.Sig), whySigCap))
 	}
 
 	effects, err := st.EffectsForSymbol(sym.ID)

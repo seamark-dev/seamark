@@ -589,6 +589,11 @@ model-boundary delivery.
   `diff_paths_outside_snapshot`, when the lesson state is
   `no-executable-checks`. No check ran, so the note warned about
   nothing. Every other state keeps it, including `no-applicable-checks`.
+- **`why` bounds its signature line.** `why <symbol>` cuts its `sig`
+  line at 200 characters with `…`. A JS/TS binding or a Python
+  module-level value stores its whole initializer as its signature, so
+  one answer could run past 10 KB. The stored signature does not change,
+  and `expand` still gives the source.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.
