@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/privatedir"
 )
 
 // auditFile is the append-only log of edit-hook firings, the impact/decay
@@ -23,6 +25,18 @@ const auditFile = "lessons-audit.jsonl"
 // under a kilobyte. A longer "line" is corruption (a torn append, stray
 // binary) — it is skipped, not fatal.
 const maxAuditLine = 1 << 20
+
+// The modes of a new firing log and a new .seamark directory. They are
+// the modes of the lesson-check audit stream and the delivery state, so
+// only the owner reads the record of the user's work.
+const (
+	auditDirMode  os.FileMode = 0o700
+	auditFileMode os.FileMode = 0o600
+)
+
+// errUnsafeAuditPath is the error value of a refused firing-log path, so
+// a caller can tell a refusal from a failed write.
+var errUnsafeAuditPath = errors.New("unsafe path")
 
 // DeliveryStatus records whether a matching edit actually received the
 // rendered lesson context. Empty means an injected legacy record written
@@ -273,15 +287,75 @@ func appendFiring(root string, rec Firing) error {
 
 // openAuditLog opens the firing log of root for appends and creates it
 // when it is absent. The v1 entry points and RecordEvent share it, so
-// both writers use one path and one file mode.
+// both writers use one path, one file mode, and one link refusal.
+//
+// A cloned repository can commit a link at .seamark or at the log, and
+// an append through it would write a file outside the repository. So
+// .seamark must be a real directory and the log must not be a link, as
+// for the policy audit log and the lesson-check audit stream. The open
+// also passes NoFollow, for a link that appears after the check. The log
+// has no lock and no rotation: each event is one write on an O_APPEND
+// file, and the statistics need the whole history.
 func openAuditLog(root string) (*os.File, error) {
 	dir := filepath.Join(root, ".seamark")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+
+	if err := ensureAuditDir(dir); err != nil {
 		return nil, err
 	}
 
-	return os.OpenFile(filepath.Join(dir, auditFile),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	path := filepath.Join(dir, auditFile)
+
+	if err := privatedir.RefuseLink(path, auditLinkRefused); err != nil {
+		return nil, err
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|privatedir.NoFollow, auditFileMode)
+	if err != nil {
+		return nil, err
+	}
+
+	// An earlier version created the log 0644. The sibling logs tighten
+	// an existing file too, and the chmod acts on the open file, never on
+	// a path that can change after the check.
+	if err := f.Chmod(auditFileMode); err != nil {
+		_ = f.Close()
+
+		return nil, err
+	}
+
+	return f, nil
+}
+
+// ensureAuditDir runs privatedir.EnsureRealDir on dir. It runs it once
+// more when another writer creates the directory between the check and
+// the create, so concurrent hooks never fail on that race.
+func ensureAuditDir(dir string) error {
+	const createPrefix = "firing log: create"
+
+	err := privatedir.EnsureRealDir(dir, auditDirMode, errUnsafeAuditPath, createPrefix)
+	if errors.Is(err, os.ErrExist) {
+		err = privatedir.EnsureRealDir(dir, auditDirMode, errUnsafeAuditPath, createPrefix)
+	}
+
+	return err
+}
+
+// auditLinkRefused builds the error for a symbolic link at the firing
+// log. The text matches the lesson-check audit stream.
+func auditLinkRefused(path string) error {
+	return fmt.Errorf("%w: %s is a symbolic link", errUnsafeAuditPath, path)
+}
+
+// openAuditRead opens the firing log for reading. It refuses a link at
+// the log, as the writer does and as the lesson-check reader does, so a
+// planted link cannot feed outside records into a report. The read
+// creates nothing and changes no mode.
+func openAuditRead(path string) (*os.File, error) {
+	if err := privatedir.RefuseLink(path, auditLinkRefused); err != nil {
+		return nil, err
+	}
+
+	return os.OpenFile(path, os.O_RDONLY|privatedir.NoFollow, 0)
 }
 
 // AuditLogPath returns the firing log path under root. A reader that
@@ -304,9 +378,10 @@ func ReadFirings(root string) ([]Firing, error) {
 // A skipped line is not valid JSON or is longer than the line bound.
 // The count lets a view say that unreadable records exist, instead of
 // showing a log of corrupt lines as an empty log. Blank lines are not
-// records, so the count excludes them.
+// records, so the count excludes them. A symbolic link at the log is an
+// error, because the writer refuses it too.
 func ReadFiringsCounted(root string) (firings []Firing, skipped int, err error) {
-	f, err := os.Open(AuditLogPath(root))
+	f, err := openAuditRead(AuditLogPath(root))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, 0, nil

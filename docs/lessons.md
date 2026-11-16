@@ -1098,7 +1098,9 @@ the statistics keep it that way instead of guessing: a repeat is counted only
 among records of one client and one receiving context, never across the
 records from before and after these fields. An edit operation on
 several files is one record with every path and one byte total. A record says
-that a reminder was emitted, never that the agent followed it.
+that a reminder was emitted, never that the agent followed it. The log is
+owner-only (0600), and the writer refuses a symbolic link at the log or at
+`.seamark` ([Configuration](configuration.md#verification-state-and-report-inputs)).
 
 This release writes record version 2 (`schema_version: 2`). The new keys
 follow the earlier keys, which keep their names, order, and meaning, so an

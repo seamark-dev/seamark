@@ -440,6 +440,14 @@ model-boundary delivery.
   internal document. They point to `docs/policies.md` and
   `docs/lessons.md`, and both policy headers name `unindexed_files`, a
   count, in the `diff` input.
+- **The lesson firing log refuses symbolic links.** Seamark no longer
+  appends to `.seamark/lessons-audit.jsonl` through a symbolic link at
+  the log or at `.seamark`, so a cloned repository can no longer send
+  firing records to a file outside it. New logs are created owner-only
+  (0600) in a 0700 `.seamark`, and an existing 0644 log is tightened to
+  0600. Edit hooks still fail open, `change_set` and `check` still
+  answer, and the refused record is not written. `lessons --stats` and
+  the delivery report show a linked log as unreadable, not as empty.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

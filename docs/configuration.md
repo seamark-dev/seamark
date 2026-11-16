@@ -247,6 +247,15 @@ and retains one rotated generation. These records keep outcomes,
 identities as digests and evidence locations, not matching source-line
 excerpts. They are not the reminder firing log.
 
+Every surface that shows a lesson appends to the reminder firing log
+`.seamark/lessons-audit.jsonl`. The writer creates the file with mode
+0600 and a missing `.seamark` with mode 0700, and it tightens an
+existing log to 0600. It refuses a symbolic link at the log or at
+`.seamark`, so no record lands outside the repository; the surface still
+answers, and that record is not written. The log has no lock and no
+rotation. Its readers (`lessons --stats` and the delivery report) refuse
+a link at the log too and report the log as unreadable, not as empty.
+
 The **delivery report** reads the reminder log
 `.seamark/lessons-audit.jsonl`, both retained check-audit generations,
 current `lessons.yaml` and integration inspections. Optional proposal
