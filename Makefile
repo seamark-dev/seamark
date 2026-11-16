@@ -169,29 +169,35 @@ agents-oracle-record: ## Record the apply_patch content and path-control oracles
 agents-native-smoke: build ## One bounded distillation through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/agent-integration-smoke.sh smoke $(CLIENT) $(BINARY)
 
-# Native timing and guard recordings for CLIENT=claude or codex.
-# native-replay is offline: no model, no credentials, no client CLI. It
-# runs the Go tests that replay the reviewed recordings in
-# internal/integration/testdata/$(CLIENT)/timing and .../guard. Without
-# a reviewed recording they skip as pending, and a skip gives no
-# evidence. native-record runs the prompts of one scenario with the
-# installed client and your own login, so it costs tokens. It prints one
-# cost line per run. It refuses a binary or a tree with uncommitted
-# changes unless SEAMARK_ALLOW_DIRTY=1. It writes a sanitized copy for
-# review and never writes into testdata. A blocked check exits 3, never 0.
+# Native timing, guard, and post-edit recordings for CLIENT=claude or
+# codex. native-replay is offline: no model, no credentials, no client
+# CLI. It runs the Go tests that replay the reviewed recordings in
+# internal/integration/testdata/$(CLIENT)/timing, .../guard, and
+# .../post-edit. Without a reviewed recording they skip as pending, and
+# a skip gives no evidence. native-record runs the prompts of one
+# scenario with the installed client and your own login, so it costs
+# tokens. It prints one cost line per run. It refuses a binary or a tree
+# with uncommitted changes unless SEAMARK_ALLOW_DIRTY=1. It writes a
+# sanitized copy for review and never writes into testdata. A blocked
+# check exits 3, never 0.
 # NATIVE_RECORD_SCENARIO=timing (with native-record) runs the prompts of
 # the timing scenario; it is the default.
 # NATIVE_RECORD_SCENARIO=guard (with native-record) runs the sentinel
 # prompts of the guard scenario in a scratch repository with enforce pins.
+# NATIVE_RECORD_SCENARIO=post-edit (with native-record) runs the slow
+# post-edit prompts in a scratch repository with check pins.
+# NATIVE_RECORD_RUNS=0 (with native-record) sets up the scratch
+# repository and runs no paid turn; a new Codex repository stops at the
+# trust step.
 # NATIVE_RECORD_RUN selects the tests whose names start with
 # TestNativeRecord and the client name, such as the replays. A replay
 # test without that prefix does not run here.
 NATIVE_RECORD_RUN = '^TestNativeRecord$(if $(filter claude,$(CLIENT)),Claude,$(if $(filter codex,$(CLIENT)),Codex,$(error CLIENT must be claude or codex)))'
 
-native-replay: build ## Offline: replay the reviewed $(CLIENT) timing and guard recordings (no model)
+native-replay: build ## Offline: replay the reviewed $(CLIENT) timing, guard, and post-edit recordings (no model)
 	SEAMARK_NATIVE_CLIENT=$(CLIENT) CGO_ENABLED=1 GOCACHE="$(TEST_GOCACHE)" go test -count=1 -v -run $(NATIVE_RECORD_RUN) ./internal/integration
 
-native-record: build ## Record native timing or guard traces through the installed $(CLIENT) CLI (costs tokens; needs your own login)
+native-record: build ## Record native timing, guard, or post-edit traces through the installed $(CLIENT) CLI (costs tokens; needs your own login)
 	scripts/native-record.sh record $(CLIENT) $(BINARY)
 
 # The console tests run offline against fixtures, a scripted service

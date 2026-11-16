@@ -129,6 +129,9 @@ type guardCase struct {
 	// Reply is the final reply of the model when it is one word. It is a
 	// corroboration only.
 	Reply string `json:"reply"`
+	// PostEdit holds the lines that the post-edit indirection entry logged
+	// in the run. Only a case line of the post-edit scenario has them.
+	PostEdit []string `json:"post_edit"`
 }
 
 // unchanged reports whether the run left every fixture file and the git
@@ -155,7 +158,10 @@ type guardHookResult struct {
 	Event  string `json:"event"`
 	Tool   string `json:"tool"`
 	Status *int   `json:"status"`
-	Note   string `json:"note"`
+	// MS is the run time of the command in milliseconds, as the debug log
+	// gives it with the status.
+	MS   int    `json:"ms"`
+	Note string `json:"note"`
 }
 
 // guardCapability is one line of guard-capability.jsonl: the
@@ -202,7 +208,17 @@ type guardIdentity struct {
 func readGuardRecording(t *testing.T, client string) (guardRecording, bool) {
 	t.Helper()
 
-	dir := filepath.Join("testdata", client, "guard")
+	return readCaseRecording(t, client, "guard")
+}
+
+// readCaseRecording reads the reviewed recording of a scenario that runs
+// its cases through the guard functions of the script: guard or
+// post-edit. Both copies hold the same files. It returns false when no
+// recording exists.
+func readCaseRecording(t *testing.T, client, scenario string) (guardRecording, bool) {
+	t.Helper()
+
+	dir := filepath.Join("testdata", client, scenario)
 
 	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -219,7 +235,7 @@ func readGuardRecording(t *testing.T, client string) (guardRecording, bool) {
 	require.Equal(t, client, r.manifest.Client)
 	require.Subset(t, r.manifest.Extras,
 		[]string{guardCasesFile, guardCapabilityFile, guardContextFile, guardHooksFile, guardAuditFile},
-		"the guard scenario adds its cases, capability reports, deny and reply records, hook results, and audit records")
+		"the scenario adds its cases, capability reports, deny and reply records, hook results, and audit records")
 
 	for _, line := range timingLines(t, filepath.Join(dir, guardCasesFile)) {
 		var c guardCase

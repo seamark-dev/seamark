@@ -87,6 +87,15 @@ model-boundary delivery.
   and reads the hook list of `codex app-server`, with no model. On
   codex-cli 0.169.0 setup writes nothing into `CODEX_HOME` and leaves
   every Seamark hook untrusted. Codex paths keep `trust-unknown`.
+- **Native post-edit scenario.** `NATIVE_RECORD_SCENARIO=post-edit make
+  native-record CLIENT=<client>` records, in a copy of its own, what the
+  client does with a post-edit hook that ends inside or after the 15 s
+  hook timeout, the post-edit reply of a Claude Code `Edit` in the root
+  and the child context, and whether Codex runs the post-edit hook after
+  a patch that fails during its execution. With `NATIVE_RECORD_RUNS=0`
+  it only sets up the scratch repository, and a new Codex repository
+  stops at the trust review. No reviewed copy exists yet, so `make
+  native-replay` skips its replay as pending and no evidence changes.
 - **Lesson delivery reading.** `lessons --delivery [--pin <ref>]`
   (`delivery/1` JSON) reads the delivery records of each pin version
   from the audit logs, with separate check and guard counts. The text
