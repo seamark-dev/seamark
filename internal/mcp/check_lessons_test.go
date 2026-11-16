@@ -407,16 +407,58 @@ func lessonReport(t *testing.T, root string) string {
 	return b.String()
 }
 
-// mcpCombinedLine is the last line of the check text with lesson_checks.
+// mcpCombinedLine is the first line of the check text with
+// lesson_checks. policy is the clause after "policy ". A clause that
+// names a verdict that does not block holds a comma, so a semicolon
+// ends it.
 func mcpCombinedLine(state, policy, lessons string, exit int) string {
-	return "combined: " + state + " (policy " + policy + ", lessons " + lessons +
+	sep := ", "
+	if strings.Contains(policy, ",") {
+		sep = "; "
+	}
+
+	return "combined: " + state + " (policy " + policy + sep + "lessons " + lessons +
 		"; CLI exit " + strconv.Itoa(exit) + ")\n"
 }
 
+// The policy clauses of the combined line in the fixture.
+// lessonChecksPolicy asks for approval of every diff that names a file,
+// so a warn-mode call over a change does not pass the policy, and the
+// clause says so.
+const (
+	mcpClauseApprovalWarn = "require_approval, not blocking in warn mode"
+	mcpClauseAllow        = "pass"
+	mcpClauseBlocked      = "blocked"
+)
+
+// mcpNotRequestedOnePin is the line that ends the check text without
+// lesson_checks when one executable pin covers a changed path.
+const mcpNotRequestedOnePin = "lesson checks: not requested — 1 executable pin covers this diff; " +
+	"run with lesson_checks: true (CLI: seamark check --lessons)\n"
+
+// withoutNotRequested returns the check text without lesson_checks minus
+// its last line on lesson checks that did not run. That text is the body
+// of a call with lesson_checks.
+func withoutNotRequested(t *testing.T, text string, want bool) string {
+	t.Helper()
+
+	if !want {
+		assert.NotContains(t, text, "lesson checks:", "no executable pin covers the diff")
+
+		return text
+	}
+
+	require.True(t, strings.HasSuffix(text, "\n"+mcpNotRequestedOnePin), "the text names the pin: %s", text)
+
+	return strings.TrimSuffix(text, "\n"+mcpNotRequestedOnePin)
+}
+
 // TestCheckLessonsMCPOption proves the lesson_checks option of the MCP
-// check tool. False and absent give the text of today. True gives that
-// text, a blank line, the lesson report, and the combined line with the
-// CLI exit code. Every verdict stays in band. The lesson checks read
+// check tool. False and absent give the same text, which ends with the
+// line on lesson checks that did not run when an executable pin covers
+// a changed path. True gives the combined line with the CLI exit code,
+// a blank line, that text without the line, a blank line, and the
+// lesson report. Every verdict stays in band. The lesson checks read
 // the working tree whatever diff the policy reads. Malformed arguments
 // and a root outside git are refused with their usage and root texts.
 func TestCheckLessonsMCPOption(t *testing.T) {
@@ -465,25 +507,30 @@ func TestCheckLessonsMCPOption(t *testing.T) {
 		policy  string // the policy mode
 		edit    func(t *testing.T, root string)
 		state   string // the combined state
-		verdict string // the combined policy value
+		clause  string // the policy clause of the combined line
 		lessons string // the lesson summary state
 		exit    int    // the exit code of check --lessons
+		// notRequested is true when the text without lesson_checks ends
+		// with the line on lesson checks that did not run.
+		notRequested bool
 	}{
 		{
 			name: "lessons passed", policy: "warn", edit: editHandler,
-			state: "pass", verdict: "pass", lessons: "passed", exit: 0,
+			state: "pass", clause: mcpClauseApprovalWarn, lessons: "passed", exit: 0, notRequested: true,
 		},
 		{
 			name: "no applicable checks", policy: "warn", edit: editReadme,
-			state: "pass", verdict: "pass", lessons: "no-applicable-checks", exit: 0,
+			state: "pass", clause: mcpClauseApprovalWarn, lessons: "no-applicable-checks", exit: 0,
 		},
 		{
+			// git diff HEAD skips the untracked binary, so the policy reads
+			// no file and allows.
 			name: "lessons incomplete", policy: "warn", edit: addBinary,
-			state: "incomplete", verdict: "pass", lessons: "incomplete", exit: 1,
+			state: "incomplete", clause: mcpClauseAllow, lessons: "incomplete", exit: 1,
 		},
 		{
 			name: "lesson violation", policy: "warn", edit: editAsset,
-			state: "fail", verdict: "pass", lessons: "violation", exit: 2,
+			state: "fail", clause: mcpClauseApprovalWarn, lessons: "violation", exit: 2, notRequested: true,
 		},
 		{
 			name: "policy blocks, lessons incomplete", policy: "enforce",
@@ -491,7 +538,7 @@ func TestCheckLessonsMCPOption(t *testing.T) {
 				editHandler(t, root)
 				addBinary(t, root)
 			},
-			state: "fail", verdict: "blocked", lessons: "incomplete", exit: 2,
+			state: "fail", clause: mcpClauseBlocked, lessons: "incomplete", exit: 2, notRequested: true,
 		},
 	}
 
@@ -514,7 +561,8 @@ func TestCheckLessonsMCPOption(t *testing.T) {
 			lessons := lessonReport(t, root)
 			require.True(t, strings.HasPrefix(lessons, "lesson checks: "+c.lessons+"\n"), lessons)
 
-			want := legacy + "\n" + lessons + mcpCombinedLine(c.state, c.verdict, c.lessons, c.exit)
+			body := withoutNotRequested(t, legacy, c.notRequested)
+			want := mcpCombinedLine(c.state, c.clause, c.lessons, c.exit) + "\n" + body + "\n" + lessons
 			assert.Equal(t, want, got)
 
 			sentinel.requireNoCall(t)
@@ -544,7 +592,11 @@ func TestCheckLessonsMCPOption(t *testing.T) {
 
 		lessons := lessonReport(t, root)
 		assert.Contains(t, lessons, "add generated/new.txt", "the untracked file outside the diff is evaluated")
-		assert.Equal(t, legacy+"\n"+lessons+mcpCombinedLine("fail", "pass", "violation", 2), got)
+
+		// Every path of the diff is in the snapshot, so no note follows
+		// the combined line.
+		body := withoutNotRequested(t, legacy, true)
+		assert.Equal(t, mcpCombinedLine("fail", mcpClauseApprovalWarn, "violation", 2)+"\n"+body+"\n"+lessons, got)
 
 		sentinel.requireNoCall(t)
 	})
@@ -819,7 +871,7 @@ func TestCheckLessonsMCPStaleResult(t *testing.T) {
 			assert.Contains(t, got, "lesson checks: "+c.lessons+"\n")
 			assert.Contains(t, got, ", stale\n")
 			assert.Contains(t, got, "\n  stale: the inputs changed after the read")
-			assert.True(t, strings.HasSuffix(got, mcpCombinedLine(c.state, "pass", c.lessons, c.exit)), got)
+			assert.True(t, strings.HasPrefix(got, mcpCombinedLine(c.state, mcpClauseApprovalWarn, c.lessons, c.exit)), got)
 
 			assert.Regexp(t, `(?m)^  `+c.frozen+`  pin [0-9a-f]+ frozen-assets `, got)
 			assert.Regexp(t, `(?m)^  unknown/stale-snapshot  pin [0-9a-f]+ no-todo `, got)
@@ -827,4 +879,225 @@ func TestCheckLessonsMCPStaleResult(t *testing.T) {
 			sentinel.requireNoCall(t)
 		})
 	}
+}
+
+// commitMCPPolicy replaces the committed policy of root, so the policy
+// file is no change of the working tree.
+func commitMCPPolicy(t *testing.T, root, policy string) {
+	t.Helper()
+
+	fixtureWrite(t, root, ".seamark/policy.yaml", policy)
+	fixtureGit(t, root, "add", ".seamark/policy.yaml")
+	fixtureGit(t, root, "commit", "-q", "-m", "Change the policy")
+}
+
+// mcpDenyPolicy denies every diff that names a file, in the given mode.
+func mcpDenyPolicy(mode string) string {
+	return "mode: " + mode + "\ndeny:\n" +
+		"  - id: no-change\n" +
+		"    when: 'size(diff.files) > 0'\n" +
+		"    message: the change touches files\n"
+}
+
+// TestCheckLessonsMCPNamesANonBlockingVerdict proves that the combined
+// line of the MCP check names a deny or require_approval verdict that
+// warn mode does not block. Before the fix it read "policy pass" under
+// "verdict  deny (mode: warn)". The combined state and the CLI exit
+// code stay: warn mode never blocks. Enforce mode keeps "policy
+// blocked".
+func TestCheckLessonsMCPNamesANonBlockingVerdict(t *testing.T) {
+	cases := []struct {
+		name   string
+		policy string // "" keeps the require_approval policy of the fixture
+		mode   string // the fixture policy mode
+		edit   func(t *testing.T, root string)
+		line   string
+	}{
+		{
+			name: "deny in warn mode, lessons passed", policy: mcpDenyPolicy("warn"), mode: "warn", edit: editHandler,
+			line: "combined: pass (policy deny, not blocking in warn mode; lessons passed; CLI exit 0)\n",
+		},
+		{
+			name: "deny in warn mode, lesson violation", policy: mcpDenyPolicy("warn"), mode: "warn", edit: editAsset,
+			line: "combined: fail (policy deny, not blocking in warn mode; lessons violation; CLI exit 2)\n",
+		},
+		{
+			name: "require_approval in warn mode, lessons passed", mode: "warn", edit: editHandler,
+			line: "combined: pass (policy require_approval, not blocking in warn mode; lessons passed; CLI exit 0)\n",
+		},
+		{
+			name: "require_approval in warn mode, lesson violation", mode: "warn", edit: editAsset,
+			line: "combined: fail (policy require_approval, not blocking in warn mode; lessons violation; CLI exit 2)\n",
+		},
+		{
+			name: "deny in enforce mode", policy: mcpDenyPolicy("enforce"), mode: "enforce", edit: editHandler,
+			line: "combined: fail (policy blocked, lessons passed; CLI exit 2)\n",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, sentinel := lessonChecksFixture(t, c.mode)
+			if c.policy != "" {
+				commitMCPPolicy(t, root, c.policy)
+			}
+
+			c.edit(t, root)
+
+			got, isErr := callCheck(t, root, `{"lesson_checks":true}`)
+			assert.False(t, isErr, got)
+			assert.True(t, strings.HasPrefix(got, c.line), "the text starts with %q: %s", c.line, got)
+			assert.Equal(t, 1, strings.Count(got, "combined: "), "the combined line is not repeated")
+
+			sentinel.requireNoCall(t)
+		})
+	}
+}
+
+// TestCheckMCPNotesAFailedAudit proves that the MCP check names a
+// failed audit append in its text, one note per record. Before the fix
+// only the server log named a lost policy audit record, and nothing
+// named a lost lesson-check audit record. The verdict does not change,
+// and nothing goes through the link.
+func TestCheckMCPNotesAFailedAudit(t *testing.T) {
+	link := func(t *testing.T, path string) (target string) {
+		t.Helper()
+
+		target = filepath.Join(t.TempDir(), "target")
+		require.NoError(t, os.WriteFile(target, []byte("keep\n"), 0o644))
+		require.NoError(t, os.Symlink(target, path))
+
+		return target
+	}
+
+	kept := func(t *testing.T, target string) {
+		t.Helper()
+
+		data, err := os.ReadFile(target)
+		require.NoError(t, err)
+		assert.Equal(t, "keep\n", string(data), "nothing goes through the link")
+	}
+
+	t.Run("the policy audit record", func(t *testing.T) {
+		root, sentinel := lessonChecksFixture(t, "warn")
+		editHandler(t, root)
+
+		audit := filepath.Join(root, ".seamark", "audit.jsonl")
+		target := link(t, audit)
+
+		note := "note: the audit record of this verdict was not written (gate: audit: " + audit +
+			" is a symlink — refusing to follow it)\n"
+
+		plain, isErr := callCheck(t, root, `{}`)
+		assert.False(t, isErr, plain)
+		assert.True(t, strings.HasPrefix(plain, "verdict  require_approval (mode: warn)\n"), plain)
+		assert.True(t, strings.HasSuffix(plain, "\n\n"+note+mcpNotRequestedOnePin), "the note precedes the last line: %s", plain)
+
+		got, isErr := callCheck(t, root, `{"lesson_checks":true}`)
+		assert.False(t, isErr, got)
+		assert.True(t, strings.HasPrefix(got, mcpCombinedLine("pass", mcpClauseApprovalWarn, "passed", 0)), got)
+		assert.True(t, strings.HasSuffix(got, "\n\n"+note), "the note ends the text: %s", got)
+		assert.Equal(t, 1, strings.Count(got, "note: the audit record"))
+
+		kept(t, target)
+		sentinel.requireNoCall(t)
+	})
+
+	t.Run("the lesson-check audit record", func(t *testing.T) {
+		root, sentinel := lessonChecksFixture(t, "warn")
+		editHandler(t, root)
+
+		audit := filepath.Join(root, ".seamark", "lesson-check-audit.jsonl")
+		target := link(t, audit)
+
+		got, isErr := callCheck(t, root, `{"lesson_checks":true}`)
+		assert.False(t, isErr, got)
+		assert.True(t, strings.HasPrefix(got, mcpCombinedLine("pass", mcpClauseApprovalWarn, "passed", 0)), got)
+		assert.True(t, strings.HasSuffix(got,
+			"\n\nnote: the lesson-check audit record was not written (unsafe path: "+audit+" is a symbolic link)\n"), got)
+		assert.NotContains(t, got, "note: the audit record of this verdict")
+
+		kept(t, target)
+		sentinel.requireNoCall(t)
+	})
+}
+
+// TestCheckMCPNamesLessonChecksNotRequested proves the last line of the
+// MCP check without lesson_checks: when an executable pin covers a
+// changed path, the text says that its check exists and did not run,
+// and names the option. Before the fix the advisory listed the pin and
+// nothing more. No covering pin keeps the text without the line, and an
+// invalid lessons.yaml says so instead of a false "none".
+func TestCheckMCPNamesLessonChecksNotRequested(t *testing.T) {
+	const invalid = "lesson checks: not requested — lessons.yaml is invalid, so whether an executable pin " +
+		"covers this diff is unknown; run with lesson_checks: true (CLI: seamark check --lessons)\n"
+
+	cases := []struct {
+		name string
+		edit func(t *testing.T, root string)
+		want string // the last line; "" = no line
+	}{
+		{name: "one covering pin", edit: editHandler, want: mcpNotRequestedOnePin},
+		{name: "no covering pin", edit: editReadme},
+		{name: "an invalid lessons.yaml", edit: func(t *testing.T, root string) {
+			editHandler(t, root)
+			fixtureWrite(t, root, ".seamark/lessons.yaml", "pin: [\n")
+		}, want: invalid},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, sentinel := lessonChecksFixture(t, "warn")
+			c.edit(t, root)
+
+			got, isErr := callCheck(t, root, `{}`)
+			assert.False(t, isErr, got)
+
+			if c.want == "" {
+				assert.NotContains(t, got, "lesson checks:")
+			} else {
+				assert.True(t, strings.HasSuffix(got, "\n\n"+c.want), "the text ends with a blank line and %q: %s", c.want, got)
+				assert.Equal(t, 1, strings.Count(got, "lesson checks:"), "one line")
+			}
+
+			sentinel.requireNoCall(t)
+		})
+	}
+}
+
+// TestCheckLessonsMCPNamesDiffPathsOutsideSnapshot proves the note on a
+// diff argument that the lesson checks did not read. A diff over a clean
+// tree passed with no word that the checks read the working tree. The
+// note is the second line, after the combined line.
+func TestCheckLessonsMCPNamesDiffPathsOutsideSnapshot(t *testing.T) {
+	const todoDiff = `diff --git a/src/todo.go b/src/todo.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/todo.go
+@@ -0,0 +1,3 @@
++package src
++
++// TODO(owner): split.
+`
+
+	root, sentinel := lessonChecksFixture(t, "warn")
+
+	got, isErr := callCheck(t, root, checkArgs(t, map[string]any{"diff": todoDiff, "lesson_checks": true}))
+	assert.False(t, isErr, got)
+
+	lines := strings.SplitN(got, "\n", 4)
+	require.Len(t, lines, 4)
+	assert.Equal(t, strings.TrimSuffix(mcpCombinedLine("pass", mcpClauseApprovalWarn, "no-applicable-checks", 0), "\n"), lines[0])
+	assert.Equal(t, "note: the lesson checks read the working tree, not the supplied diff; "+
+		"1 file of the diff is not in the verified snapshot (src/todo.go)", lines[1])
+	assert.Empty(t, lines[2], "a blank line follows the head")
+
+	// Without a diff argument the policy reads git diff HEAD, the tree
+	// that the checks read, so no note follows.
+	head, isErr := callCheck(t, root, `{"lesson_checks":true}`)
+	assert.False(t, isErr, head)
+	assert.NotContains(t, head, "note: the lesson checks read")
+
+	sentinel.requireNoCall(t)
 }

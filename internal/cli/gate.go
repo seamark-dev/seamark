@@ -371,6 +371,12 @@ diff the policy read. A lesson violation exits 2, as a policy block does.`,
 				changed := gate.ChangedPaths(diffText)
 				report.CheckCompanions(cmd.OutOrStdout(), st, root, changed)
 				report.CheckAdvisory(cmd.OutOrStdout(), st, root, changed)
+
+				// The advisory can list a pin whose check exists, and this
+				// run did not verify it. The line says so.
+				if line := report.LessonChecksNotRequested(root, changed); line != "" {
+					fmt.Fprint(cmd.OutOrStdout(), "\n"+line)
+				}
 			}
 
 			return renderErr

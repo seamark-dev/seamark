@@ -802,7 +802,13 @@ one theme never spend two slots:
 - **`check`** (CLI and MCP): after the policy verdict, the touched
   files' lessons as a clearly-marked advisory — printed even when the
   verdict blocks, because a deny is exactly when they matter; `--json`
-  stays verdict-shaped.
+  stays verdict-shaped. When a pin in mode `check` or `enforce` covers
+  a changed file and the call did not ask for lesson verification, the
+  text ends with `lesson checks: not requested — 1 executable pin covers
+  this diff; run with lesson_checks: true (CLI: seamark check --lessons)`.
+  An invalid `lessons.yaml` gives the same line with the words
+  `lessons.yaml is invalid`, because the count is unknown. Without such
+  a pin the line is absent.
 
 Each surface records what it surfaced to the firing log, tagged by
 surface (`prepare`, `change_set`, the edit hook, `explore`, `check`).
@@ -895,6 +901,42 @@ working tree independently of the supplied policy diff. Its JSON is a
 Plain `check --json` stays verdict-shaped. MCP `check` accepts
 `lesson_checks: true` for the same combined reading; omission or false
 keeps its existing policy/advisory behavior.
+
+The text form opens with the combined line, then a blank line, the plain
+check text, a blank line, and the lesson report:
+
+```text
+combined: fail (policy deny, not blocking in warn mode; lessons violation)
+
+verdict  deny (mode: warn)
+...
+lesson checks: violation
+...
+```
+
+MCP adds the exit code that the CLI gives (`; CLI exit 2`). The policy
+clause reads `policy pass` for an allow, `policy blocked` for a verdict
+that blocks under enforcement, and names a deny or `require_approval`
+that warn mode lets through. The combined state and the exit code do not
+change with that clause: warn mode never blocks. In the JSON,
+`combined.policy` says only whether the policy blocks (`pass` or
+`blocked`), and `combined.policy_verdict` holds the verdict.
+
+The lesson checks read the working tree, not a supplied diff. When a
+diff on stdin (MCP: the `diff` argument) names a changed file that the
+verified snapshot does not hold, the line after the combined line says
+so, for example `note: the lesson checks read the working tree, not the
+supplied diff; 1 file of the diff is not in the verified snapshot
+(src/todo.go)`. The note names three files and counts the rest; the
+JSON lists every path in `combined.diff_paths_outside_snapshot`. The
+diff of `git diff HEAD` gets no note.
+
+A failed audit append never changes the verdict or the exit code. When
+the lesson-check audit record is not written and the command exits 0,
+`check --lessons` prints `seamark: lesson-check audit: <error>` on
+stderr, as `lessons --verify` does. MCP `check` ends its text with one
+`note:` line per record that was not written, the policy audit record
+and the lesson-check audit record.
 
 A pre-write guard checks one native edit. A post-edit hook checks the
 observed edit against its saved baseline; missing or mismatched evidence

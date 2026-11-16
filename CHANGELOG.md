@@ -498,6 +498,36 @@ model-boundary delivery.
   the new field `coverage.files_unsupported`. The count comes from the
   counts that the index already stores, so an existing index shows it
   without a rebuild.
+- **`check` names a policy verdict that does not block.** The
+  `combined:` line read `policy pass` under `verdict deny (mode: warn)`.
+  It now reads, for example, `combined: pass (policy deny, not blocking
+  in warn mode; lessons passed)`. The combined state and the exit code
+  do not change. In `check-lessons/1`, `combined.policy` still says only
+  `pass` or `blocked`, and the new `combined.policy_verdict` holds the
+  verdict.
+- **`check` reports an audit record that was not written.** `check
+  --lessons` prints `seamark: lesson-check audit: <error>` on stderr
+  when the command exits 0, as `lessons --verify` does. MCP `check` ends
+  its text with one `note:` line for each record that was not written,
+  the policy audit and the lesson-check audit, where it only wrote to
+  the log of the server before. The verdict and the exit code never
+  change.
+- **`check` says when executable lesson checks did not run.** When
+  lesson verification was not requested and a pin in mode check or
+  enforce covers a changed file, the check text ends with `lesson
+  checks: not requested — N executable pin(s) cover this diff; run with
+  lesson_checks: true (CLI: seamark check --lessons)`. An invalid
+  `lessons.yaml` says so in that line. The MCP instructions and the
+  onboard prompt now ask for `lesson_checks: true`.
+- **`check --lessons` leads with the combined verdict.** With lesson
+  verification, the `combined:` line is the first line of the CLI and
+  MCP text, then a blank line, the plain check text and the lesson
+  report. It is no longer printed at the end.
+- **`check --lessons` names the diff files that the lesson checks did
+  not read.** The lesson checks read the working tree. When a supplied
+  diff names files outside the verified snapshot, a note under the
+  combined line lists them, and `check-lessons/1` lists them in
+  `combined.diff_paths_outside_snapshot`.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

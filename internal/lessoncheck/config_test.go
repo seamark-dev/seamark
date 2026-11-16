@@ -688,3 +688,42 @@ func TestLessonCheckPinRefsAtLoad(t *testing.T) {
 		assert.Len(t, pin.Ref, reviews.ShownPinRef+1, "entry %d", pin.Entry)
 	}
 }
+
+// TestLessonCheckExecutablePinsCovering proves the count that check
+// without lesson verification names: the pins of mode check or enforce
+// whose scope holds a changed path, each pin once, by the scope rule of
+// the checkers. An advisory pin, a pin outside the paths, and an empty
+// path list count nothing; an empty scope covers every path.
+func TestLessonCheckExecutablePinsCovering(t *testing.T) {
+	cfg, errs, err := Parse([]byte(`lesson_checks_version: 1
+checks:
+  frozen-assets:
+    kind: forbid-path-change/1
+pin:
+  - rule: frozen-assets
+    region: generated/
+    note: Do not edit.
+    mode: enforce
+    check: frozen-assets
+  - rule: frozen-docs
+    region: docs/
+    note: Do not edit.
+    mode: check
+    check: frozen-assets
+  - rule: advisory-src
+    region: src/
+    note: Only advice.
+    check: frozen-assets
+`))
+	require.NoError(t, err)
+	require.Empty(t, errs)
+
+	assert.Equal(t, 1, cfg.ExecutablePinsCovering([]string{"generated/a.txt", "generated/b.txt"}), "one pin counts once")
+	assert.Equal(t, 2, cfg.ExecutablePinsCovering([]string{"generated/a.txt", "docs/x.md", "src/a.go"}))
+	assert.Equal(t, 0, cfg.ExecutablePinsCovering([]string{"src/a.go"}), "an advisory pin is not executable")
+	assert.Equal(t, 0, cfg.ExecutablePinsCovering([]string{"generatedx/a.txt"}), "a region covers the paths below it only")
+	assert.Equal(t, 0, cfg.ExecutablePinsCovering(nil))
+
+	wide := &Config{Pins: []Pin{{Mode: ModeCheck, Scope: []string{}}}}
+	assert.Equal(t, 1, wide.ExecutablePinsCovering([]string{"any/path.go"}), "an empty scope is repository-wide")
+}

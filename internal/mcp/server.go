@@ -660,9 +660,15 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 			source = gate.SourceGitDiffHead
 		}
 
-		// The lesson checks need the policy decision after withCurrentStore
-		// returns, so the callback keeps it here.
-		var decision *gate.Decision
+		// The lesson checks need the policy decision and the changed paths
+		// after withCurrentStore returns, so the callback keeps them here.
+		// It keeps a failed audit append too, because its note ends the
+		// text.
+		var (
+			decision *gate.Decision
+			changed  []string
+			auditErr error
+		)
 
 		text, err := s.withCurrentStore(func(st *store.Store) (string, error) {
 			policy, err := gate.LoadPolicy(s.root)
@@ -675,8 +681,8 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 				return "", err
 			}
 
-			if err := gate.Audit(s.root, "mcp.check", p.Diff, policy, decision); err != nil {
-				s.logf("mcp: audit log: %v", err)
+			if auditErr = gate.Audit(s.root, "mcp.check", p.Diff, policy, decision); auditErr != nil {
+				s.logf("mcp: audit log: %v", auditErr)
 			}
 
 			var b bytes.Buffer
@@ -685,20 +691,29 @@ var toolRunners = map[string]func(*Server, json.RawMessage) (toolOutput, error){
 			// Companions before lessons: the forgotten file is the omission
 			// a review most often misses, and the lessons block is budgeted
 			// and may be long.
-			changed := gate.ChangedPaths(p.Diff)
+			changed = gate.ChangedPaths(p.Diff)
 			report.CheckCompanions(&b, st, s.root, changed)
 			report.CheckAdvisory(&b, st, s.root, changed)
 
 			return b.String(), nil
 		})
-		if err != nil || !p.LessonChecks {
+		if err != nil {
 			return textOutput(text, err)
+		}
+
+		if !p.LessonChecks {
+			// The agent reads no server log, so a lost audit record is
+			// named in the text. The advisory can list a pin whose check
+			// exists, and the last line says that it did not run.
+			return textOutput(text+trailer(auditNote(auditErr), report.LessonChecksNotRequested(s.root, changed)), nil)
 		}
 
 		// withCurrentStore has closed the index here. SQLite keeps its WAL
 		// files next to an open index, and the snapshot must not see them
 		// change.
-		return textOutput(s.checkLessons(text, lessonsRoot, decision, policyInput))
+		return textOutput(s.checkLessons(text, lessonsRoot, decision, checkInputs{
+			policyInput: policyInput, changed: changed, auditErr: auditErr,
+		}))
 	},
 }
 
@@ -844,15 +859,58 @@ func (s *Server) lessonsRoot() (string, error) {
 	return history.ResolveRoot(s.root)
 }
 
-// checkLessons appends the lesson verification to the policy text of
-// one check call: a blank line, the lesson report, and the combined
-// line. report.NewCheckLessonsEnvelope derives the combined values, so
-// this line and check --lessons print the same verdict.
+// checkInputs holds what the policy path of one check call leaves for
+// the lesson verification.
+type checkInputs struct {
+	policyInput string   // report.PolicyInputStdinDiff or report.PolicyInputGitDiffHead
+	changed     []string // the changed paths of the diff that the policy read
+	auditErr    error    // the error of the policy audit append, or nil
+}
+
+// auditNote names a failed append of the policy audit record, or gives
+// "". The verdict stays, because the audit is best effort.
+func auditNote(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return "note: the audit record of this verdict was not written (" + render.Sanitize(err.Error()) + ")\n"
+}
+
+// lessonAuditNote names a failed append of the lesson-check audit
+// record, or gives "". The result stays, as in lessons --verify.
+func lessonAuditNote(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return "note: the lesson-check audit record was not written (" + render.Sanitize(err.Error()) + ")\n"
+}
+
+// trailer joins the lines that end a check text. A blank line sets them
+// apart from the block before, as between the other blocks. No line
+// gives "", so the text keeps its bytes.
+func trailer(lines ...string) string {
+	tail := strings.Join(lines, "")
+	if tail == "" {
+		return ""
+	}
+
+	return "\n" + tail
+}
+
+// checkLessons adds the lesson verification to the policy text of one
+// check call, in the layout of report.WriteCheckLessons: the combined
+// line first, then the policy text and the lesson report. The CLI exit
+// code joins the combined line. report.NewCheckLessonsEnvelope derives
+// the combined values, so this text and check --lessons print the same
+// verdict. A failed audit append of either record adds a note at the
+// end.
 //
 // A violation and a blocking policy stay in band: the result is text,
 // not an isError result. Only a usage or root failure of Verify is an
 // error. No path here constructs an invoker.
-func (s *Server) checkLessons(policyText, root string, decision *gate.Decision, policyInput string) (string, error) {
+func (s *Server) checkLessons(policyText, root string, decision *gate.Decision, in checkInputs) (string, error) {
 	// Verify sets the verify-timeout deadline itself. The server has no
 	// request context, so the call starts from the background context.
 	v, err := lessoncheck.Verify(context.Background(), lessoncheck.VerifyRequest{
@@ -864,15 +922,16 @@ func (s *Server) checkLessons(policyText, root string, decision *gate.Decision, 
 		return "", err
 	}
 
-	env := report.NewCheckLessonsEnvelope(decision, v, policyInput)
+	if err := v.AuditError(); err != nil {
+		s.logf("mcp: lesson-check audit: %v", err)
+	}
+
+	env := report.NewCheckLessonsEnvelope(decision, v, in.policyInput, in.changed)
 
 	var b strings.Builder
 
-	b.WriteString(policyText)
-	b.WriteString("\n")
-	lessoncheck.RenderText(&b, v)
-	fmt.Fprintf(&b, "combined: %s (policy %s, lessons %s; CLI exit %d)\n",
-		env.Combined.State, env.Combined.Policy, env.Combined.Lessons, env.Combined.ExitCode)
+	report.WriteCheckLessons(&b, env, policyText, true)
+	b.WriteString(trailer(auditNote(in.auditErr), lessonAuditNote(v.AuditError())))
 
 	return b.String(), nil
 }

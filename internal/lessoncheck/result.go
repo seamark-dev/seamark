@@ -252,7 +252,9 @@ const (
 	CombinedIncomplete CombinedState = "incomplete"
 )
 
-// The values of Combined.Policy.
+// The values of Combined.Policy. They say only whether the policy
+// blocks. A verdict that does not block, as a deny in warn mode, is
+// "pass" here; the check-lessons/1 envelope names that verdict apart.
 const (
 	policyPass    = "pass"
 	policyBlocked = "blocked"
@@ -263,7 +265,7 @@ const (
 type Combined struct {
 	State    CombinedState // by ExitCode: 0 "pass", 2 "fail", 1 "incomplete"
 	ExitCode int           // 2 when policyBlocking or lessons is "violation"; else 1 when lessons is "incomplete"; else 0
-	Policy   string        // "blocked" iff policyBlocking (gate.Decision.Blocking()), else "pass"
+	Policy   string        // "blocked" iff policyBlocking (gate.Decision.Blocking()), else "pass"; not the verdict
 }
 
 // Combine owns the combined state and the exit rule of check --lessons

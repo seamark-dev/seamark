@@ -158,6 +158,11 @@ audit:
 Raw inputs are scrubbed of secret-shaped patterns best-effort — treat
 such a log as sensitive.
 
+A failed append never changes a verdict. `gate` and `check` print
+`seamark: audit log: <error>` on stderr. The MCP `check` tool ends its
+text with `note: the audit record of this verdict was not written
+(<error>)`, because the agent never reads the server log.
+
 ### Blast radius of a diff
 
 ```bash
@@ -246,12 +251,19 @@ verdicts exit 2.
 pins after the existing policy check. MCP `check` opts in with
 `lesson_checks: true`. The policy uses its supplied diff; lesson checks
 read the current working tree against `HEAD`, including nonignored
-untracked changes. These inputs can differ. Plain `check` keeps its
-policy verdict and advisory guidance unchanged.
+untracked changes. These inputs can differ: a supplied diff that names a
+file outside the verified snapshot gets a note under the combined line.
+Plain `check` keeps its policy verdict and advisory guidance unchanged;
+when an executable pin covers a changed file, its text ends with a
+`lesson checks: not requested` line that names the route.
 
-The combined JSON uses `check-lessons/1`, with policy, lessons and
-combined results. A blocking policy or a lesson violation gives exit 2;
-without either, incomplete lesson evidence gives exit 1; otherwise exit 0.
+The text form opens with the combined line, for example `combined: pass
+(policy deny, not blocking in warn mode; lessons passed)`. The combined
+JSON uses `check-lessons/1`, with policy, lessons and combined results;
+`combined.policy` says only whether the policy blocks, and
+`combined.policy_verdict` holds the verdict. A blocking policy or a
+lesson violation gives exit 2; without either, incomplete lesson evidence
+gives exit 1; otherwise exit 0.
 The advisory reminder is not a predicate result and never changes the
 policy verdict. See [executable lessons](lessons.md#executable-lessons-advisory-check-and-enforce)
 for the two supported predicates, omissions and standalone verification.
