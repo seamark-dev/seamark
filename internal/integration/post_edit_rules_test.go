@@ -194,6 +194,21 @@ func dropEvent(event, tool string) func([]map[string]any) []map[string]any {
 	}
 }
 
+// setPatch gives every apply_patch payload a new tool input with the
+// patch text. The PostToolUse payload is a shallow copy of the PreToolUse
+// payload, so a new map keeps the two payloads apart.
+func setPatch(text string) func([]map[string]any) []map[string]any {
+	return func(p []map[string]any) []map[string]any {
+		for _, m := range p {
+			if m["tool_name"] == codexApplyPatch {
+				m["tool_input"] = map[string]any{"command": text}
+			}
+		}
+
+		return p
+	}
+}
+
 // changedRun builds the expected run of a case with one change.
 func changedRun(t *testing.T, client string, x postEditCase, change postEditChange) guardRecording {
 	t.Helper()
@@ -378,7 +393,31 @@ func TestPostEditFailureReadsTheFailedPatch(t *testing.T) {
 	assert.Equal(t, "case execution-failure: codex synthetic sent no PostToolUse after the failed patch; a hook after a "+
 		"failed patch stays unsupported on that version", note)
 
+	// A tool response without an exit status gives the outcome unknown.
+	// The note logs it, because only a succeeded tool contradicts the
+	// fixture.
+	unknown := func(r *guardRecording) { r.audit[1].ToolOutcome = lessoncheck.ToolUnknown }
+	note, skip, err = changedRun(t, CodexID, x, postEditChange{record: unknown}).postEditFailure(x)
+	require.NoError(t, err)
+	assert.False(t, skip)
+	assert.Contains(t, note, "the record reads the outcome unknown,")
+
+	elsewhere := setPatch("*** Begin Patch\n*** Add File: elsewhere.txt\n+slow\n*** End Patch\n")
+
 	for _, change := range []postEditChange{
+		{name: "a succeeded tool", want: "reads the outcome succeeded, but the patch did not create sentinel/locked/new.txt",
+			record: func(r *guardRecording) { r.audit[1].ToolOutcome = lessoncheck.ToolSucceeded }},
+		{name: "a succeeded patch at another path", want: "the call names [elsewhere.txt], not sentinel/locked/new.txt",
+			payloads: elsewhere, record: func(r *guardRecording) { r.audit[1].ToolOutcome = lessoncheck.ToolSucceeded }},
+		{name: "a patch at another path without PostToolUse", want: "the call names [elsewhere.txt]",
+			payloads: func(p []map[string]any) []map[string]any {
+				return dropEvent("PostToolUse", codexApplyPatch)(elsewhere(p))
+			}},
+		{name: "a patch at a second path", want: "the call names [sentinel/locked/new.txt free/other.txt]",
+			payloads: setPatch("*** Begin Patch\n*** Add File: sentinel/locked/new.txt\n+slow\n" +
+				"*** Add File: free/other.txt\n+slow\n*** End Patch\n")},
+		{name: "a payload without a patch", want: "the PreToolUse payload does not decode",
+			payloads: setPayload(1, "tool_input", map[string]any{})},
 		{name: "the patch wrote the file", want: "sentinel/locked was not read-only", record: func(r *guardRecording) {
 			setCase(r, func(c *guardCase) {
 				c.After = guardState{Files: map[string]string{"sentinel/edit.txt": "a", x.path: "b"}}

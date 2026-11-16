@@ -572,10 +572,17 @@ func (r guardRecording) postEditTimeout(x postEditCase) (string, error) {
 // postEditFailure checks the patch that fails during its execution. A
 // run without the PreToolUse payload gives a skip: the client refused the
 // patch before any hook, or the model made no call. Otherwise the patch
-// must not create its file. A run without the PostToolUse payload gives a
-// skip that names the client version, because that client runs no hook
-// after the failed patch. Otherwise one post-edit record names the call,
-// and the note logs what it reads.
+// must name only the path of the case and must not create its file. A
+// run without the PostToolUse payload gives a skip that names the client
+// version, because that client runs no hook after the failed patch.
+// Otherwise one post-edit record names the call and does not read a
+// succeeded tool, and the note logs what it reads.
+//
+// The state of the fixture covers only sentinel/, notes/, and free/. So
+// only the decoded path shows that the patch targeted the read-only
+// directory, and a patch that succeeds at another path must not pass.
+// Only the Codex table has a failure case, so the Codex decoder reads the
+// payload.
 func (r guardRecording) postEditFailure(x postEditCase) (note string, skip bool, err error) {
 	call, err := r.postEditCallOf(x)
 	if errors.Is(err, errNoPreWrite) {
@@ -585,6 +592,15 @@ func (r guardRecording) postEditFailure(x postEditCase) (note string, skip bool,
 
 	if err != nil {
 		return "", false, err
+	}
+
+	op, err := codexGuards{}.DecodeGuard(call.pre.payload)
+	if err != nil {
+		return "", false, fmt.Errorf("the PreToolUse payload does not decode: %w", err)
+	}
+
+	if paths := r.opPaths(op); !slices.Equal(paths, []string{x.path}) {
+		return "", false, fmt.Errorf("the call names %v, not %s; record the case again", paths, x.path)
 	}
 
 	c := r.cases[x.name]
@@ -602,7 +618,15 @@ func (r guardRecording) postEditFailure(x postEditCase) (note string, skip bool,
 		return "", false, fmt.Errorf("%d post-edit records of the call, not one", len(call.posts))
 	}
 
+	// The patch created no file at its only path, so a succeeded tool
+	// contradicts the fixture. A reviewer must then read the payload, and
+	// the note must not log the record as the hook after a failed patch.
 	post := call.posts[0]
+	if post.ToolOutcome == lessoncheck.ToolSucceeded {
+		return "", false, fmt.Errorf("the post-edit record reads the outcome %s, but the patch did not create %s",
+			post.ToolOutcome, x.path)
+	}
+
 	emitted := post.Emitted != nil && *post.Emitted
 
 	return fmt.Sprintf("case %s: %s %s ran the post-edit hook after the failed patch; the record reads the outcome %s, "+
