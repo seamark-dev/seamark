@@ -1263,3 +1263,181 @@ func TestChangeSetPathRuleMatchesTheMalformedRule(t *testing.T) {
 		}
 	}
 }
+
+// TestChangeSetSaysWhenLessonsYAMLDoesNotDecode proves that change_set
+// says in text that .seamark/lessons.yaml does not decode. The first
+// part drops the pins of such a file without a note, so before the fix
+// an older client got a silent answer and a newer one found the status
+// only in structuredContent. The second part now holds the guidance
+// lines in the words of lessons --prepare, under both protocol versions,
+// and the first part keeps its bytes.
+func TestChangeSetSaysWhenLessonsYAMLDoesNotDecode(t *testing.T) {
+	const pinned = "internal/parse/strict.go"
+
+	root := changeSetPrepFixture(t)
+	fixtureWrite(t, root, ".seamark/lessons.yaml", "pin: [this is: not valid yaml\n")
+
+	const (
+		guidance = "guidance invalid · change budget 6 · mined lessons ok · checks invalid\n"
+		decode   = "  .seamark/lessons.yaml does not read or decode, so the defaults apply and no pin is selected\n"
+	)
+
+	for _, version := range []string{"2025-03-26", "2025-06-18"} {
+		t.Run(version, func(t *testing.T) {
+			resps := serve(t, root, initializeLine(version), changeSetCall(t, 1, pinned))
+
+			res := decodeToolParts(t, resps["1"])
+			assert.False(t, res.IsError)
+			require.Len(t, res.Content, 2, "the second part says why no pin shows")
+			assert.Equal(t, "internal/parse/strict.go\n  defines                1 symbols\n\n", res.Content[0].Text,
+				"the first part keeps its bytes")
+
+			text := res.Content[1].Text
+			assert.Equal(t, "text", res.Content[1].Type)
+			assert.Contains(t, text, guidance)
+			assert.Contains(t, text, decode)
+			assert.Contains(t, text, "  checks are invalid: ")
+			assert.Contains(t, text, delivery.PreparationNotice)
+
+			if version < "2025-06-18" {
+				assert.Empty(t, res.StructuredContent)
+
+				return
+			}
+
+			// lessons --prepare prints the full form of the same document,
+			// so both surfaces name the failure in the same words.
+			p := structuredPreparation(t, res)
+			assert.Equal(t, "invalid", p.Guidance.Status)
+			assert.Equal(t, supplementOf(p), text)
+
+			var full strings.Builder
+			delivery.RenderPreparation(&full, &p, delivery.FormFull)
+			assert.Contains(t, full.String(), guidance)
+			assert.Contains(t, full.String(), decode)
+		})
+	}
+
+	t.Run("a valid file without pins keeps one part", func(t *testing.T) {
+		fixtureWrite(t, root, ".seamark/lessons.yaml", prepFixtureNoPins)
+
+		resps := serve(t, root, initializeLine("2025-03-26"), changeSetCall(t, 1, pinned))
+
+		res := decodeToolParts(t, resps["1"])
+		require.Len(t, res.Content, 1)
+		assert.Equal(t, "internal/parse/strict.go\n  defines                1 symbols\n\n", res.Content[0].Text)
+	})
+}
+
+// prepFixtureBadCheck binds a check of an unknown kind to a check pin on
+// internal/parse/. The file decodes, so the pin applies, but the check
+// configuration is invalid and no checker runs.
+const prepFixtureBadCheck = `lesson_checks_version: 1
+checks:
+  bad:
+    kind: nonexistent/9
+pin:
+  - rule: keep-parser-strict
+    region: internal/parse/
+    note: Reject unknown fields in the parser.
+    mode: check
+    check: bad
+`
+
+// TestChangeSetListsACheckOfAnInvalidConfigurationAsNotRun proves that a
+// check under an invalid check configuration is listed as not run, with
+// the reason, and that its runs is false. Executable evaluation reports
+// configuration errors and runs no checker, so "runs" was a false claim.
+// The supplement keeps its "checks invalid" lines. A path outside every
+// pin still gets those lines, because the checks status covers the file.
+func TestChangeSetListsACheckOfAnInvalidConfigurationAsNotRun(t *testing.T) {
+	root := changeSetPrepFixture(t)
+	fixtureWrite(t, root, ".seamark/lessons.yaml", prepFixtureBadCheck)
+
+	resps := serve(t, root, initializeLine("2025-06-18"),
+		changeSetCall(t, 1, "internal/parse/strict.go"), changeSetCall(t, 2, "store.go"))
+
+	res := decodeToolParts(t, resps["1"])
+	require.Len(t, res.Content, 2)
+
+	text := res.Content[1].Text
+	assert.Contains(t, text, " · checks invalid\n")
+	assert.Contains(t, text, "  checks are invalid: ")
+	assert.Contains(t, text, " · check · does not run (configuration error) · check bad (nonexistent/9, version ")
+	assert.NotContains(t, text, " · runs · ")
+
+	p := structuredPreparation(t, res)
+	require.Len(t, p.Checks, 1)
+	assert.False(t, p.Checks[0].Runs)
+	assert.Equal(t, "check", p.Checks[0].Mode, "the mode stays as written")
+
+	outside := decodeToolParts(t, resps["2"])
+	require.Len(t, outside.Content, 2)
+	assert.Contains(t, outside.Content[1].Text, " · checks invalid\n")
+	assert.Empty(t, structuredPreparation(t, outside).Checks)
+}
+
+// TestChangeSetPreparationNamesAnIndexThatWasNotRefreshed proves the
+// mined_freshness and mined_root fields of the lesson_preparation
+// document. content[0] opens with the refresh note, and a client that
+// reads only the document needs the same facts there. A failed refresh
+// gives not-refreshed, a refused move also names the recorded root, and
+// a current index of another root names only the root. An ordinary call
+// has neither key, so its document keeps its bytes. The supplement says
+// it in one line.
+func TestChangeSetPreparationNamesAnIndexThatWasNotRefreshed(t *testing.T) {
+	const pinned = "internal/parse/strict.go"
+	const intro = "  the mined lessons come from an index that "
+
+	rawPreparation := func(t *testing.T, res toolParts) string {
+		t.Helper()
+
+		return string(structuredKeys(t, res)["lesson_preparation"])
+	}
+
+	t.Run("a refresh that fails", func(t *testing.T) {
+		root := changeSetPrepFixture(t)
+
+		clean := decodeToolParts(t, serve(t, root, initializeLine("2025-06-18"), changeSetCall(t, 1, pinned))["1"])
+		assert.NotContains(t, rawPreparation(t, clean), "mined_freshness")
+		assert.NotContains(t, rawPreparation(t, clean), "mined_root")
+		assert.NotContains(t, clean.Content[1].Text, intro)
+
+		breakRefresh(t, root)
+
+		res := decodeToolParts(t, serve(t, root, initializeLine("2025-06-18"), changeSetCall(t, 1, pinned))["1"])
+		require.True(t, strings.HasPrefix(res.Content[0].Text, brokenNote), res.Content[0].Text)
+
+		p := structuredPreparation(t, res)
+		assert.Equal(t, delivery.MinedOK, p.Guidance.MinedStatus)
+		assert.Equal(t, delivery.MinedNotRefreshed, p.Guidance.MinedFreshness)
+		assert.Empty(t, p.Guidance.MinedRoot)
+
+		require.Len(t, res.Content, 2)
+		assert.Contains(t, res.Content[1].Text, intro+"was not refreshed for this call\n")
+	})
+
+	t.Run("a refused move of another root", func(t *testing.T) {
+		origin, other, dbPath := rootMoveFixture(t)
+
+		resps := serveDB(t, other, dbPath, t.Logf, initializeLine("2025-06-18"), changeSetCall(t, 1, "a.go"))
+		res := decodeToolParts(t, resps["1"])
+		require.True(t, strings.HasPrefix(res.Content[0].Text, refusedText(origin)), res.Content[0].Text)
+
+		p := structuredPreparation(t, res)
+		assert.Equal(t, delivery.MinedNotRefreshed, p.Guidance.MinedFreshness)
+		assert.Equal(t, origin, p.Guidance.MinedRoot)
+	})
+
+	t.Run("a linked worktree at one commit", func(t *testing.T) {
+		origin, tree := rootMoveLinked(t, true)
+
+		resps := serveDB(t, tree, store.DefaultPath(tree), t.Logf, initializeLine("2025-06-18"), changeSetCall(t, 1, "a.go"))
+		res := decodeToolParts(t, resps["1"])
+		require.True(t, strings.HasPrefix(res.Content[0].Text, matchText(origin)), res.Content[0].Text)
+
+		p := structuredPreparation(t, res)
+		assert.Empty(t, p.Guidance.MinedFreshness, "the index matches this workspace")
+		assert.Equal(t, origin, p.Guidance.MinedRoot)
+	})
+}

@@ -534,6 +534,23 @@ model-boundary delivery.
   and the lift beside the `mostly` and last-fix lines. The lines of a
   file keep the other planned files and the partners past the cap of the
   closing list. The `check` output does not change.
+- **`change_set` says when `lessons.yaml` does not decode.** An invalid
+  `.seamark/lessons.yaml` dropped every pin from the `change_set` text
+  without a word: an older MCP client got a silent answer, and a newer
+  one found the status only in `structuredContent`. The second text part
+  now shows whenever the guidance or the checks are invalid, in the
+  words of `seamark lessons --prepare`, for every protocol version.
+- **A check that cannot run is not listed as `runs`.** Under an invalid
+  check configuration, preparation lists each check as `does not run
+  (configuration error)` and sets `runs` to false, because no checker
+  runs then. Valid configurations do not change.
+- **Preparation says when the index behind the mined lessons is not
+  current.** `lesson-preparation/1` has two new optional guidance keys,
+  absent in an ordinary document. `mined_freshness` is `not-refreshed`
+  when `change_set` could not refresh the index, and `stale` when
+  `lessons --prepare` finds the index behind the workspace. `mined_root`
+  names the repository that the index of a `change_set` call records
+  when it is another one. Both text forms say it in one line.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

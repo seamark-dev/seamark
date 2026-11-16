@@ -714,14 +714,25 @@ one theme never spend two slots:
   (default 6), each pin with its pin-ref, its exact version, its mode, and
   the paths it applies to; with no budget, every pin in scope whose mode
   is `check` or `enforce`, and every advisory pin with a `check` (listed
-  as not run); and each pin or lesson that the budget or the restatement
+  as not run; under an invalid check configuration every listed check is
+  `does not run (configuration error)` with `runs` false, because no
+  checker runs then); and each pin or lesson that the budget or the restatement
   collapse left out, with the `seamark lessons --file <path>` command that
   shows it. The text lists the first five omissions and then a `+N more`
   line for the rest; `--json` lists every one. A relative path starts at
   the current directory, and a new
   path need not exist. Without an index the result holds the pins of
-  `lessons.yaml` (`mined lessons no-index`). `--json` prints the
-  versioned `lesson-preparation/1` document. The command exits 0 also
+  `lessons.yaml` (`mined lessons no-index`). The command refreshes no
+  index: when the index no longer matches the workspace, one guidance
+  line says that the mined lessons come from an index that does not match
+  the workspace now. `--json` prints the
+  versioned `lesson-preparation/1` document. In it, `guidance` can carry
+  two keys beside `mined_status: ok`. Each one is absent when there is
+  nothing to qualify. `mined_freshness` is `stale` here and
+  `not-refreshed` from `change_set`. `mined_root` (from `change_set`
+  only) names the root that the index records when that root is another
+  repository. The command prepares for the root that the index records,
+  so it never names one. The command exits 0 also
   when no pin applies, and 1 when it gets no path, when no path is inside
   the workspace, or when another mode flag is given; it never exits 2,
   because it blocks nothing. Preparation keeps no delivery state: every
@@ -761,16 +772,25 @@ one theme never spend two slots:
   as the map back onto the files. New files count: a brand-new file in a
   pinned region gets its guidance before its first line exists. This text
   stays the first part of the answer. When the preparation of the same
-  files has a pin, a check, an omission, or a rejected path, a second
-  text part lists the pin-refs, versions, modes, checks, and omissions
-  with their inspect commands, without the lesson text again. This part
+  files has a pin, a check, an omission, or a rejected path, or when
+  `.seamark/lessons.yaml` does not read or decode or its checks are
+  invalid, a second text part lists the pin-refs, versions, modes,
+  checks, and omissions with their inspect commands, without the lesson
+  text again. That part names an invalid file or invalid checks in the
+  words of `lessons --prepare`, for every protocol version, because the
+  first part then shows no pin and no note. This part
   lists the first five omissions and then a `+N more` line, and
   `structuredContent` lists every one. A client
   that negotiated MCP protocol `2025-06-18` or later also gets the whole
   `lesson-preparation/1` document as `structuredContent` under
   `lesson_preparation`, and the first text part again, byte for byte,
   under `change_set_report`, because a client can show
-  `structuredContent` in place of the text parts. A failed preparation
+  `structuredContent` in place of the text parts. When the index refresh
+  of the call fails or is refused, the document says
+  `mined_freshness: not-refreshed`, and when the index records another
+  repository, `mined_root` names it. The second part says so in one line,
+  so a client that reads only the document still sees the note that opens
+  the first part. A failed preparation
   has no `structuredContent`, so the text parts stay the whole answer. A
   relative path starts at the repository root.
 - **The exploration hook** (`seamark lessons --explore --hook`, Claude

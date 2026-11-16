@@ -36,8 +36,10 @@ const maxOmittedShown = 5
 // An unknown form writes nothing.
 //
 // The supplement form writes nothing when p has no pin, no check, no
-// omission, and no rejected path. MCP then adds no second text part,
-// because the first part already says everything.
+// omission, no rejected path, and no invalid guidance or checks. MCP
+// then adds no second text part, because the first part already says
+// everything. The first part drops the pins of an invalid file without
+// a word, so only the supplement can say why no pin shows.
 //
 // Every value that comes from a file, the index, or the caller passes
 // render.Sanitize, so no control byte reaches a terminal or an agent.
@@ -47,7 +49,8 @@ func RenderPreparation(w io.Writer, p *Preparation, form string) {
 	switch {
 	case form != FormFull && form != FormSupplement:
 		return
-	case !full && len(p.Pins) == 0 && len(p.Checks) == 0 && len(p.Omitted) == 0 && p.Request.RejectedCount == 0:
+	case !full && len(p.Pins) == 0 && len(p.Checks) == 0 && len(p.Omitted) == 0 && p.Request.RejectedCount == 0 &&
+		!guidanceFails(p.Guidance):
 		return
 	}
 
@@ -97,6 +100,10 @@ func writeGuidance(w io.Writer, p *Preparation) {
 		fmt.Fprintln(w, "  the index did not open, so the selection holds pins only")
 	}
 
+	if line := minedIndexText(g); line != "" {
+		fmt.Fprintf(w, "  %s\n", line)
+	}
+
 	if g.ChecksStatus == checksInvalid {
 		fmt.Fprintf(w, "  checks are invalid: %s\n", render.Sanitize(g.ChecksError))
 	}
@@ -104,6 +111,36 @@ func writeGuidance(w io.Writer, p *Preparation) {
 	if len(p.Request.Paths) == 0 {
 		fmt.Fprintln(w, "  no requested path is inside the workspace, so nothing is selected")
 	}
+}
+
+// minedIndexText says in one line why the mined lessons can be stale or
+// describe another repository, or it returns "".
+func minedIndexText(g Guidance) string {
+	var parts []string
+
+	switch g.MinedFreshness {
+	case MinedNotRefreshed:
+		parts = append(parts, "was not refreshed for this call")
+	case MinedStale:
+		parts = append(parts, "does not match the workspace now (`seamark index` refreshes it)")
+	}
+
+	if g.MinedRoot != "" {
+		parts = append(parts, "records "+render.Sanitize(g.MinedRoot))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return "the mined lessons come from an index that " + strings.Join(parts, " and ")
+}
+
+// guidanceFails reports guidance that the selection could not use as
+// written: a lessons.yaml that does not read or decode, or checks that
+// do not validate. An absent file is no failure, because no pin exists.
+func guidanceFails(g Guidance) bool {
+	return g.Status == report.GuidanceInvalid || g.ChecksStatus == checksInvalid
 }
 
 // guidanceRef is the short guidance digest, or the guidance status when
@@ -197,7 +234,14 @@ func writeChecks(w io.Writer, p *Preparation) {
 
 	for _, c := range p.Checks {
 		runs := "runs"
-		if !c.Runs {
+
+		switch {
+		case c.Runs:
+		case c.Mode == modeCheck || c.Mode == modeEnforce:
+			// An executable pin runs no checker only under an invalid
+			// check configuration (Prepare clears Runs then).
+			runs = "does not run (configuration error)"
+		default:
 			runs = "does not run (advisory)"
 		}
 

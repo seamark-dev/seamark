@@ -8,6 +8,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/delivery"
+	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -90,6 +92,7 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 		Paths:          paths,
 		Surface:        delivery.SurfacePrepare,
 		MinedStatus:    mined,
+		MinedFreshness: prepareFreshness(st, root, mined),
 		SeamarkVersion: version,
 		Capability:     &capability,
 	})
@@ -126,6 +129,29 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 	enc.SetIndent("", "  ")
 
 	return enc.Encode(p)
+}
+
+// prepareFreshness returns delivery.MinedStale when the fingerprint
+// that the index records does not match root now, else "". The command
+// refreshes no index, so a stale index can hold old mined lessons. The
+// rule is the one of status and orient. root is the root that the index
+// records, so the whole preparation describes that root and no other
+// root needs a name. A failed meta read says nothing about freshness.
+func prepareFreshness(st *store.Store, root, mined string) string {
+	if mined != delivery.MinedOK {
+		return ""
+	}
+
+	recorded, err := st.GetMeta(store.MetaIndexedState)
+	if err != nil || recorded == "" {
+		return ""
+	}
+
+	if indexhealth.Freshness(recorded, index.WorkspaceState(root)) != indexhealth.FreshStale {
+		return ""
+	}
+
+	return delivery.MinedStale
 }
 
 // openPrepareIndex opens the index for a preparation and returns the
