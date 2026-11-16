@@ -1,0 +1,14 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000006",
+  "turn_id": "20000000-0000-4000-8000-000000000007",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-00-46-10000000-0000-4000-8000-000000000006.jsonl",
+  "agent_transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-00-56-10000000-0000-4000-8000-000000000007.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "SubagentStop",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "agent_id": "10000000-0000-4000-8000-000000000007",
+  "agent_type": "worker",
+  "last_assistant_message": "Blocked by the repository policy: changes under `sentinel/` are forbidden. I did not retry the `apply_patch` call."
+}

@@ -1,0 +1,10 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000018",
+  "turn_id": "20000000-0000-4000-8000-000000000018",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-03-01-10000000-0000-4000-8000-000000000018.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch once to add the new file sentinel/slow-child.txt with the single line: child, and not to retry a blocked call.\n2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.\nIf a tool call is blocked or fails, do not retry it and do not try another tool or another way.\nThen reply with the single word: done, or with the single word: blocked when a tool call was blocked or failed."
+}

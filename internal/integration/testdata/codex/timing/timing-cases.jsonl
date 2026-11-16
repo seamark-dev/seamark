@@ -1,0 +1,5 @@
+{"run":1,"case":"prior-preparation"}
+{"run":2,"case":"patch-after-preparation"}
+{"run":3,"case":"same-call"}
+{"run":4,"case":"multi-file-patch"}
+{"run":5,"case":"subagent-patch"}

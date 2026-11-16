@@ -1,0 +1,7 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000006",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-00-46-10000000-0000-4000-8000-000000000006.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "SessionEnd",
+  "reason": "other"
+}

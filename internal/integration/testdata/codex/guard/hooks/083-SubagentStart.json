@@ -1,0 +1,11 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000015",
+  "turn_id": "20000000-0000-4000-8000-000000000016",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-02-31-10000000-0000-4000-8000-000000000016.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "SubagentStart",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "agent_id": "10000000-0000-4000-8000-000000000016",
+  "agent_type": "worker"
+}

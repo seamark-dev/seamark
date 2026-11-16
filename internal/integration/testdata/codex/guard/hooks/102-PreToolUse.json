@@ -1,0 +1,15 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000018",
+  "turn_id": "20000000-0000-4000-8000-000000000018",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-03-01-10000000-0000-4000-8000-000000000018.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "spawn_agent",
+  "tool_input": {
+    "agent_type": "worker",
+    "message": "Use apply_patch once to add the new file sentinel/slow-child.txt with the single line: child. Do not retry a blocked call."
+  },
+  "tool_use_id": "exec-50000000-0000-4000-8000-000000000022"
+}

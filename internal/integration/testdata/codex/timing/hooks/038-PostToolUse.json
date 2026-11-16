@@ -1,0 +1,18 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000004",
+  "turn_id": "20000000-0000-4000-8000-000000000005",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-00-37-10000000-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "multi_agent_v1wait_agent",
+  "tool_input": {
+    "targets": [
+      "10000000-0000-4000-8000-000000000005"
+    ],
+    "timeout_ms": 3600000
+  },
+  "tool_response": "{\"status\":{\"10000000-0000-4000-8000-000000000005\":{\"completed\":\"Added [timing/child-patch.txt](/workspace/native/timing/child-patch.txt) with the single line `child`.\"}},\"timed_out\":false}",
+  "tool_use_id": "exec-50000000-0000-4000-8000-000000000006"
+}
