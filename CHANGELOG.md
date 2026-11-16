@@ -108,8 +108,8 @@ model-boundary delivery.
   offers no command that changes a pin.
 - **Signature redaction in why.** `why <symbol>` now redacts
   secret-shaped text in its `sig` line, as the file outline does.
-- **Expand by symbol.** `expand <symbol>` no longer shows the line after
-  a declaration whose span ends at the start of that line.
+- **Expand by symbol.** MCP `expand` with a symbol no longer shows the
+  line after a declaration whose span ends at the start of that line.
 - **orient health header.** `orient` opens with the index time and age,
   its freshness (current, stale, or unknown), the file coverage, and the
   call-edge origin shares, read by the same rules as `seamark status`. A
@@ -132,6 +132,17 @@ model-boundary delivery.
   no execute bit. It names the setup run that rewrites the command, or
   the hand edit for `.claude/settings.local.json`. The status gate line
   says that no gate hook runs, in place of "no gate hook installed".
+- **Hooks of a renamed binary.** `seamark init` through a binary whose
+  file name is not `seamark`, such as `seamark-1.2` or a link named
+  `seamark` to such a file, wrote hooks that doctor and status did not
+  see. Each re-run added another hook set, and `--gate-mode warn` after
+  `--gate-mode enforce` printed "nothing blocks" while the enforce hook
+  stayed. Init, doctor, and status now also own a hook command that
+  names the path of the running binary, for Claude Code and Codex. They
+  also read a wrapper around that path, such as `test -x <path> &&
+  <path> gate --enforce --hook`, so the gate line names its enforce mode
+  in place of "nothing blocks"; setup keeps the wrapper as written. A
+  hook that another binary wrote under another name stays foreign.
 - **Codex gate in the Claude Code form.** A `gate --hook` or
   `gate --enforce --hook` handler without `--client codex` in
   `.codex/hooks.json` runs and blocks in Codex. Doctor and status now
@@ -299,6 +310,22 @@ model-boundary delivery.
   symbol. Before, one edit inside a symbol hid a deleted function or an
   import edit in the same file. A rule over `diff.unindexed_files` can
   now match, and under enforcement block, more diffs.
+- **A changed value no longer reads as clean.** A change to a constant
+  that a function passes to `exec.CommandContext` gave `check` no
+  effects and no note, while the same value written inline reached
+  `proc:exec`: the index records calls, not reads. `check` and MCP
+  `check`, in text and JSON, now add a note when a change adds or
+  removes lines inside a Go `const`, `var` or `type`, a JS/TS or Python
+  module-level value or type, or a class field or attribute, outside any
+  function or method, and that symbol has no effects of its own. An
+  unchanged value on the line above the change is not named, and an
+  unchanged method there does not hide the class of a changed attribute
+  or field below it. The note names those symbols and says that seamark
+  does not track readers of a value, so their reach is unknown, not
+  clean. The new count
+  `diff.unknown_reach_symbols` lets a rule act on it. Effects and the
+  verdicts of existing rules do not change. docs/policies.md no longer
+  calls the union of effects what the change can ultimately reach.
 - **Git config and the git output that seamark reads.** `check` and MCP
   `check` run the `git diff HEAD` fallback with fixed color, external
   diff, textconv, path prefix, relative path, submodule, and rename
@@ -579,8 +606,23 @@ model-boundary delivery.
   absent in an ordinary document. `mined_freshness` is `not-refreshed`
   when `change_set` could not refresh the index, and `stale` when
   `lessons --prepare` finds the index behind the workspace. `mined_root`
-  names the repository that the index of a `change_set` call records
-  when it is another one. Both text forms say it in one line.
+  names the repository that the index records when it is another one.
+  Both text forms say it in one line.
+- **`lessons --prepare` works in a copied checkout.** In a copied or
+  moved checkout whose index still records the original root, the
+  command rejected every path of the checkout as outside the workspace.
+  A path of the original got the pins of the original's `lessons.yaml`,
+  and its firing record went to the original's log. The command now
+  prepares for the `-C` checkout, with its own `lessons.yaml` and log, as
+  `change_set` does, and `mined_root` names the original root.
+  `lessons --stats` counts these records after `seamark index` runs in
+  the checkout. A `--db` that records another repository gives the same
+  preparation for the `-C` checkout. `lessons --file` follows the same
+  rule, so the view that each omission names shows the pins of the
+  checkout. An absolute path inside the original root, as `why` names
+  it there, still reads the original root. Both commands look for the
+  cited files of a pin's confidence tier in the checkout, so after a
+  move an applied pin keeps its tier and its place under the budget.
 - **A database inside the workspace no longer forces a rebuild on every
   run.** With `--db ./custom.db` as an untracked file, the freshness
   fingerprint included the file that every run writes. So every run
@@ -618,7 +660,7 @@ model-boundary delivery.
   line at 200 characters with `…`. A JS/TS binding or a Python
   module-level value stores its whole initializer as its signature, so
   one answer could run past 10 KB. The stored signature does not change,
-  and `expand` still gives the source.
+  and MCP `expand` still gives the source.
 - **`why` prints the Go caller rules only for Go symbols.** `why` on a
   function or a method with no resolved caller prints the two lines that
   start with `in Go` only when the file of the symbol is a Go file.
@@ -635,6 +677,13 @@ model-boundary delivery.
   `expand` still mention it. Which symbols match does not change. `why`
   no longer calls a package of this repository external: it says that it
   is a package of this repository and lists it as `(package)`.
+- **`why` names the file of its history.** The `usually changed with`,
+  `fix density` and `recent decisions` sections describe the whole file,
+  also under a symbol, so every symbol of one file shows the same
+  history. Each header now names that file in the same line, as in
+  `recent decisions  (whole file <path>)`, so the report keeps its line
+  count. The skills, the MCP `why` description and `seamark why --help`
+  say the same.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

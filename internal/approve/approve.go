@@ -113,7 +113,7 @@ func (r Registration) ServerName() string {
 }
 
 // ClaudeRegistration reads .mcp.json and finds the seamark server by the
-// same basename rule doctor and hooks use: exact "seamark", tolerating
+// basename rule of hooks.IsSeamarkBinary: exact "seamark", tolerating
 // the Windows suffix. Several matches prefer the conventional name, then
 // the first in name order, so repeated runs agree. A missing file is not
 // an error; an unparseable one is, because a rule prefix guessed from a

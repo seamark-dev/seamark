@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -65,11 +66,11 @@ func prepareFlagError(cmd *cobra.Command, prepare bool, paths int) error {
 // Every error exits 1, never 2, because a preparation blocks nothing.
 // An error prints nothing on stdout.
 func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON bool) error {
-	st, root, mined, err := openPrepareIndex(opts)
+	ix, err := openPrepareIndex(opts)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = st.Close() }()
+	defer func() { _ = ix.st.Close() }()
 
 	// The process directory has its links resolved by the rule of
 	// lessons --verify, so the two commands read one relative path alike.
@@ -81,20 +82,22 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 	// The badges of each check come from the capability report of this
 	// workspace, so preparation computes no badge. Every preparation runs
 	// this read, so the narrow reading reads only the hook documents.
-	capability := integration.LessonCapability(integration.Builtin().InspectLessonHooks(root), root, integration.SelfIdentity(version))
+	capability := integration.LessonCapability(integration.Builtin().InspectLessonHooks(ix.root), ix.root,
+		integration.SelfIdentity(version))
 
-	freshness, staleReason := prepareFreshness(st, root, mined)
+	freshness, staleReason := prepareFreshness(ix.st, ix.root, ix.mined)
 
 	// Config and ConfigErr stay nil, so Prepare loads lessons.yaml from
-	// root itself. The guidance status then names a file that does not
-	// decode as invalid, which loadLessonsConfig would hide.
-	p, err := delivery.Prepare(cmd.Context(), st, delivery.PrepareRequest{
-		Root:           root,
+	// the root itself. The guidance status then names a file that does
+	// not decode as invalid, which loadLessonsConfig would hide.
+	p, err := delivery.Prepare(cmd.Context(), ix.st, delivery.PrepareRequest{
+		Root:           ix.root,
 		CWD:            cwd,
 		Paths:          paths,
 		Surface:        delivery.SurfacePrepare,
-		MinedStatus:    mined,
+		MinedStatus:    ix.mined,
 		MinedFreshness: freshness, MinedStaleReason: staleReason,
+		MinedRoot:      ix.minedRoot,
 		SeamarkVersion: version,
 		Capability:     &capability,
 	})
@@ -138,9 +141,9 @@ func runLessonsPrepare(cmd *cobra.Command, opts *options, paths []string, asJSON
 // the index records does not match root now, else two empty strings. The
 // command refreshes no index, so a stale index can hold old mined
 // lessons. The rule is the one of status and orient. root is the root
-// that the index records, so the whole preparation describes that root
-// and no other root needs a name. A failed meta read says nothing about
-// freshness.
+// that the preparation describes, so the fingerprint compares the index
+// with the files that the preparation names. A failed meta read says
+// nothing about freshness.
 func prepareFreshness(st *store.Store, root, mined string) (freshness, reason string) {
 	if mined != delivery.MinedOK {
 		return "", ""
@@ -162,8 +165,23 @@ func prepareFreshness(st *store.Store, root, mined string) (freshness, reason st
 	return delivery.MinedStale, indexhealth.StaleWorkspaceChanged
 }
 
-// openPrepareIndex opens the index for a preparation and returns the
-// store, the root, and the mined status of the preparation.
+// prepareIndex is the index of one preparation and the roots that the
+// preparation reads.
+type prepareIndex struct {
+	st *store.Store
+	// root is the root that the preparation describes. Path
+	// normalization, lessons.yaml, the freshness fingerprint, and the
+	// firing log use it.
+	root string
+	// minedRoot is the root that the index records when the preparation
+	// describes another root, else "". It fills mined_root.
+	minedRoot string
+	// mined is the mined status of the preparation.
+	mined string
+}
+
+// openPrepareIndex opens the index for a preparation and returns it with
+// the roots and the mined status of the preparation.
 //
 // The index opens read-only, so the command never migrates or creates
 // a database. Without a database, or with a database that no index run
@@ -172,38 +190,75 @@ func prepareFreshness(st *store.Store, root, mined string) (freshness, reason st
 // gives the in-memory store too (unavailable), because the pins of
 // lessons.yaml need no mined data.
 //
-// The root is the root that the index records, else the git top level.
-// The edit hook and lessons --stats read the same root, so the firing
-// record of a preparation goes to the log that --stats reads.
-func openPrepareIndex(opts *options) (st *store.Store, root, mined string, err error) {
+// preparationRoot chooses the root.
+func openPrepareIndex(opts *options) (prepareIndex, error) {
 	// Like openHookIndex, the command widens -C to the git top level
 	// also with --db. Locate applies that rule.
 	ws, err := workspace.Locate(opts.workspace, opts.dbPath)
 	if err != nil {
-		return nil, "", "", err
+		return prepareIndex{}, err
 	}
 
 	// Probe reads the database without a write. Its root is the
 	// workspace root when it reads no meta.
 	p := workspace.Probe(ws)
 
+	ix := prepareIndex{}
+	ix.root, ix.minedRoot = preparationRoot(ws, p.Root)
+
 	switch p.State {
 	case workspace.IndexReady:
 		if indexed, openErr := store.OpenReadOnly(ws.DBPath); openErr == nil {
-			return indexed, p.Root, delivery.MinedOK, nil
+			ix.st, ix.mined = indexed, delivery.MinedOK
+
+			return ix, nil
 		}
 
-		mined = delivery.MinedUnavailable
+		ix.mined = delivery.MinedUnavailable
 	case workspace.IndexAbsent, workspace.IndexNotIndexed:
-		mined = delivery.MinedNoIndex
+		ix.mined = delivery.MinedNoIndex
 	default:
-		mined = delivery.MinedUnavailable
+		ix.mined = delivery.MinedUnavailable
 	}
 
-	st, err = store.OpenMemory()
+	ix.st, err = store.OpenMemory()
 	if err != nil {
-		return nil, "", "", err
+		return prepareIndex{}, err
 	}
 
-	return st, p.Root, mined, nil
+	return ix, nil
+}
+
+// preparationRoot returns the root that a preparation describes, and
+// the recorded root when the index records another root, else "".
+// recorded is the root that the probe of the index read.
+//
+// When the index records another root, as in a copied or moved checkout
+// before its first index run, the preparation describes the -C checkout.
+// Its paths, its lessons.yaml, and its firing log then belong to the
+// checkout that the caller edits. The pin writes refuse this state,
+// because one decision would change two repositories. A preparation
+// changes no pin and no ledger, so it prepares and names the recorded
+// root, as MCP change_set does. lessons --stats reads the log of the
+// recorded root until an index run in the checkout, so it counts these
+// records only after that run.
+//
+// Otherwise the preparation describes the recorded root. The edit hook
+// and lessons --stats read the same root, so the firing record goes to
+// the log that --stats reads.
+//
+// The test is the one of the status root line: outside git, a directory
+// inside the recorded root counts as that root. That test reads the
+// database again and can start git, so it runs only when the two paths
+// name two directories.
+func preparationRoot(ws workspace.Workspace, recorded string) (root, minedRoot string) {
+	if store.SameDirectory(recorded, ws.Root) {
+		return recorded, ""
+	}
+
+	if ownership.GatherCommand(ws.Root, ws.AbsoluteDB()).Root == ownership.RootSame {
+		return recorded, ""
+	}
+
+	return ws.Root, recorded
 }

@@ -586,6 +586,53 @@ func TestCheckNotesWholeFileDeletion(t *testing.T) {
 	assert.Contains(t, out, "mystery.go", "the deleted path must surface in the uncertainty note")
 }
 
+// TestCheckNotesAChangedValueInTextAndJSON proves that a change to a
+// const that a function passes to exec.CommandContext reads as unknown
+// reach in the text and in the JSON of check. The index records no edge
+// from the function to the const, so the change reaches no effect.
+func TestCheckNotesAChangedValueInTextAndJSON(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/fix\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte(`package main
+
+import (
+	"context"
+	"os/exec"
+	"time"
+)
+
+const timeout = 15 * time.Second
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	_ = exec.CommandContext(ctx, "git", "status").Run()
+}
+`), 0o644))
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -9 +9 @@\n" +
+		"-const timeout = 15 * time.Second\n+const timeout = 30 * time.Second\n"
+	note := "1 changed value or type has no effects of its own (timeout) — " +
+		"seamark does not track readers of a value, so its effect reach is unknown, not clean"
+
+	out, _, err := runIn(t, diff, "-C", root, "check")
+	require.NoError(t, err)
+	assert.Contains(t, out, "note: "+note)
+
+	out, _, err = runIn(t, diff, "-C", root, "check", "--json")
+	require.NoError(t, err)
+
+	var d gate.Decision
+	require.NoError(t, json.Unmarshal([]byte(out), &d))
+	assert.Equal(t, gate.VerdictAllow, d.Verdict)
+	assert.Empty(t, d.Effects)
+	assert.Equal(t, []string{note}, d.Notes)
+}
+
 func TestIndexBackfillsCoverageSummary(t *testing.T) {
 	root := writeFixture(t)
 	gitify(t, root)

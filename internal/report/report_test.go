@@ -202,7 +202,7 @@ func TestFixDensityLine(t *testing.T) {
 	var b strings.Builder
 	require.NoError(t, Why(&b, st, root, "api/hot.go"))
 
-	assert.Contains(t, b.String(), "fix density  4 of the last 7 commits here were fixes",
+	assert.Contains(t, b.String(), "fix density  4 of the last 7 commits to api/hot.go were fixes",
 		"two subject fixes, one revert, one body-only issue link")
 }
 
@@ -2385,6 +2385,8 @@ func TestLessonLedgerEmptyLinesNameTheGitHubCondition(t *testing.T) {
 // TestWhyPartnerLineKeepsItsForm pins the header and the partner line of
 // "usually changed with". The skills quote both texts in their reference on
 // reading Seamark, and the bench preflight parses the line, so both must stay.
+// The bench parser finds the header by its "usually changed with" prefix, so
+// the test finds it the same way and then checks the whole text.
 func TestWhyPartnerLineKeepsItsForm(t *testing.T) {
 	root := t.TempDir()
 
@@ -2417,12 +2419,14 @@ func TestWhyPartnerLineKeepsItsForm(t *testing.T) {
 	header := -1
 
 	for i, l := range lines {
-		if l == "usually changed with  (empirical, lift > 1 means beyond chance)" {
+		if strings.HasPrefix(l, "usually changed with") {
 			header = i
 		}
 	}
 
-	require.NotEqual(t, -1, header, "the skills quote this header:\n%s", b.String())
+	require.NotEqual(t, -1, header, "the bench parser finds the header by its prefix:\n%s", b.String())
+	assert.Equal(t, "usually changed with  (whole file internal/billing/tax.go; empirical, lift > 1 means beyond chance)",
+		lines[header], "the skills quote this header with <path> in place of the file")
 	require.Greater(t, len(lines), header+2)
 
 	// A copy of the bench preflight parser, so a change of the line form fails here first.

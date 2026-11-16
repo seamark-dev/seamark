@@ -163,7 +163,7 @@ Use --print to preview every change without writing anything.`,
 			}
 
 			run := initRun{
-				w: cmd.OutOrStdout(), root: root, bin: scaffold.BinaryPath(),
+				w: cmd.OutOrStdout(), root: root, bin: hooks.BinaryPath(),
 				gateMode: gateMode, printOnly: printOnly, approveTools: approveTools,
 				lessonChecks: lessonChecks, lessonExploration: lessonExploration,
 			}

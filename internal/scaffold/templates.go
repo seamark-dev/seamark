@@ -28,8 +28,8 @@ const starterPolicy = `# Seamark gate policy. Evaluated before an agent runs a c
 #   effect   list of tags the command classifies to ("infra:mutate" …)
 #   command  {name, argv, raw, is_push, is_force_push, target_branch, dynamic}
 #   env      {is_prod, is_dev, detected: {VAR: value…}}
-#   diff     {files, effects, unindexed_files}   (populated by ` + "`seamark check`" + `;
-#            unindexed_files is a count, not a list)
+#   diff     {files, effects, unindexed_files, unknown_reach_symbols}
+#            (populated by ` + "`seamark check`" + `; the last two are counts, not lists)
 
 ` + policyModeLineWarn + `
 

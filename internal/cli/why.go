@@ -18,7 +18,9 @@ func newWhyCmd(opts *options) *cobra.Command {
 		Use:   "why <symbol|file>",
 		Short: "Explain a symbol or file: definition, callers, co-change, decisions",
 		Long: `Answers, from the index: where is this defined, who calls it, which
-files empirically change together with it, and which commits explain it.
+files empirically change together with its file, and which commits explain
+that file. The history sections describe the whole file, also for a symbol:
+every symbol of one file shows the same history.
 Accepts a symbol name ("Store.Rebuild"), an FQN ("internal/store.Store.Rebuild"),
 or a repo-relative file path.
 

@@ -68,11 +68,12 @@ missing key.
 | `env.detected` | a map of the variables that `environment.detect` names and the process has set |
 | `env.is_prod`, `env.is_dev` | `is_prod` is true when a detected value, in lower case, contains one of `environment.prod_markers`; `is_dev` is its opposite |
 | `diff.files` | the changed paths of the diff, as a sorted list |
-| `diff.effects` | the effect tags that the diff can reach, as a sorted list |
+| `diff.effects` | the effect tags that the changed code reaches through its own calls, as a sorted list; the code that reads a changed value is not in it (see below) |
 | `diff.unindexed_files` | a number, not a list: the count of changed files with a change outside any indexed symbol (see below) |
+| `diff.unknown_reach_symbols` | a number, not a list: the count of changed value and type symbols with no effects of their own, whose readers seamark does not track (see below) |
 
-A rule over the count compares a number, for example
-`when: 'diff.unindexed_files > 0'`.
+A rule over a count compares a number, for example
+`when: 'diff.unindexed_files > 0 || diff.unknown_reach_symbols > 0'`.
 
 `seamark init` wires the gate into `.claude/settings.json` as a
 PreToolUse hook on Bash (`seamark gate --hook` — the payload is read
@@ -204,8 +205,13 @@ that it covers no change. Under enforcement it blocks with exit 2 and
 writes no audit entry; the MCP `check` tool returns an error result.
 
 Changed lines map to symbols; symbols carry transitively-propagated
-effect tags; the union is what the change can _ultimately_ reach — even
-when the edited function never touches a sink itself. A package-level
+effect tags; the union is what the changed code reaches through its own
+calls — even when the edited function never touches a sink itself. The
+union leaves out the code that reads a changed value: the index records
+calls, not reads, so a change to a constant that a function passes to
+`exec.CommandContext` reaches no effect, while the same value written
+inline in that function reaches `proc:exec`. The value note below makes
+such a change read as unknown, not clean. A package-level
 value is a symbol too and carries the calls of its initializer, and a
 class carries the calls of its body outside its methods, so an edit
 inside a table of handlers or a class field reaches what it calls. A
@@ -247,10 +253,46 @@ under enforcement block, more diffs, for example an import or
 doc-comment edit next to a function edit. A deletion with no context
 line between it and an edit inside a symbol is one group with that
 edit, so it counts for that symbol: the index holds only the symbol
-spans of the new side. Policy
+spans of the new side.
+
+The value note names the value and type symbols of a change whose
+readers seamark does not track:
+`1 changed value or type has no effects of its own (internal/git.timeout) — seamark does not track readers of a value, so its effect reach is unknown, not clean`.
+A value or type symbol is a Go `const`, `var` or `type`, a JS/TS
+module-level `const`, `let` or `var` that holds no function, an
+`interface`, `type`, `enum` or class, and a Python module-level
+assignment or class. A class field and a class attribute are code of
+their class, so an edit there names the class. A symbol is named when
+the change adds a line in it or removes lines inside it, outside any
+function or method, and the symbol carries no effects. Removed lines lie
+inside a symbol when the lines on both sides of them lie in it. A Python
+class has no closing line, so a removed last attribute lies inside the
+class too: it is indented deeper than the class line, and the line with
+text above it lies in the class. The line above a replaced or removed
+line counts for `diff.effects` and for the unknown-reach note, but it
+names no symbol, because that line did not change: an edit of one const
+of a block does not name the const above it. A removed top-level value,
+for example a const of a Go const block, leaves no symbol on the new
+side to name, so its removal gets no value note. A symbol with effects
+is not named, because `diff.effects` shows them. A class is not named
+when the same change group adds a line in one of its methods, removes
+lines inside it, or removes lines directly above it, for example an
+added method with an added blank line before it; that group reports
+the effects of the method. The line above a change does not count
+here: a replaced attribute, field or comment directly below a method
+names the class, and that line of the method still counts for
+`diff.effects`. The note names at most ten symbols in sorted
+order and counts the rest, and
+`diff.unknown_reach_symbols` counts them all. The note and the count
+never change `diff.effects` or the verdict of a rule that does not read
+the count.
+
+Policy
 rules over `diff.effects` gate merges the same way `gate` gates commands, and
-`diff.unindexed_files` exposes coverage blind spots to your rules —
-changed files the index cannot attribute never silently read as safe.
+`diff.unindexed_files` and `diff.unknown_reach_symbols` expose coverage
+blind spots to your rules — changed files the index cannot attribute and
+changed values whose readers it does not track never silently read as
+safe.
 `diff.files` and `diff.effects` reach the rules in sorted order, so a
 rule that indexes them gives the same verdict on every run. The
 `effect` list of `gate` is sorted in the same way.

@@ -461,6 +461,22 @@ func TestWhyDescriptionSaysWhatMCounts(t *testing.T) {
 	assert.Contains(t, desc, "M counted in the mined window")
 }
 
+// TestWhyDescriptionNamesTheFileGrain keeps the grain of the why history
+// in the tool description. The co-change and decision sections describe the
+// whole file, also for a symbol. An agent that reads them as the history of
+// the symbol draws a wrong conclusion.
+func TestWhyDescriptionNamesTheFileGrain(t *testing.T) {
+	var desc string
+
+	for _, d := range toolDefs {
+		if d["name"] == "why" {
+			desc, _ = d["description"].(string)
+		}
+	}
+
+	assert.Contains(t, desc, "history describes the whole file")
+}
+
 // TestChangeSetDescriptionSaysWhatMCounts keeps the meaning of M in the
 // change_set description. change_set prints the same unlabeled "N/M commits"
 // partner line as why, so both descriptions use the same words.

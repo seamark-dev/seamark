@@ -56,9 +56,8 @@ func editGateHook(t *testing.T, root string, edit func(entry, handler map[string
 }
 
 // initWithFixtureBinary runs a plain init that writes inspecttest.Binary
-// into the hooks. The test binary is not named seamark, so hooks that
-// name it are not seamark's own, and inspecttest treats its binary as
-// one that the client can start.
+// into the hooks. inspecttest treats its binary as one that the client
+// can start, so no file needs to exist at that path.
 func initWithFixtureBinary(t *testing.T, root string) {
 	t.Helper()
 

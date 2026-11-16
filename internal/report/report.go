@@ -196,9 +196,29 @@ func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, root, file st
 	return historySections(w, st, cfg, root, file)
 }
 
+// coChangeHeader is the header of the co-change section of why. The
+// section describes the whole file, also under a symbol, so the header
+// names the file. The text keeps the "usually changed with" prefix,
+// because the bench preflight parser opens the partner section on it.
+// The skills reference quotes this text with <path> in place of the file.
+// The path is repository text, so it is sanitized.
+func coChangeHeader(file string) string {
+	return "usually changed with  (whole file " + render.Sanitize(file) + "; empirical, lift > 1 means beyond chance)"
+}
+
+// decisionsHeader is the header of the decision section of why. The
+// decisions are the commits on the whole file, also under a symbol, so the
+// header names the file. The skills reference quotes this text too.
+func decisionsHeader(file string) string {
+	return "recent decisions  (whole file " + render.Sanitize(file) + ")"
+}
+
 // historySections prints the co-change and decision layers for a file —
 // the part of the report no structural tool can produce. root builds the
-// command that lists the lessons the section leaves out.
+// command that lists the lessons the section leaves out. A symbol report
+// passes the file that defines the symbol, so every symbol of one file
+// shows the same history. Each header names that file in the same line,
+// so the name adds no line to the report.
 func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, file string) error {
 	partners, err := st.CoChangePartners(file, 1.0, 10)
 	if err != nil {
@@ -206,7 +226,7 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 	}
 
 	if len(partners) > 0 {
-		fmt.Fprintf(w, "\nusually changed with  (empirical, lift > 1 means beyond chance)\n")
+		fmt.Fprintf(w, "\n%s\n", coChangeHeader(file))
 
 		// Function grain: name the functions of each partner that the
 		// shared commits actually touched — a factual report from git's
@@ -243,11 +263,13 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 	// Fix density: the deterministic hotspot signal — what share of this
 	// file's recent commits were corrections. Phrased over the last-K
 	// window so it decays as non-fix history accumulates, never an
-	// all-time tally. Needs a minimum of history to mean anything.
+	// all-time tally. Needs a minimum of history to mean anything. The line
+	// names the file, so that under a symbol a reader does not take the
+	// count for the commits of the symbol.
 	if len(decisions) >= MinFixDensityHistory {
 		if fixCount := FixCount(decisions); fixCount > 0 {
-			fmt.Fprintf(w, "\nfix density  %d of the last %d commits here were fixes\n",
-				fixCount, len(decisions))
+			fmt.Fprintf(w, "\nfix density  %d of the last %d commits to %s were fixes\n",
+				fixCount, len(decisions), render.Sanitize(file))
 		}
 	}
 
@@ -256,7 +278,7 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 			decisions = decisions[:10]
 		}
 
-		fmt.Fprintf(w, "\nrecent decisions\n")
+		fmt.Fprintf(w, "\n%s\n", decisionsHeader(file))
 		printDecisions(w, decisions)
 	}
 
@@ -265,7 +287,7 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 	// fourth repeat. The config decides what surfaces (mute/pin/threshold).
 	// The section reads the full list and shows a prefix of it, so it can
 	// count the lessons that it leaves out.
-	lessons, _, pins, err := scopeLessons(st, cfg, file, 0, 0)
+	lessons, _, pins, err := scopeLessons(st, "", cfg, file, 0, 0)
 	if err != nil {
 		return err
 	}
@@ -433,7 +455,15 @@ func loadLessonConfig(w io.Writer, root string) *reviews.Config {
 // filter. A limit of 0 means no cap, so a deliberate view can list every
 // lesson.
 func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
-	out, _, err := LessonsForScopeBudget(st, cfg, file, limit, 0)
+	return LessonsForScopeAt(st, "", cfg, file, limit)
+}
+
+// LessonsForScopeAt is LessonsForScope for a view that describes the
+// checkout at root. The confidence rank looks for the cited files under
+// root, for the reason that ReadEvidenceAt gives. An empty root uses the
+// root that the index records.
+func LessonsForScopeAt(st *store.Store, root string, cfg *reviews.Config, file string, limit int) ([]model.Lesson, error) {
+	out, _, _, err := scopeLessons(st, root, cfg, file, limit, 0)
 
 	return out, err
 }
@@ -445,7 +475,7 @@ func LessonsForScope(st *store.Store, cfg *reviews.Config, file string, limit in
 // point at them instead of hiding them. Mined lessons that the limit
 // cuts are not counted, because the pointer names pins only.
 func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) ([]model.Lesson, int, error) {
-	out, trimmed, _, err := scopeLessons(st, cfg, file, limit, pinBudget)
+	out, trimmed, _, err := scopeLessons(st, "", cfg, file, limit, pinBudget)
 
 	return out, trimmed, err
 }
@@ -453,7 +483,8 @@ func LessonsForScopeBudget(st *store.Store, cfg *reviews.Config, file string, li
 // scopeLessons is LessonsForScopeBudget that also returns the number of
 // pins in out. The pins come first in out. The count uses the rule of
 // surfacedMined, so a list header can name pins apart from mined lessons.
-func scopeLessons(st *store.Store, cfg *reviews.Config, file string, limit, pinBudget int) (
+// root is the root of the dead-path check, as in LessonsForScopeAt.
+func scopeLessons(st *store.Store, root string, cfg *reviews.Config, file string, limit, pinBudget int) (
 	out []model.Lesson, trimmed, pins int, err error,
 ) {
 	// A pin budget above the surface's own cap selects pins that the cap
@@ -497,7 +528,7 @@ func scopeLessons(st *store.Store, cfg *reviews.Config, file string, limit, pinB
 		mined = kept
 	}
 
-	annotate, err := confidenceAnnotator(st, applied, pinBudget > 0)
+	annotate, err := confidenceAnnotator(st, applied, root, pinBudget > 0)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -538,9 +569,10 @@ func surfacedMined(cfg *reviews.Config, mined []model.Lesson) int {
 // supporting evidence for every matched pin. Manually created pins have
 // no proposal history and are treated as strong. It is nil without
 // applied proposals. The multi-file selection uses the same pinAssessor
-// through ReadEvidence, so both selectors rank and annotate alike.
-func confidenceAnnotator(st *store.Store, applied []model.Proposal, ambient bool) (reviews.PinAnnotator, error) {
-	assessor, err := newPinAssessor(st, applied, time.Now())
+// through ReadEvidence, so both selectors rank and annotate alike. root
+// is the root of the dead-path check, as in newPinAssessor.
+func confidenceAnnotator(st *store.Store, applied []model.Proposal, root string, ambient bool) (reviews.PinAnnotator, error) {
+	assessor, err := newPinAssessor(st, applied, root, time.Now())
 	if err != nil {
 		return nil, err
 	}

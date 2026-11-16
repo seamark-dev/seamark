@@ -58,7 +58,20 @@ var errNoConfig = errors.New("report: lesson evidence needs at least one non-nil
 // reads them on every edit. A fold with another config can miss a
 // covered cluster, so HookSelection and ChangeSetSelection refuse it
 // with ErrForeignConfig.
+//
+// The confidence verdicts look for the cited files under the root that
+// the index records. ReadEvidenceAt names another root.
 func ReadEvidence(st *store.Store, files []string, cfgs ...*reviews.Config) (*Evidence, error) {
+	return ReadEvidenceAt(st, "", files, cfgs...)
+}
+
+// ReadEvidenceAt is ReadEvidence for a surface that describes the
+// checkout at root. The confidence verdicts look for the cited files
+// under root. In a copied or moved checkout, the index still records the
+// original root, whose files can differ or be gone. A cited file that is
+// absent there counts as deleted and lowers the rank of a pin of this
+// checkout. An empty root uses the root that the index records.
+func ReadEvidenceAt(st *store.Store, root string, files []string, cfgs ...*reviews.Config) (*Evidence, error) {
 	if len(cfgs) == 0 || slices.Contains(cfgs, nil) {
 		return nil, errNoConfig
 	}
@@ -77,7 +90,7 @@ func ReadEvidence(st *store.Store, files []string, cfgs ...*reviews.Config) (*Ev
 		return nil, err
 	}
 
-	assessor, err := newPinAssessor(st, applied, now)
+	assessor, err := newPinAssessor(st, applied, root, now)
 	if err != nil {
 		return nil, err
 	}
@@ -191,8 +204,10 @@ type pinAssessor struct {
 
 // newPinAssessor reads what the confidence verdicts need. It returns nil
 // when no applied proposal exists: then no pin carries a rank or a
-// note, and the selection keeps the file order of equal pins.
-func newPinAssessor(st *store.Store, applied []model.Proposal, now time.Time) (*pinAssessor, error) {
+// note, and the selection keeps the file order of equal pins. root is
+// the root of the dead-path check. An empty root reads the root that
+// the index records.
+func newPinAssessor(st *store.Store, applied []model.Proposal, root string, now time.Time) (*pinAssessor, error) {
 	byKey := make(map[reviews.PinKey]model.Proposal, len(applied))
 
 	var cited []int64
@@ -213,7 +228,9 @@ func newPinAssessor(st *store.Store, applied []model.Proposal, now time.Time) (*
 
 	// A missing root only turns off the dead-path check, so a read
 	// error of this value is not a selection error.
-	root, _ := st.GetMeta(store.MetaRepoRoot)
+	if root == "" {
+		root, _ = st.GetMeta(store.MetaRepoRoot)
+	}
 
 	return &pinAssessor{
 		byKey: byKey,

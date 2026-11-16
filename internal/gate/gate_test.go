@@ -390,4 +390,27 @@ func TestEvalCommandSortsEffects(t *testing.T) {
 	assert.Equal(t, []any{"db:write", "fs:write", "net:egress"}, lastEntry(t, root)["effects"])
 }
 
+// TestEvalCommandGivesEveryDiffKey proves that a rule over each diff
+// count runs for a command. The command gate fills no diff, and CEL
+// stops a rule with an error when it reads a missing key.
+func TestEvalCommandGivesEveryDiffKey(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: unknown-reach
+    when: 'diff.unindexed_files > 0 || diff.unknown_reach_symbols > 0'
+    message: part of this change has unknown reach
+`), 0o644))
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	c, err := effects.Load(root)
+	require.NoError(t, err)
+
+	d := evalCmd(t, p, c, root, "ls")
+	assert.Equal(t, VerdictAllow, d.Verdict)
+}
+
 // Audit log behaviour is covered in audit_test.go.

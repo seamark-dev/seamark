@@ -378,7 +378,10 @@ func Prepare(ctx context.Context, st *store.Store, req PrepareRequest) (*Prepara
 		return p, nil
 	}
 
-	ev, err := report.ReadEvidence(st, files, cfg)
+	// The preparation describes req.Root, and its paths name files there.
+	// So the confidence rank looks for the cited files in that checkout,
+	// also when the index records another root.
+	ev, err := report.ReadEvidenceAt(st, req.Root, files, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("select lessons: %w", err)
 	}

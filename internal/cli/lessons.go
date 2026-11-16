@@ -340,20 +340,7 @@ a file has no lessons.`,
 			case stats:
 				return runLessonsStats(cmd, opts)
 			case len(files) == 1 && strings.TrimSpace(files[0]) != "":
-				file := files[0]
-
-				st, root, err := openIndex(opts)
-				if err != nil {
-					return err
-				}
-				defer func() { _ = st.Close() }()
-
-				lessons, err := lessonsForFile(st, root, file)
-				if err != nil {
-					return err
-				}
-
-				return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, file), lessons, 0)
+				return runLessonsFile(cmd, opts, files[0])
 			default:
 				return fmt.Errorf("provide --file <path>, --list, --stats, --distill, --proposals, --verify, --prepare, " +
 					"--delivery, --apply, --dismiss, or --hook")
@@ -1294,15 +1281,82 @@ func readToolUsage(opts *options) mcpusage.Report {
 	return mcpusage.Read(ws.Root)
 }
 
+// runLessonsFile prints the --file view of one path: every pin and mined
+// lesson that applies to it.
+func runLessonsFile(cmd *cobra.Command, opts *options, path string) error {
+	st, p, ws, err := openIndexWorkspace(opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	root := fileViewRoot(opts, ws, p.Root, path)
+
+	lessons, err := lessonsForFile(st, root, path)
+	if err != nil {
+		return err
+	}
+
+	return report.PrintLessonReminder(cmd.OutOrStdout(), toRepoRel(root, path), lessons, 0)
+}
+
+// fileViewRoot returns the root that the --file view of path describes.
+// recorded is the root that the index records, and ws is the workspace
+// of openIndexWorkspace.
+//
+// The view follows the root rule of lessons --prepare, because each
+// omission of a preparation names this view as the place that shows the
+// omitted lesson. In a copied or moved checkout whose index records
+// another root, the view thus describes the -C checkout: the path
+// resolves there, and the pins come from its lessons.yaml. The mined
+// lessons still come from the open index.
+//
+// why in such a checkout describes the recorded root, and its route to
+// this view names an absolute path under that root. So an absolute path
+// inside the recorded root and outside the checkout keeps the recorded
+// root, and that route still shows the lessons that why counts.
+func fileViewRoot(opts *options, ws workspace.Workspace, recorded, path string) string {
+	// An ordinary checkout returns here, so it starts no second lookup
+	// and no git process.
+	if store.SameDirectory(recorded, ws.Root) {
+		return recorded
+	}
+
+	// With --db, openIndexWorkspace keeps -C as given. The preparation
+	// widens -C to the git top level also with --db, so the view does
+	// the same. A failed lookup keeps the first workspace.
+	if opts.dbPath != "" {
+		if located, err := workspace.Locate(opts.workspace, opts.dbPath); err == nil {
+			ws = located
+		}
+	}
+
+	root, other := preparationRoot(ws, recorded)
+	if other == "" || !filepath.IsAbs(path) {
+		return root
+	}
+
+	if _, inside := relInside(root, path); inside {
+		return root
+	}
+
+	if _, inside := relInside(other, path); inside {
+		return other
+	}
+
+	return root
+}
+
 // lessonsForFile normalizes path to repo-relative and returns the
 // config-filtered lessons for its area. The --file view is a deliberate
 // question, so it applies no pin budget and no lesson cap, and it keeps
 // every restatement. change_set, check, the preparation and the hooks
 // name this view as the command that shows what they leave out. The
 // edit hook is an injection the agent never asked for; the delivery
-// service applies its budget.
+// service applies its budget. The view describes root, so the
+// confidence rank looks for the cited files there.
 func lessonsForFile(st *store.Store, root, path string) ([]model.Lesson, error) {
-	return report.LessonsForScope(st, loadLessonsConfig(root), toRepoRel(root, path), 0)
+	return report.LessonsForScopeAt(st, root, loadLessonsConfig(root), toRepoRel(root, path), 0)
 }
 
 func loadLessonsConfig(root string) *reviews.Config {
@@ -1318,12 +1372,24 @@ func loadLessonsConfig(root string) *reviews.Config {
 // slash form the index stores; a path already relative is returned as-is.
 func toRepoRel(root, path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
-		if rel, err := filepath.Rel(root, abs); err == nil && !strings.HasPrefix(rel, "..") {
-			return filepath.ToSlash(rel)
+		if rel, inside := relInside(root, abs); inside {
+			return rel
 		}
 	}
 
 	return strings.TrimPrefix(filepath.ToSlash(path), "./")
+}
+
+// relInside returns the absolute path abs relative to root, in slash
+// form, and whether abs lies inside root. The test compares the two
+// strings, so it also works for a root that no longer exists.
+func relInside(root, abs string) (string, bool) {
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+
+	return filepath.ToSlash(rel), true
 }
 
 // openHookIndex opens the index for a hook. It prints no staleness

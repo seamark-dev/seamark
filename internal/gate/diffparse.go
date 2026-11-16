@@ -17,12 +17,43 @@ type parsedDiff struct {
 	// lines are the changed new-side lines of each path. A path with no
 	// hunk, for example a binary or a mode-only change, has no lines.
 	lines map[string][]uint32
-	// groups split the lines of each path by change group. A change
-	// group is the added and removed lines of a hunk with no context line
-	// between them. A group can have no line, for example a cut before
-	// line 1. The gate decides the unknown-reach note per group, so that
-	// one edit inside a symbol cannot hide another change of the file.
-	groups map[string][][]uint32
+	// groups split the lines of each path by change group. The gate
+	// decides the unknown-reach note per group, so that one edit inside a
+	// symbol cannot hide another change of the file.
+	groups map[string][]changeGroup
+}
+
+// changeGroup is the added and removed lines of a hunk with no context
+// line between them.
+type changeGroup struct {
+	// lines are the recorded new-side lines: the added lines and the
+	// lines next to each run of removed lines. The gate finds the touched
+	// symbols and their effects by these lines. A group can have no line,
+	// for example a cut before line 1.
+	lines []uint32
+	// added are the new-side lines that the group adds. Unlike the lines
+	// next to a cut, each of them changed.
+	added []uint32
+	// cuts are the places of the runs of removed lines of the group.
+	cuts []cutSite
+}
+
+// cutSite is the place of one run of removed lines on the new side. The
+// value note uses it to find the symbol that lost the lines, because the
+// line above the run often belongs to an unchanged neighbour.
+type cutSite struct {
+	// above is the new-side line directly above the run, or 0 when the
+	// run is at the start of the file.
+	above uint32
+	// textAbove is the last line with text above the run in the hunk. It
+	// is above when the hunk has no such line.
+	textAbove uint32
+	// below is the new-side line directly below the run. For a run that
+	// added lines replace, it is the first added line.
+	below uint32
+	// indent is the byte width of the leading white space of the first
+	// removed line with text. A run with no text line has 0.
+	indent uint32
 }
 
 // parseDiff reads a unified diff. EvalDiff and ChangedPaths both use
@@ -35,7 +66,7 @@ type parsedDiff struct {
 // context lines of a hunk do not, because they are not part of the
 // change.
 func parseDiff(diffText string) parsedDiff {
-	out := parsedDiff{lines: map[string][]uint32{}, groups: map[string][][]uint32{}}
+	out := parsedDiff{lines: map[string][]uint32{}, groups: map[string][]changeGroup{}}
 
 	// register adds a path even before, or without, any hunk. Binary,
 	// mode-only, rename-only, and empty-file changes have no hunk, yet
@@ -123,9 +154,9 @@ func parseDiff(diffText string) parsedDiff {
 
 				// The flat lines and the groups come from the same
 				// callback, so they always hold the same lines.
-				h.start(m, gitRecord, func(group []uint32) {
+				h.start(m, gitRecord, func(group changeGroup) {
 					if file != "" {
-						out.lines[file] = append(out.lines[file], group...)
+						out.lines[file] = append(out.lines[file], group.lines...)
 						out.groups[file] = append(out.groups[file], group)
 					}
 				})
@@ -139,26 +170,25 @@ func parseDiff(diffText string) parsedDiff {
 }
 
 // hunkWalker reads the body lines of one hunk and records the changed
-// new-side lines. It collects the lines of each change group and gives
-// them to emit when the group closes.
+// new-side lines. It collects each change group and gives it to emit
+// when the group closes.
 type hunkWalker struct {
 	oldLeft, newLeft int    // body lines that the header still announces
 	next             uint32 // the new-side number of the next line
 	lastText         uint32 // the last new-side line with text in this hunk, or 0
 	cutOpen          bool   // a run of removed lines with no added line yet
 	cutText          bool   // the run has a removed line with text
-	cutIndented      bool   // the first removed line with text is indented
+	cutIndent        uint32 // the indent width of the first removed line with text
 	beforeFirst      bool   // the hunk lies before new-side line 1
 	git              bool   // the record starts with a diff --git line
 	groupOpen        bool   // an added or removed line came after the last context line
-	group            []uint32
-	emit             func(group []uint32)
+	group            changeGroup
+	emit             func(group changeGroup)
 }
 
 // start begins a hunk from the matches of hunkRe. git tells that the
-// record starts with a diff --git line. emit gets the recorded lines of
-// each change group.
-func (h *hunkWalker) start(m []string, git bool, emit func(group []uint32)) {
+// record starts with a diff --git line. emit gets each change group.
+func (h *hunkWalker) start(m []string, git bool, emit func(group changeGroup)) {
 	h.oldLeft = hunkCount(m[1])
 	h.newLeft = hunkCount(m[3])
 	newStart, _ := strconv.Atoi(m[2])
@@ -178,7 +208,7 @@ func (h *hunkWalker) start(m []string, git bool, emit func(group []uint32)) {
 	h.lastText = 0
 	h.cutOpen = false
 	h.git = git
-	h.groupOpen, h.group = false, nil
+	h.groupOpen, h.group = false, changeGroup{}
 	h.emit = emit
 }
 
@@ -221,11 +251,13 @@ func (h *hunkWalker) step(line string) bool {
 		// lines above the run count too.
 		if h.cutOpen {
 			h.recordAbove()
+			h.recordCutSite()
 		}
 
 		h.cutOpen = false
 		h.groupOpen = true
 		h.record(h.next)
+		h.group.added = append(h.group.added, h.next)
 		h.advance(line[1:])
 		h.newLeft--
 	case strings.HasPrefix(line, "-") && h.oldLeft > 0:
@@ -265,7 +297,23 @@ func (h *hunkWalker) end() {
 
 // record adds one new-side line to the open change group.
 func (h *hunkWalker) record(n uint32) {
-	h.group = append(h.group, n)
+	h.group.lines = append(h.group.lines, n)
+}
+
+// recordCutSite adds the place of the open run of removed lines to the
+// open change group. The next new-side line is the line below the run.
+func (h *hunkWalker) recordCutSite() {
+	site := cutSite{textAbove: h.lastText, below: h.next, indent: h.cutIndent}
+
+	if h.next > 1 {
+		site.above = h.next - 1
+	}
+
+	if site.textAbove == 0 {
+		site.textAbove = site.above
+	}
+
+	h.group.cuts = append(h.group.cuts, site)
 }
 
 // closeGroup gives the open change group to emit. It emits a group with
@@ -276,7 +324,7 @@ func (h *hunkWalker) closeGroup() {
 	}
 
 	h.emit(h.group)
-	h.groupOpen, h.group = false, nil
+	h.groupOpen, h.group = false, changeGroup{}
 }
 
 // advance moves past one new-side line with the given text. A line with
@@ -291,15 +339,15 @@ func (h *hunkWalker) advance(text string) {
 
 // noteCutLine adds one removed line with the given text to the current
 // run. A blank removed line shows no indentation, so the first removed
-// line with text decides whether the run is indented.
+// line with text decides the indent of the run.
 func (h *hunkWalker) noteCutLine(text string) {
 	if !h.cutOpen {
-		h.cutOpen, h.cutText, h.cutIndented = true, false, false
+		h.cutOpen, h.cutText, h.cutIndent = true, false, 0
 	}
 
 	if !h.cutText && strings.TrimSpace(text) != "" {
 		h.cutText = true
-		h.cutIndented = text[0] == ' ' || text[0] == '\t'
+		h.cutIndent = uint32(len(text) - len(strings.TrimLeft(text, " \t")))
 	}
 }
 
@@ -315,7 +363,7 @@ func (h *hunkWalker) noteCutLine(text string) {
 // run starts a new top-level item, so the item above lost nothing. For
 // example, a comment edit above c must not touch b above the blank line.
 func (h *hunkWalker) recordAbove() {
-	if h.cutIndented && h.lastText > 0 && h.lastText+1 < h.next {
+	if h.cutIndent > 0 && h.lastText > 0 && h.lastText+1 < h.next {
 		h.record(h.lastText)
 	}
 
@@ -342,6 +390,7 @@ func (h *hunkWalker) closeCut() {
 	}
 
 	h.recordAbove()
+	h.recordCutSite()
 	h.record(h.next)
 }
 

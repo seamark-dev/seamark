@@ -81,10 +81,12 @@ the review comments on its PR count as one event — and power a
 deterministic hotspot line in `why`:
 
 ```text
-fix density  9 of the last 20 commits here were fixes
+fix density  9 of the last 20 commits to internal/index/index.go were fixes
 ```
 
 phrased over a recent window so it decays as calmer history accumulates.
+The line counts the commits on the whole file, also under a symbol, so
+it names the file.
 
 The two sources degrade independently: review mining needs `gh`
 authenticated and a github.com remote; fix mining works offline on any
@@ -436,7 +438,11 @@ Every distilled pin carries a tier — **strong / fair / weak** —
 recomputed on each read from what its citations still support: distinct
 events (a review comment and the fix commit answering it count once),
 source corroboration (review AND fix beats either alone), recency, and
-whether the cited files still exist in the workspace. Nothing is stored
+whether the cited files still exist in the workspace. In a copied or
+moved checkout whose index still records the original root, a
+preparation and `--file` describe the checkout, so they look for the
+cited files there. The other surfaces look in the root that the index
+records. Nothing is stored
 and nothing is model-scored, so a pin's tier honestly decays as its
 evidence does. Confidence is not decoration: pins compete for the
 hook's injection budget by tier before specificity, a weak pin that
@@ -732,10 +738,27 @@ one theme never spend two slots:
   nothing to qualify. `mined_freshness` is `stale` here and
   `not-refreshed` from `change_set`. Beside `stale`,
   `mined_stale_reason` says why: `workspace-changed`, or
-  `other-version` when another seamark version built the index. `mined_root` (from `change_set`
-  only) names the root that the index records when that root is another
-  repository. The command prepares for the root that the index records,
-  so it never names one. The command exits 0 also
+  `other-version` when another seamark version built the index. `mined_root`
+  names the root that the index records when that root is another
+  repository. In a copied or moved checkout whose index still records the
+  original root, the command prepares for the `-C` checkout, as
+  `change_set` does: a relative or an absolute path of the checkout
+  resolves there, the pins come from its own `.seamark/lessons.yaml`, and
+  the firing record goes to its log. The mined lessons come from the
+  index, so `mined_root` names the original root, and the text says that
+  the mined lessons come from an index that records it. A path inside the
+  original root is outside the workspace. The `seamark lessons --file
+  <path>` command of each omission follows the same rule, so it shows the
+  pins of the checkout: there, `--file` reads a relative path, or an
+  absolute path of the checkout, against the checkout and its
+  `lessons.yaml`. `why` in such a checkout describes the original root
+  and names an absolute path there, so `--file` reads an absolute path
+  inside the original root against that root. `lessons --stats` counts these
+  records after `seamark index` runs in the checkout. A `--db` that
+  records another repository gives the same preparation for the `-C`
+  checkout. `change_set`
+  refreshes the index first, and that refresh rebuilds a copied default
+  index, so its document then names no `mined_root`. The command exits 0 also
   when no pin applies, and 1 when it gets no path, when no path is inside
   the workspace, or when another mode flag is given; it never exits 2,
   because it blocks nothing. Preparation keeps no delivery state: every

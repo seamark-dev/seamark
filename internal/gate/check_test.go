@@ -409,10 +409,10 @@ require_approval:
 	assert.Empty(t, d.Notes, "the change lies in an indexed symbol")
 }
 
-// TestEvalDiffInsideVarWithoutCallsIsAttributedAndClean pins that a change
-// in a var with no call counts as attributed and reaches nothing: no note
-// and no effect.
-func TestEvalDiffInsideVarWithoutCallsIsAttributedAndClean(t *testing.T) {
+// TestEvalDiffInsideVarWithoutCallsNotesUnknownReach pins that a change in
+// a var with no call counts as attributed and reaches no effect. It is
+// not clean: no edge records who reads the var, so a note names it.
+func TestEvalDiffInsideVarWithoutCallsNotesUnknownReach(t *testing.T) {
 	st, root := indexedWorkspace(t, map[string]string{
 		"go.mod":  "module example.com/cx\n",
 		"main.go": varInitFixture,
@@ -432,7 +432,7 @@ func TestEvalDiffInsideVarWithoutCallsIsAttributedAndClean(t *testing.T) {
 	d, err := EvalDiff(p, st, diff, SourceStdin)
 	require.NoError(t, err)
 	assert.Empty(t, d.Effects)
-	assert.Empty(t, d.Notes)
+	assert.Equal(t, []string{valueNote1("plain")}, d.Notes)
 	assert.Equal(t, VerdictAllow, d.Verdict)
 }
 
@@ -456,7 +456,8 @@ export class Reader {
 // TestEvalDiffOnAClassFieldReachesEffects proves that a change on a class
 // field line reports the effect of the call in the field, and that a
 // change on a field of a class whose write lies only in a method reports
-// none, because the method's calls are not copied onto the class.
+// none, because the method's calls are not copied onto the class. That
+// class carries no effect, so a note says that its reach is unknown.
 func TestEvalDiffOnAClassFieldReachesEffects(t *testing.T) {
 	st, root := indexedWorkspace(t, map[string]string{"store.ts": classFixture})
 
@@ -487,7 +488,7 @@ func TestEvalDiffOnAClassFieldReachesEffects(t *testing.T) {
 	d, err = EvalDiff(p, st, label, SourceStdin)
 	require.NoError(t, err)
 	assert.Empty(t, d.Effects, "the write of dump stays with dump")
-	assert.Empty(t, d.Notes)
+	assert.Equal(t, []string{valueNote1("store.Reader")}, d.Notes)
 }
 
 // TestEvalDiffOnAFieldReceiverCallReachesEffects proves that an edit of a

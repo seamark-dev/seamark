@@ -35,15 +35,20 @@ calls (8)  — 3 resolved by name match only
   [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
   ...
 
-usually changed with  (empirical, lift > 1 means beyond chance)
+usually changed with  (whole file internal/gate/gate.go; empirical, lift > 1 means beyond chance)
    6/58  commits  lift 4.1   internal/effects/effects.go  · mostly MatchCommand, Load
-recent decisions
+
+recent decisions  (whole file internal/gate/gate.go)
   2026-07-26  ...  Implement Python parser
 ```
 
 Read it top to bottom: this function _can ultimately spawn a process_
 (one hop away), here is its production surface (test callers collapse to
-a count instead of burying it), and here is the commit trail. Every call
+a count instead of burying it), and here is the commit trail. The
+history sections (`usually changed with`, `fix density`, and `recent
+decisions`) describe the whole file that defines the symbol, and each
+header names that file: commits touch files, so every symbol of
+`internal/gate/gate.go` shows the same history. Every call
 edge declares how it was derived (`[qualified]`, `[same-package]`,
 `[same-class]`, or the low-confidence `[unique-name]`), so you always
 know how much to trust an edge. Edges of the `[qualified]`,
@@ -51,7 +56,8 @@ know how much to trust an edge. Edges of the `[qualified]`,
 `[unique-name]` guesses follow, so the 15-line cut drops guesses first.
 The `sig` line is cut at 200 characters with `…`: a JS/TS binding or a
 Python module-level value keeps its whole initializer as its signature,
-and `seamark expand <symbol>` gives the source.
+and the MCP `expand` tool gives the source. The CLI has no `expand`
+command, so read the file at the `defined` line directly.
 A function or method with no caller edge prints
 `callers (0)  — none resolved` and a note: a call by a method name that
 several methods share, or through a function value, gets no edge, and,
@@ -286,7 +292,10 @@ when a changed file has changes outside every indexed symbol, so absence of evid
 safety. A change inside a package-level value initializer or a class
 field lies in the symbol of that value or class, and the symbol carries
 the calls there, so the change reports their effects instead of reading
-as reaching nothing.
+as reaching nothing. A change to a value or type with no effects of its
+own, such as a constant that a function passes to a sink, gets a second
+note: seamark does not track readers of a value, so its reach is
+unknown, not clean.
 
 Installation health is the other half:
 
@@ -372,6 +381,9 @@ table in [Data flow](data-flow.md).
   spec with several names (`var a, b = f(), g()`) carries every call of
   that spec. A Go `const` initializer is not mined, and a function value
   without a call (`var prepare = delivery.Prepare`) still gets no edge.
+  No edge records that a function reads a value, so a change to a value
+  reaches none of the effects of its readers; `check` names such a value
+  in a note when it has no effects of its own.
   A JS/TS or Python class carries the calls of its body outside its
   methods: field initializers, static blocks, class attributes, and a
   method decorator that the grammar places outside the method (TypeScript
