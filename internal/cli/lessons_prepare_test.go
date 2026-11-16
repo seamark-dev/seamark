@@ -1038,6 +1038,41 @@ func TestLessonsPrepareInACopiedCheckout(t *testing.T) {
 	})
 }
 
+// TestLessonsPrepareInADirectoryInsideAPlainRoot covers -C with a
+// directory inside the recorded root outside git, with --db of that
+// root. The directory marks no checkout, so it counts as the recorded
+// root, as for the pin writes and the status root line. The preparation
+// and the --file view describe that root: the path is relative to it,
+// the pins come from its lessons.yaml, and no mined_root is named.
+func TestLessonsPrepareInADirectoryInsideAPlainRoot(t *testing.T) {
+	plain := filepath.Join(rootWriteDir(t), "plain")
+	verifyWrite(t, plain, "go.mod", "module example.com/plain\n")
+	verifyWrite(t, plain, "pkg/b.go", "package pkg\n")
+	verifyWrite(t, plain, ".seamark/lessons.yaml",
+		"pin:\n  - rule: plain-root\n    region: pkg/\n    note: The pin of the recorded root.\n")
+
+	_, err := run(t, "-C", plain, "index")
+	require.NoError(t, err)
+
+	inside := filepath.Join(plain, "pkg")
+	file := filepath.Join(inside, "b.go")
+	db := []string{"--db", store.DefaultPath(plain)}
+
+	p := prepareJSON(t, inside, append([]string{file}, db...)...)
+	assert.Equal(t, []string{"pkg/b.go"}, preparedPaths(p))
+	assert.Equal(t, []string{"plain-root"}, preparedRules(p))
+	assert.Equal(t, delivery.MinedOK, p.Guidance.MinedStatus)
+	assert.Empty(t, p.Guidance.MinedRoot)
+
+	assert.Len(t, prepareFirings(t, plain), 1, "the firing record goes to the log of the recorded root")
+	assert.NoDirExists(t, filepath.Join(inside, ".seamark"), "the directory gets no state of its own")
+
+	view, err := run(t, append([]string{"-C", inside}, append(db, "lessons", "--file", file)...)...)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"plain-root"}, pinLines(view))
+	assert.Contains(t, view, "review lessons for pkg/b.go")
+}
+
 // TestLessonsPrepareMatchesChangeSetInACopy proves that the two
 // preparation surfaces agree in a copy whose index records the origin:
 // MCP change_set and lessons --prepare describe the copy and read its
