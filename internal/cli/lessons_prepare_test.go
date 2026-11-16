@@ -1179,6 +1179,57 @@ func TestLessonsFileInACopiedCheckout(t *testing.T) {
 	})
 }
 
+// TestLessonsFileWidensASubdirectoryWithDB covers -C at a subdirectory
+// of a copied or moved checkout, with --db of the index of that
+// checkout. The index records another root. With --db, the workspace of
+// the index readers keeps -C as given, so the --file view widens -C to
+// the git top level itself, as lessons --prepare does. The view then
+// describes the checkout: the path is relative to its top level, and
+// the pins come from its lessons.yaml. A view of the subdirectory finds
+// no lessons.yaml there and shows no pin.
+func TestLessonsFileWidensASubdirectoryWithDB(t *testing.T) {
+	view := func(t *testing.T, checkout string) {
+		t.Helper()
+
+		sub := filepath.Join(checkout, "src")
+		file := filepath.Join(sub, "handler.go")
+		db := []string{"--db", store.DefaultPath(checkout)}
+
+		out, err := run(t, append([]string{"-C", sub}, append(db, "lessons", "--file", file)...)...)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"prefer-errors-is"}, pinLines(out), "the pins of the checkout")
+		assert.Contains(t, out, "review lessons for src/handler.go")
+
+		p := prepareJSON(t, sub, append([]string{file}, db...)...)
+		assert.Equal(t, []string{"src/handler.go"}, preparedPaths(p))
+		assert.Equal(t, preparedRules(p), pinLines(out), "the view and the preparation describe the same root")
+	}
+
+	t.Run("a copied checkout", func(t *testing.T) {
+		origin, copied := prepareCopy(t)
+
+		// The origin gets a pin on src/ under another rule, so a view of
+		// the origin shows origin-only.
+		verifyWrite(t, origin, ".seamark/lessons.yaml",
+			"pin:\n  - rule: origin-only\n    region: src/\n    note: The pin of the origin.\n")
+
+		view(t, copied)
+	})
+
+	t.Run("a moved checkout", func(t *testing.T) {
+		root := prepareRepo(t, true)
+
+		recorded, err := filepath.EvalSymlinks(root)
+		require.NoError(t, err)
+
+		moved := filepath.Join(rootWriteDir(t), "moved")
+		require.NoError(t, os.Rename(recorded, moved))
+
+		view(t, moved)
+		assert.NoDirExists(t, recorded, "the view never creates the recorded root")
+	})
+}
+
 // prepareRankLessons holds an applied pin and a hand-written pin on src
 // under a change budget of one. guard comes first, so it wins a tie.
 const prepareRankLessons = `change_budget: 1
