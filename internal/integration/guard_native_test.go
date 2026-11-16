@@ -941,6 +941,173 @@ func TestNativeRecordClaudeGuardRecording(t *testing.T) {
 	})
 }
 
+// The parts of the error that codex-cli 0.169.0 returns as the tool
+// output when its own patch check refuses an update section without a
+// hunk. A pure move is such a section: an Update File header, a Move to
+// line, and nothing else. The guard recording of 0.169.0 shows this error
+// for its move case, and no hook ran for that call.
+const (
+	codexPatchCheckFailed = "apply_patch verification failed"
+	codexEmptyUpdate      = "Update file hunk for path"
+	codexEmptyHunk        = "is empty"
+)
+
+// codexRefusedEmptyUpdate reports whether Codex refused the patch of a
+// case in its own patch check, before any hook. The run then holds no
+// PreToolUse apply_patch payload, and a tool output in a rollout of the
+// run holds all parts of the empty-update error. The payloads hold no
+// tool output, so the check reads each rollout that a payload of the run
+// names.
+func (r guardRecording) codexRefusedEmptyUpdate(t *testing.T, name string) bool {
+	t.Helper()
+
+	if r.has(name, "PreToolUse", codexApplyPatch) {
+		return false
+	}
+
+	seen := map[string]bool{}
+
+	for _, e := range r.events[r.runs[name]] {
+		hint := nativeString(e.raw, "transcript_path")
+		if hint == "" || seen[hint] {
+			continue
+		}
+
+		seen[hint] = true
+
+		for _, output := range codexToolOutputs(t, r.transcript(t, hint)) {
+			if strings.Contains(output, codexPatchCheckFailed) && strings.Contains(output, codexEmptyUpdate) &&
+				strings.Contains(output, codexEmptyHunk) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// codexToolOutputs returns the text of each tool output in a Codex
+// rollout. A code-mode call writes its output as a list of text items,
+// and a function call can write one string. The items of one output
+// join with a newline.
+func codexToolOutputs(t *testing.T, rollout string) []string {
+	t.Helper()
+
+	var outputs []string
+
+	for _, line := range timingLines(t, rollout) {
+		var rec struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type   string          `json:"type"`
+				Output json.RawMessage `json:"output"`
+			} `json:"payload"`
+		}
+		require.NoError(t, json.Unmarshal(line, &rec), rollout)
+
+		if rec.Type != "response_item" ||
+			(rec.Payload.Type != "custom_tool_call_output" && rec.Payload.Type != "function_call_output") {
+			continue
+		}
+
+		var text string
+		if json.Unmarshal(rec.Payload.Output, &text) == nil {
+			outputs = append(outputs, text)
+
+			continue
+		}
+
+		var items []struct {
+			Text string `json:"text"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Payload.Output, &items), rollout)
+
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			parts = append(parts, item.Text)
+		}
+
+		outputs = append(outputs, strings.Join(parts, "\n"))
+	}
+
+	return outputs
+}
+
+// codexEmptyUpdateNote is the skip note of a Codex case whose patch the
+// client refused in its own patch check. No hook ran, so the case holds
+// no deny evidence, and the note names that refusal as the cause.
+func codexEmptyUpdateNote(name, version string) string {
+	return "case " + name + ": codex-cli " + version + " refused the patch in its own patch check before any hook " +
+		"(an update section without a hunk is empty), so no PreToolUse apply_patch payload exists"
+}
+
+// TestCodexRefusedEmptyUpdateReadsTheRollout checks the skip condition
+// of a refused pure move on synthetic rollouts. It gives no native proof.
+func TestCodexRefusedEmptyUpdateReadsTheRollout(t *testing.T) {
+	const (
+		home    = "/home/native"
+		refusal = "Script error:\napply_patch verification failed: invalid hunk at line 2, " +
+			"Update file hunk for path 'sentinel/move.txt' is empty"
+	)
+
+	record := func(payload map[string]any) string {
+		data, err := json.Marshal(map[string]any{"type": "response_item", "payload": payload})
+		require.NoError(t, err)
+
+		return string(data)
+	}
+
+	output := func(kind string, value any) string {
+		return record(map[string]any{"type": kind, "call_id": "call_1", "output": value})
+	}
+
+	items := []map[string]string{{"type": "input_text", "text": "Script failed\n"}, {"type": "input_text", "text": refusal}}
+	message := record(map[string]any{"type": "message", "role": "assistant",
+		"content": []map[string]string{{"type": "output_text", "text": refusal}}})
+
+	for _, tc := range []struct {
+		name    string
+		lines   []string
+		pre     bool
+		refused bool
+	}{
+		{"a code-mode output with the error and no PreToolUse", []string{output("custom_tool_call_output", items)}, false, true},
+		{"a function output with the error and no PreToolUse", []string{output("function_call_output", refusal)}, false, true},
+		{"a PreToolUse apply_patch payload", []string{output("custom_tool_call_output", items)}, true, false},
+		{"an error without its empty-hunk part", []string{output("function_call_output",
+			strings.TrimSuffix(refusal, " is empty"))}, false, false},
+		{"the error only in a model message", []string{message}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeLines(t, filepath.Join(dir, "sessions", "rollout-1.jsonl"), tc.lines...)
+
+			transcript := home + "/.codex/sessions/rollout-1.jsonl"
+			events := []timingEvent{
+				{hook: nativeHook{Event: "UserPromptSubmit"}, raw: map[string]any{"transcript_path": transcript}},
+			}
+
+			if tc.pre {
+				events = append(events, timingEvent{hook: nativeHook{Event: "PreToolUse"},
+					raw: map[string]any{"transcript_path": transcript, "tool_name": codexApplyPatch}})
+			}
+
+			events = append(events, timingEvent{hook: nativeHook{Event: "Stop"}, raw: map[string]any{"transcript_path": transcript}})
+
+			r := guardRecording{timingRecording: timingRecording{
+				dir: dir, runs: map[string]int{guardMoveViolation: 4}, events: map[int][]timingEvent{4: events},
+			}}
+			r.manifest.Placeholders.Home = home
+
+			assert.Equal(t, tc.refused, r.codexRefusedEmptyUpdate(t, guardMoveViolation))
+		})
+	}
+
+	assert.Equal(t, "case move-violation: codex-cli 0.169.0 refused the patch in its own patch check before any hook "+
+		"(an update section without a hunk is empty), so no PreToolUse apply_patch payload exists",
+		codexEmptyUpdateNote(guardMoveViolation, "0.169.0"))
+}
+
 func TestNativeRecordCodexGuardRecording(t *testing.T) {
 	r := loadGuardRecording(t, CodexID, codexGuardCases...)
 
@@ -961,6 +1128,12 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 			[]string{"notes/multi-ok.txt", "sentinel/multi.txt"}},
 	} {
 		t.Run("the patch of "+tc.name+" is denied before it writes", func(t *testing.T) {
+			// codex-cli 0.169.0 refuses a pure move in its own patch check,
+			// before any hook. That call has no payload to replay.
+			if tc.name == guardMoveViolation && r.codexRefusedEmptyUpdate(t, tc.name) {
+				t.Skip(codexEmptyUpdateNote(tc.name, r.manifest.ClientVersion))
+			}
+
 			e, deny := r.assertDenied(t, tc.name, codexApplyPatch)
 			op := guardOp(t, CodexID, e)
 

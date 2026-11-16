@@ -37,7 +37,11 @@ import (
 //     section without lines gives an empty content, not a nil one.
 //   - A delete section gives OpPatchDelete.
 //   - An update section with a move and no other line gives
-//     OpPatchMove: the native tool moves the file and keeps its content.
+//     OpPatchMove, so the guard checks both paths. codex-cli 0.164.0
+//     sent such a section to the PreToolUse hook, and the guard denied
+//     it. codex-cli 0.169.0 refuses it in its own patch check before any
+//     hook, because the section has no hunk. No recording shows that the
+//     native tool applies such a section.
 //   - Every other update section gives OpPatchUpdate. Any line below
 //     the header, a move line excepted, sets Hunks, because the content
 //     of a hunk has no verified projection yet.
