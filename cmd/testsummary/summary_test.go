@@ -54,8 +54,8 @@ func render(t *testing.T, stream string, stderr *excerpt) (summary *Summary, lin
 
 func joined(lines []string) string { return strings.Join(lines, "\n") }
 
-// assertBudget enforces AC-3's failure bounds: at most 160 lines, at most
-// 32 KiB total, and no logical line above 2 KiB.
+// assertBudget enforces the failure bounds of the compact summary: at
+// most 160 lines, at most 32 KiB total, and no logical line above 2 KiB.
 func assertBudget(t *testing.T, lines []string) {
 	t.Helper()
 	require.LessOrEqual(t, len(lines), failureMaxLines)

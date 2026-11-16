@@ -161,7 +161,7 @@ func newCodexRecordFixture(t *testing.T) *codexRecordFixture {
 			`"cwd":"{REPO}","creator_account_id":"acct-operator","base_instructions":{"text":"system"},`+
 			`"cli_version":"0.169.0","context_window":{"window_id":"{WR}"}}}`,
 		`{"timestamp":"{T1}","type":"response_item","payload":{"type":"additional_tools","id":"at_{AT}","role":"developer",`+
-			`"tools":[{"type":"namespace","name":"mcp__cua_repl","description":"UI automation through cua_repl",`+
+			`"tools":[{"type":"namespace","name":"mcp__ui_tool","description":"UI automation through ui_tool",`+
 			`"tools":[{"type":"function","name":"js"}]}]}}`,
 		`{"timestamp":"{T1}","type":"response_item","payload":{"type":"message","id":"msg_{MSGU}","role":"user",`+
 			`"content":[{"type":"input_text","text":"<environment_context>\n  <cwd>{REPO}</cwd>\n  `+
@@ -347,7 +347,7 @@ func TestNativeRecordSanitizeReplacesCodexIDs(t *testing.T) {
 				assert.NotContains(t, name, real, "the file name %s holds a real ID", name)
 			}
 
-			for _, gone := range []string{"T10-41-", "/Users/", "<timezone>CET", "cua_repl", "acct-operator", "secret"} {
+			for _, gone := range []string{"T10-41-", "/Users/", "<timezone>CET", "ui_tool", "acct-operator", "secret"} {
 				assert.NotContains(t, data+name, gone, name)
 			}
 

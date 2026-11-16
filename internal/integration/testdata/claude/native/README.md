@@ -18,7 +18,7 @@ values that the sanitizer left (the second table there).
 | Payloads | Surface | Model |
 | --- | --- | --- |
 | `001` to `020` | two print-mode runs, `claude -p --output-format json` with `--setting-sources project,local --strict-mcp-config`, so the operator's own settings, hooks, plugins, and MCP servers stay out | `haiku` (Haiku 5.5) |
-| `021` to `027` | one interactive session in a terminal, permission mode `auto`, started at 16:46 UTC | the operator's default model (`claude-opus-5-5` in `021`) |
+| `021` to `027` | one interactive session in a terminal, permission mode `auto` | the operator's default model (`claude-opus-5-5` in `021`) |
 
 Print-mode run 1 had one prompt on stdin, `--allowedTools Bash Agent
 Task`, and a custom `probe` subagent on `haiku` through `--agents`:

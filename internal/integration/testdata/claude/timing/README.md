@@ -17,8 +17,8 @@ same client version.
 `scripts/native-record.sh` and the sanitizer
 `scripts/native-record-sanitize.py` at commit `b799ccb` of the release
 branch, with the Seamark binary of that commit. The binary reports
-`v0.8.0-143-g0cebfa8`, the commit's ID before the branch dates were
-rewritten; the tree is the same.
+`v0.8.0-143-g0cebfa8`, an ID of the same tree on the development
+branch.
 The script made a new scratch Git repository and ran each prompt with
 `claude -p` on the model `haiku` (`claude-haiku-5-5` in every result).
 It turned off the server-side advisor tool, and the automatic update
