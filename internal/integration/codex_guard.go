@@ -21,14 +21,15 @@ type codexGuards struct {
 }
 
 // DecodeGuard reads the complete operation of one apply_patch event. It
-// parses the patch text with applyPatchOps and never runs it. A patch
+// parses the patch text with guardPatchOps and never runs it. A patch
 // never reaches the command gate: codexCommands refuses apply_patch.
 //
 // The errors follow the patch grammar. An envelope error and a patch
 // without a hunk give ErrMalformedEvent (the guard reason
-// unparseable-input). A line that the grammar does not cover and an
-// environment line give ErrUnsupportedGrammar (incomplete-paths). An
-// event of another tool gives ErrNotApplicable (tool-uncovered).
+// unparseable-input). A line that the grammar does not cover, an
+// environment line, and a header path with a tab or a carriage return
+// give ErrUnsupportedGrammar (incomplete-paths). An event of another
+// tool gives ErrNotApplicable (tool-uncovered).
 //
 // The receiver comes from session_id and agent_id by the rules of
 // ReceivingContextOf, as in DecodeEdit. The error texts name no
@@ -41,7 +42,7 @@ func (codexGuards) DecodeGuard(payload []byte) (lessoncheck.Operation, error) {
 				return nil, err
 			}
 
-			return applyPatchOps(patch)
+			return guardPatchOps(patch)
 		})
 }
 

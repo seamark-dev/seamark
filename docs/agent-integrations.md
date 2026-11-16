@@ -222,6 +222,15 @@ path metadata. Verified before/after projection is **required before
 release**, not an accepted omission from v0.9.0. Post-edit findings and
 explicit working-tree verification do not prove pre-write projection.
 
+A Codex patch whose header path (Add, Update, Delete, or Move to) holds
+a tab or a carriage return gets `incomplete-paths`. codex-cli 0.169.0
+removes both characters from the path when it writes: with a carriage
+return after `sen`, the path `sentinel/x.txt` is written, but the text
+names a path outside a `sentinel/` scope. An armed guard denies such a
+patch, the baseline handler stores no baseline, and the post-edit check
+reports every executable pin as `unknown/incomplete-paths`. The advisory
+edit hook keeps the path as the patch names it.
+
 Codex post-edit findings go back as `additionalContext` in the
 `PostToolUse` hook reply on stdout, with exit 0. The advisory edit hook
 uses the same form on `PreToolUse`. A native recording of codex-cli

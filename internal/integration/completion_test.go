@@ -150,6 +150,12 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 				"*** Begin Patch\n*** Delete File: a.txt\n"), ErrMalformedEvent},
 			{"an environment line", codexEvent("PostToolUse", "apply_patch", "Exit code: 1\nWall time: 0 seconds\nOutput:\n",
 				"*** Begin Patch\n*** Environment ID: env1\n*** Delete File: a.txt\n*** End Patch"), ErrUnsupportedGrammar},
+			// Codex removes a tab or a carriage return from a header path
+			// when it writes, so the named path is not the path on disk.
+			{"a tab in a delete path", codexEvent("PostToolUse", "apply_patch", "Exit code: 0\nWall time: 0 seconds\nOutput:\n",
+				"*** Begin Patch\n*** Delete File: sen\ttinel/x.txt\n*** End Patch"), ErrUnsupportedGrammar},
+			{"a carriage return in a move target", codexEvent("PostToolUse", "apply_patch", "Exit code: 0\nWall time: 0 seconds\nOutput:\n",
+				"*** Begin Patch\n*** Update File: a.txt\n*** Move to: sen\rtinel/m.txt\n@@\n-a\n+b\n*** End Patch"), ErrUnsupportedGrammar},
 		} {
 			c, err := codexCompletions{}.DecodeCompletion(tc.payload)
 			require.ErrorIs(t, err, tc.want, tc.name)
@@ -163,6 +169,13 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 			"Exit code: 1\nWall time: 0 seconds\nOutput:\n", "*** Begin Patch\n*** Copy File: a.txt\n*** End Patch"))
 		require.ErrorIs(t, err, ErrUnsupportedGrammar)
 		assert.Equal(t, lessoncheck.ToolFailed, c.Outcome)
+
+		// A refused path keeps the outcome too: the patch wrote a file.
+		c, err = codexCompletions{}.DecodeCompletion(codexEvent("PostToolUse", "apply_patch",
+			"Exit code: 0\nWall time: 0 seconds\nOutput:\n", "*** Begin Patch\n*** Add File: sen\rtinel/x.txt\n+x\n*** End Patch"))
+		require.ErrorIs(t, err, ErrUnsupportedGrammar)
+		assert.NotContains(t, err.Error(), "tinel", "the error text names no path")
+		assert.Equal(t, lessoncheck.ToolSucceeded, c.Outcome)
 	})
 
 	t.Run("findings replies never block", func(t *testing.T) {

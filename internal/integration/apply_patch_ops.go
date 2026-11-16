@@ -15,7 +15,8 @@ import (
 // The advisory edit hook is fail-open. Its replies must stay the same,
 // byte for byte, although the guard now shares this decoder. So a change
 // here must keep the paths and the error class of every patch. TestCodexEditsAgreeWithTheCodexParser
-// checks those paths against the native parser.
+// checks those paths against the native parser. A rule that only the
+// guard and the post-edit check need goes into guardPatchOps.
 //
 // The result is complete or it is an error. A missing envelope or a
 // patch without a hunk gives ErrMalformedEvent. A line that the known
@@ -133,6 +134,48 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 
 	if len(ops) == 0 {
 		return nil, fmt.Errorf("%w: the patch holds no hunk", ErrMalformedEvent)
+	}
+
+	return ops, nil
+}
+
+// patchPathRemoved holds the characters that the Codex applier removes
+// from a header path when it writes the file: a tab and a carriage
+// return. codex-cli 0.169.0 does this in Add, Update, Delete, and Move
+// to paths. Offline runs of that applier keep the other C0 and C1
+// controls, DEL, and the Unicode space characters, so those paths stay
+// as decoded.
+const patchPathRemoved = "\t\r"
+
+// guardPatchOps returns the file operations of an apply_patch text for
+// the lesson-check guard and the post-edit check. It applies the rules
+// of applyPatchOps and adds one rule: a header path that holds a
+// character of patchPathRemoved gives ErrUnsupportedGrammar.
+//
+// The rule exists because the applier writes another path than the
+// decoder reads. "sen\rtinel/x.txt" writes sentinel/x.txt, but the
+// decoded path lies outside a sentinel/ pin scope, so the guard would
+// allow the edit. With the error, the path set is not complete. An armed
+// guard then denies, and the post-edit check reports every pin as
+// unknown. The decoder does not copy the removal, because a later
+// applier can change it and the guard must not guess a path.
+//
+// A tab or a carriage return at the end of a header line never reaches
+// this check: the line trim removes it, as in Codex. The advisory edit
+// hook keeps applyPatchOps, so its replies do not change. The error text
+// names no path, because the guard writes it into its audit record.
+func guardPatchOps(patch string) ([]lessoncheck.FileOp, error) {
+	ops, err := applyPatchOps(patch)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, op := range ops {
+		for _, path := range op.Paths() {
+			if strings.ContainsAny(path, patchPathRemoved) {
+				return nil, fmt.Errorf("%w: a header path holds a tab or a carriage return", ErrUnsupportedGrammar)
+			}
+		}
 	}
 
 	return ops, nil
