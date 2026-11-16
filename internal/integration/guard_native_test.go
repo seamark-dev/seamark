@@ -104,17 +104,6 @@ var (
 // The capability report of each reads every pre-write path as inactive.
 var guardPhasesWithoutGuard = []string{"post-only", "wrapper", "slow", guardPhaseSlowDeny}
 
-// codexAddAttributions are the attributions that a post-edit record of
-// a native Add File section can have. The guard projection
-// (applyPatchOps) joins the added lines with "\n" and adds no final
-// newline. No recording shows yet whether the native applier writes
-// one. With a final newline, the observed content differs from the
-// projection. The replay accepts both and logs the answer for the
-// reviewer, because only native evidence can change the projection.
-var codexAddAttributions = []lessoncheck.Attribution{
-	lessoncheck.AttributionProjectionMatch, lessoncheck.AttributionProjectionDiffers,
-}
-
 // guardState is the state of the fixture directories that the script
 // notes before and after a run: the SHA-256 of every file, the text of
 // every file under free/, and the git status lines.
@@ -1189,8 +1178,11 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 		assert.Equal(t, lessoncheck.GuardAllow, allow.Guard.Decision)
 		assert.NotEmpty(t, allow.Guard.Pins, "the pattern pin of notes/ was evaluated")
 
+		// The guard projection of an Add ends with the final newline that
+		// the Codex applier writes. So the post-edit record of an Add with
+		// a baseline reads projection-match.
 		r.assertExecuted(t, name, allow, "notes/permitted.txt", lessoncheck.SummaryPassed,
-			codexAddAttributions...)
+			lessoncheck.AttributionProjectionMatch)
 	})
 
 	t.Run("an update outside every pin is a native content case of the update applier", func(t *testing.T) {
@@ -1230,7 +1222,7 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 		assert.Equal(t, lessoncheck.GuardAllow, allow.Guard.Decision, "check-mode findings cannot deny")
 
 		post := r.assertExecuted(t, name, allow, "sentinel/checked.txt", lessoncheck.SummaryViolation,
-			codexAddAttributions...)
+			lessoncheck.AttributionProjectionMatch)
 		assertEmitted(t, name, post)
 		r.logCodexPostEditContext(t, name, "sentinel/checked.txt")
 	})

@@ -496,12 +496,7 @@ func (r guardRecording) assertExtensionReply(t *testing.T, client string, x guar
 
 	r.assertExtensionOp(t, client, x, r.extensionCall(t, x, allow))
 
-	attributions := []lessoncheck.Attribution{lessoncheck.AttributionProjectionMatch}
-	if client == CodexID {
-		attributions = codexAddAttributions
-	}
-
-	post := r.assertExecuted(t, x.name, allow, x.path, lessoncheck.SummaryViolation, attributions...)
+	post := r.assertExecuted(t, x.name, allow, x.path, lessoncheck.SummaryViolation, lessoncheck.AttributionProjectionMatch)
 	assertEmitted(t, x.name, post)
 
 	if client == CodexID {
