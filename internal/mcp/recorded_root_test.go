@@ -225,7 +225,8 @@ func TestStatusResourceReadsCurrentWhileTheIndexMatchesItsWorkspace(t *testing.T
 		status := resourceText(t, resps["1"])
 		current(t, status, matchText(origin))
 		assert.Equal(t, []string{foreignRootLine(origin)}, rootLines(status))
-		assert.Contains(t, resourceText(t, resps["2"]), "freshness current", "one server reads one freshness")
+		assert.Contains(t, resourceText(t, resps["2"]), "freshness current",
+			"orient compares the index with the server workspace, which the edit in the recorded root leaves unchanged")
 	})
 
 	t.Run("a recorded root that is gone", func(t *testing.T) {

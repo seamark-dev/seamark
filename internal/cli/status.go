@@ -49,7 +49,8 @@ and asks how much its answers can be trusted.`,
 			// and the same facts, so for one workspace and database both
 			// print the same root line. They print the same workspace line
 			// too, unless the MCP refresh skips because the index matches
-			// its workspace: that resource then reads current.
+			// its workspace: that resource then reads current, except for
+			// an index that another seamark version built, which stays stale.
 			if !store.SameDirectory(probe.Root, ws.Root) {
 				s.NoteOwnership(ownership.Gather(ws.Root, ws.AbsoluteDB()))
 			}

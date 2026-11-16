@@ -311,8 +311,8 @@ func statusLines(text string) []string {
 // Both compare the index with the origin. An edit in the copy alone
 // leaves the line current, because the origin still matches the index.
 // An edit in the origin as well makes the line stale, and the route of
-// the line makes it current again. An edit in the origin alone is the one
-// state that differs (see the test after this one).
+// the line makes it current again. An edit in the origin alone differs
+// (see the test after this one), and so does an origin that is gone.
 func TestStatusRootAndWorkspaceLinesAreTheSameOverMCP(t *testing.T) {
 	origin := rootWriteRepo(t)
 	copied := rootWriteCopy(t, origin)
@@ -357,7 +357,8 @@ func TestStatusRootAndWorkspaceLinesAreTheSameOverMCP(t *testing.T) {
 }
 
 // TestStatusOverMCPReadsCurrentWhileTheIndexMatchesItsWorkspace covers
-// the one state in which the two surfaces print another workspace line.
+// a state in which the two surfaces print another workspace line. An
+// origin that is gone is the other such state.
 // A copy reads the database of its origin, and only the origin has an
 // edit. seamark status compares the index with the origin, so it prints
 // the stale route into the origin. The MCP refresh skips, because the

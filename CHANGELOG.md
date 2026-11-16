@@ -467,9 +467,13 @@ model-boundary delivery.
   when the server refuses to refresh it. The `seamark://status` resource
   prints the same `root` line as `seamark status`, and the same
   `workspace` line, because both compare the index with the recorded
-  root. One case differs: while the index still matches the workspace of
+  root. Two cases differ: while the index still matches the workspace of
   the server, the resource reads current, as the note says, also after
-  an edit in the recorded root. `check` keeps
+  an edit in the recorded root or when that root is gone. An index that
+  another seamark version built stays stale. The `orient` health line
+  compares the index with the workspace of the server instead, so after
+  an edit in that workspace alone `orient` reads `freshness stale` while
+  the resource reads current. `check` keeps
   its verdict at a matching fingerprint and carries the note, and the
   `orient` title names the recorded root. Where a plain `seamark index`
   in this workspace would be refused, the stale status line and the

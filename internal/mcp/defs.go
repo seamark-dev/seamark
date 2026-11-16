@@ -133,6 +133,12 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 
 	switch p.URI {
 	case orientURI:
+		// The orient health line compares the index with the workspace of
+		// this server, not with the recorded root. Under the index of
+		// another root, an edit in this workspace alone makes it read
+		// "freshness stale" while the status resource reads current.
+		// Orient describes the code that this server serves, so the
+		// split is deliberate.
 		render = func(st *store.Store, r refreshed) (string, error) {
 			var b bytes.Buffer
 			err := report.OrientNamed(&b, st, s.root, r.named(s.root))
@@ -146,8 +152,11 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 			// The report reads the root that the answer describes, as
 			// seamark status does. The workspace line then compares the
 			// index with that root, so its route into that root refreshes
-			// it. The lesson checks block identifies each hook binary
-			// against this server binary and its version.
+			// it. Thus an edit in this workspace alone leaves the line
+			// current, while the orient resource and the orient tool read
+			// "freshness stale" in the same session. The lesson checks
+			// block identifies each hook binary against this server binary
+			// and its version.
 			health, err := status.GatherAs(st, describedRoot(owner, s.root), integration.SelfIdentity(s.version))
 			if err != nil {
 				return "", err
@@ -159,10 +168,11 @@ func (s *Server) readResource(params json.RawMessage) (any, *rpcError) {
 
 			// A skip proves that the index matches this workspace, and the
 			// note of the answer says so. The line then reads current, also
-			// when the recorded root changed: a run there would make the
-			// index differ from the code that this server serves. seamark
-			// status has no refresh, so it still compares with that root
-			// alone. In every other state both surfaces print the same
+			// when the recorded root changed or is gone: a run there would
+			// make the index differ from the code that this server serves.
+			// An index that another seamark version built stays stale.
+			// seamark status has no refresh, so it still compares with that
+			// root alone. In every other state both surfaces print the same
 			// workspace line.
 			if r.matched() {
 				health.NoteWorkspaceMatch()

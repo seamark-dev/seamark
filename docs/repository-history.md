@@ -211,8 +211,13 @@ The MCP resource `seamark://status` prints the same `root` and
 difference. While the index still matches the workspace of the server,
 the server skips its refresh, its answers open with a note that says so,
 and its `workspace` line reads current, also after an edit in the
-recorded root. A run in that root would make the index differ from the
-code that the server serves. When the index
+recorded root or when that root is gone. A run in that root would make
+the index differ from the code that the server serves. An index that
+another seamark version built stays stale. The `orient` resource and the
+`orient` tool measure freshness against the workspace of the server, not
+against the recorded root. After an edit in that workspace alone, where
+the server refuses to refresh, `seamark://status` reads current, as
+`seamark status` does, while `orient` reads `freshness stale`. When the index
 is stale and a plain `seamark index` in this workspace would be
 refused, because the database belongs to another repository, the
 `workspace` line names the route of that state instead, for example
