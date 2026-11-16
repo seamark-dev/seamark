@@ -494,3 +494,167 @@ func TestEvalDiffNamesOnlyTheChangedEcmaValue(t *testing.T) {
 	assert.Empty(t, d.Effects)
 	assert.Equal(t, []string{valueNote1("limits.retries")}, d.Notes)
 }
+
+// belowMethodCase is one diff of a test that changes a class attribute
+// or field below a method, and the effects and notes that it gives.
+type belowMethodCase struct {
+	name    string
+	hunk    string
+	effects []string
+	notes   []string
+}
+
+// evalBelowMethod indexes the one file name with src and requires each
+// case to give its effects and notes under the default policy.
+func evalBelowMethod(t *testing.T, name, src string, cases []belowMethodCase) {
+	t.Helper()
+
+	st, root := indexedWorkspace(t, map[string]string{name: src})
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	header := "diff --git a/" + name + " b/" + name + "\n--- a/" + name + "\n+++ b/" + name + "\n"
+
+	for _, c := range cases {
+		d, err := EvalDiff(p, st, header+c.hunk, SourceStdin)
+		require.NoError(t, err, c.name)
+
+		effects := d.Effects
+		if effects == nil {
+			effects = []string{}
+		}
+
+		assert.Equal(t, c.effects, effects, c.name)
+		assert.Equal(t, VerdictAllow, d.Verdict, c.name)
+		assert.Equal(t, c.notes, d.Notes, c.name)
+	}
+}
+
+// belowMethodPyFixture holds class attributes below a method, once after
+// a blank line and once directly below the last statement. Deco holds a
+// method that lost its decorator.
+//
+//	 1 import subprocess
+//	 2
+//	 3
+//	 4 class Runner:
+//	 5     retries = 3
+//	 6
+//	 7     def run(self):
+//	 8         subprocess.run(["git", "status"])
+//	 9
+//	10     label = "runner"
+//	11
+//	12     def stop(self):
+//	13         return 0
+//	14
+//	15
+//	16 class Plain:
+//	17     def f(self):
+//	18         subprocess.run(["ls"])
+//	19     size = 2
+//	20
+//	21
+//	22 class Deco:
+//	23     color = "red"
+//	24
+//	25     def make():
+//	26         return 1
+const belowMethodPyFixture = "import subprocess\n\n\n" +
+	"class Runner:\n    retries = 3\n\n    def run(self):\n        subprocess.run([\"git\", \"status\"])\n\n" +
+	"    label = \"runner\"\n\n    def stop(self):\n        return 0\n\n\n" +
+	"class Plain:\n    def f(self):\n        subprocess.run([\"ls\"])\n    size = 2\n\n\n" +
+	"class Deco:\n    color = \"red\"\n\n    def make():\n        return 1\n"
+
+// TestEvalDiffNamesAPythonClassAttributeBelowAMethod proves that a
+// changed attribute below a method names its class. The last line of the
+// method lies above the change, so it counts for the effects of the
+// group, but the method did not change. A removed last line of the
+// method is indented deeper, so it still belongs to the method and names
+// nothing. A decorator lies outside the span of its method, so a removed
+// decorator directly above a method changes that method and names
+// nothing either.
+func TestEvalDiffNamesAPythonClassAttributeBelowAMethod(t *testing.T) {
+	evalBelowMethod(t, "jobs.py", belowMethodPyFixture, []belowMethodCase{
+		{
+			name: "a replaced attribute below a method and a blank line",
+			hunk: "@@ -7,7 +7,7 @@\n     def run(self):\n         subprocess.run([\"git\", \"status\"])\n \n" +
+				"-    label = \"worker\"\n+    label = \"runner\"\n \n     def stop(self):\n         return 0\n",
+			effects: []string{"proc:exec"},
+			notes:   []string{valueNote1("jobs.Runner")},
+		},
+		{
+			name: "a replaced attribute directly below a method",
+			hunk: "@@ -16,4 +16,4 @@\n class Plain:\n     def f(self):\n         subprocess.run([\"ls\"])\n" +
+				"-    size = 1\n+    size = 2\n",
+			effects: []string{"proc:exec"},
+			notes:   []string{valueNote1("jobs.Plain")},
+		},
+		{
+			name: "a removed attribute below a method and a blank line",
+			hunk: "@@ -7,6 +7,5 @@\n     def run(self):\n         subprocess.run([\"git\", \"status\"])\n \n" +
+				"-    mode = \"fast\"\n     label = \"runner\"\n \n",
+			effects: []string{"proc:exec"},
+			notes:   []string{valueNote1("jobs.Runner")},
+		},
+		{
+			name: "a removed last line of a method",
+			hunk: "@@ -7,4 +7,3 @@\n     def run(self):\n         subprocess.run([\"git\", \"status\"])\n" +
+				"-        return None\n \n",
+			effects: []string{"proc:exec"},
+		},
+		{
+			name: "a removed decorator directly above a method",
+			hunk: "@@ -22,6 +22,5 @@\n class Deco:\n     color = \"red\"\n \n" +
+				"-    @staticmethod\n     def make():\n         return 1\n",
+			effects: []string{},
+		},
+	})
+}
+
+// belowMethodEcmaFixture holds class fields below a method, once after a
+// blank line and once directly below the closing line of the method.
+//
+//	 1 import * as fs from "fs";
+//	 2
+//	 3 export class Reader {
+//	 4 	dump(p: string) {
+//	 5 		fs.writeFileSync(p, "");
+//	 6 	}
+//	 7
+//	 8 	label = "reader";
+//	 9 }
+//	10
+//	11 export class Writer {
+//	12 	save(p: string) {
+//	13 		fs.writeFileSync(p, "");
+//	14 	}
+//	15 	size = 3;
+//	16 }
+const belowMethodEcmaFixture = "import * as fs from \"fs\";\n\n" +
+	"export class Reader {\n\tdump(p: string) {\n\t\tfs.writeFileSync(p, \"\");\n\t}\n\n\tlabel = \"reader\";\n}\n\n" +
+	"export class Writer {\n\tsave(p: string) {\n\t\tfs.writeFileSync(p, \"\");\n\t}\n\tsize = 3;\n}\n"
+
+// TestEvalDiffNamesAnEcmaClassFieldBelowAMethod proves that a changed
+// JS/TS class field below a method names its class. The closing line of
+// the method lies above the change, so it counts for the effects of the
+// group, but the method did not change.
+func TestEvalDiffNamesAnEcmaClassFieldBelowAMethod(t *testing.T) {
+	evalBelowMethod(t, "fields.ts", belowMethodEcmaFixture, []belowMethodCase{
+		{
+			name: "a replaced field below a method and a blank line",
+			hunk: "@@ -5,5 +5,5 @@\n \t\tfs.writeFileSync(p, \"\");\n \t}\n \n" +
+				"-\tlabel = \"Reader\";\n+\tlabel = \"reader\";\n }\n",
+			effects: []string{"fs:write"},
+			notes:   []string{valueNote1("fields.Reader")},
+		},
+		{
+			name: "a replaced field directly below a method",
+			hunk: "@@ -12,5 +12,5 @@\n \tsave(p: string) {\n \t\tfs.writeFileSync(p, \"\");\n \t}\n" +
+				"-\tsize = 2;\n+\tsize = 3;\n }\n",
+			effects: []string{"fs:write"},
+			notes:   []string{valueNote1("fields.Writer")},
+		},
+	})
+}

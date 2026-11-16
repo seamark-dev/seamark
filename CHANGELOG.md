@@ -318,9 +318,11 @@ model-boundary delivery.
   removes lines inside a Go `const`, `var` or `type`, a JS/TS or Python
   module-level value or type, or a class field or attribute, outside any
   function or method, and that symbol has no effects of its own. An
-  unchanged value on the line above the change is not named. The note
-  names those symbols and says that seamark does not track readers of
-  a value, so their reach is unknown, not clean. The new count
+  unchanged value on the line above the change is not named, and an
+  unchanged method there does not hide the class of a changed attribute
+  or field below it. The note names those symbols and says that seamark
+  does not track readers of a value, so their reach is unknown, not
+  clean. The new count
   `diff.unknown_reach_symbols` lets a rule act on it. Effects and the
   verdicts of existing rules do not change. docs/policies.md no longer
   calls the union of effects what the change can ultimately reach.

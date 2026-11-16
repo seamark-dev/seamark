@@ -451,7 +451,10 @@ func TestEvalDiffCommentEditsNextToAFunction(t *testing.T) {
 
 	// Git writes these hunks for three comment edits. Only a column-0
 	// comment after a blank line counts for no symbol. The other two
-	// count for the function above them, which reaches fs:write.
+	// count for the function above them, which reaches fs:write. The
+	// indented comment lies in the class and in no method, so the value
+	// note names the class, as for an attribute there. The method above
+	// it did not change.
 	cases := []struct {
 		name    string
 		diff    string
@@ -465,6 +468,8 @@ func TestEvalDiffCommentEditsNextToAFunction(t *testing.T) {
 				"-    # name returns a name.\n+    # name returns the runner name.\n" +
 				"     def name(self):\n         return \"runner\"\n \n",
 			effects: []string{"fs:write"},
+			notes: []string{"1 changed value or type has no effects of its own (tools/runner.Runner) — " +
+				"seamark does not track readers of a value, so its effect reach is unknown, not clean"},
 		},
 		{
 			name: "a column-0 comment directly under a function",

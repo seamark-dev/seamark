@@ -275,9 +275,13 @@ of a block does not name the const above it. A removed top-level value,
 for example a const of a Go const block, leaves no symbol on the new
 side to name, so its removal gets no value note. A symbol with effects
 is not named, because `diff.effects` shows them. A class is not named
-when the same change group counts for one of its methods, for example
-an added method with an added blank line before it; that group reports
-the effects of the method. The note names at most ten symbols in sorted
+when the same change group adds a line in one of its methods, removes
+lines inside it, or removes lines directly above it, for example an
+added method with an added blank line before it; that group reports
+the effects of the method. The line above a change does not count
+here: a replaced attribute, field or comment directly below a method
+names the class, and that line of the method still counts for
+`diff.effects`. The note names at most ten symbols in sorted
 order and counts the rest, and
 `diff.unknown_reach_symbols` counts them all. The note and the count
 never change `diff.effects` or the verdict of a rule that does not read

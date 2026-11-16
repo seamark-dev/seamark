@@ -216,14 +216,12 @@ func valueNote(fqns []string) string {
 // above an edited const.
 //
 // A place in a function or a method names nothing, because the effects of
-// that code show. A class is not named when a recorded line of the same
-// group lies in one of its methods, because the group then reports the
-// effects of that method. Examples are an added method with an added
-// blank line before it, and a comment edit directly below a method.
+// that code show. A class is not named when the same group edits one of
+// its methods, because the group then reports the effects of that method.
+// An example is an added method with an added blank line before it.
+// editsCode says which lines make a method edited.
 func valueSymbols(g changeGroup, syms []model.Symbol, effectful map[int64]bool) []*model.Symbol {
-	edited := holders(syms, func(s *model.Symbol) bool {
-		return isCode(s.Kind) && slices.ContainsFunc(g.lines, func(n uint32) bool { return inSpan(s, n) })
-	})
+	edited := holders(syms, func(s *model.Symbol) bool { return isCode(s.Kind) && editsCode(g, s) })
 
 	places := make([][]*model.Symbol, 0, len(g.added)+len(g.cuts))
 
@@ -252,6 +250,23 @@ func valueSymbols(g changeGroup, syms []model.Symbol, effectful map[int64]bool) 
 	}
 
 	return out
+}
+
+// editsCode reports whether change group g edits the function or method
+// sym. An added line in sym and a cut inside sym edit it. The line below
+// a pure deletion edits it too, because the removed lines can belong to
+// sym: a Python decorator lies outside the span of its method.
+//
+// The line above a cut edits sym only when sym also holds that cut. That
+// line can be the last line of a method directly above a replaced class
+// attribute or field. The method did not change, so the class must stay
+// in the note. The line still counts for the effects of the group.
+func editsCode(g changeGroup, sym *model.Symbol) bool {
+	if slices.ContainsFunc(g.added, func(n uint32) bool { return inSpan(sym, n) }) {
+		return true
+	}
+
+	return slices.ContainsFunc(g.cuts, func(c cutSite) bool { return holdsCut(sym, c) || inSpan(sym, c.below) })
 }
 
 // holders returns the symbols of syms for which holds is true.
