@@ -3693,9 +3693,10 @@ def audit(p):
 // TestClassBodyReceiverCallResolvesToItsOwnClass proves that this.save()
 // in a class body resolves through the same-class tier to the save method
 // of that class. The caller is the class symbol, which carries the calls
-// of a field arrow function and of a private method. Another class with a
-// save method makes the unique-name guess abstain, so only the same-class
-// tier can give the edge and the fs:write effect.
+// of a field arrow function and of a method with a computed name. Another
+// class with a save method makes the unique-name guess abstain, so only
+// the same-class tier can give the edge and the fs:write effect. A private
+// (#m) method is a method symbol, and this.#flush() resolves to it.
 func TestClassBodyReceiverCallResolvesToItsOwnClass(t *testing.T) {
 	for _, withOther := range []bool{false, true} {
 		root := t.TempDir()
@@ -3713,8 +3714,16 @@ export class Panel {
 			"board.ts": `import * as fs from "fs";
 
 export class Board {
+	[Symbol.dispose]() {
+		this.store();
+	}
+
 	#flush() {
 		this.store();
+	}
+
+	close() {
+		this.#flush();
 	}
 
 	store() { fs.writeFileSync("a", "b"); }
@@ -3732,10 +3741,15 @@ export class Board {
 
 		_, st := runIndex(t, root)
 
-		for _, tc := range []struct{ caller, callee string }{
-			{"panel.Panel", "panel.Panel.save"},
-			{"panel.Panel.handle", "panel.Panel.save"},
-			{"board.Board", "board.Board.store"},
+		for _, tc := range []struct {
+			caller, callee string
+			depth          int
+		}{
+			{"panel.Panel", "panel.Panel.save", 1},
+			{"panel.Panel.handle", "panel.Panel.save", 1},
+			{"board.Board", "board.Board.store", 1},
+			{"board.Board.#flush", "board.Board.store", 1},
+			{"board.Board.close", "board.Board.#flush", 2},
 		} {
 			caller := mustFind(t, st, tc.caller)
 
@@ -3747,7 +3761,7 @@ export class Board {
 
 			effs, err := st.EffectsForSymbol(caller.ID)
 			require.NoError(t, err)
-			assert.Equal(t, []store.Effect{{Tag: "fs:write", Origin: "propagated", Depth: 1}}, effs,
+			assert.Equal(t, []store.Effect{{Tag: "fs:write", Origin: "propagated", Depth: tc.depth}}, effs,
 				"%s, other class %v", tc.caller, withOther)
 		}
 	}

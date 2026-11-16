@@ -522,11 +522,16 @@ func Run(opts Options) (*Summary, error) {
 // blob decodes with no calls on these symbols, so their edges and effects
 // would stay missing. freshSummary rebuilds an index of another version.
 //
-// Version "4": a call on this in a private or computed JS/TS method is a
+// Version "4": a call on this in a JS/TS method that is no symbol is a
 // receiver call of the class, because the class carries the calls of such
 // a method. An old blob keeps it a plain call. The rebuild also gives an
 // unchanged index the same-class edges of class bodies.
-const parseCacheVersion = "4"
+//
+// Version "5": a private JS/TS method (#m) is a symbol of its own and
+// carries its calls, so the class no longer carries them. An old blob has
+// no symbol for such a method. A this.#m() call in another method then
+// gets no edge, and that caller misses the effects of the private method.
+const parseCacheVersion = "5"
 
 // OtherVersion reports an index that another seamark version built: the
 // parse cache version of its last run is not the one of this binary, so

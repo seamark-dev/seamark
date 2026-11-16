@@ -25,12 +25,16 @@ const (
 
 // ecmaDeclQuery matches declarations shared by every dialect. Field types
 // vary between the JS and TS grammars (class names are `identifier` vs
-// `type_identifier`), so names are captured with wildcards.
+// `type_identifier`), so names are captured with wildcards. A method with
+// a plain or a private (#m) name is a symbol. A method with a computed
+// ([k]) or string name is no symbol, because only an identifier name
+// gives a safe FQN segment.
 const ecmaDeclQuery = `
 (function_declaration name: (identifier) @func.name) @func.decl
 (generator_function_declaration name: (identifier) @func.name) @func.decl
 (class_declaration name: (_) @class.name) @class.decl
 (method_definition name: (property_identifier) @method.name) @method.decl
+(method_definition name: (private_property_identifier) @method.name) @method.decl
 (lexical_declaration (variable_declarator name: (identifier) @lex.name) @lex.spec) @lex.decl
 (variable_declaration (variable_declarator name: (identifier) @lex.name) @lex.spec) @lex.decl
 (import_statement) @import.stmt
@@ -292,20 +296,34 @@ func (e *EcmaExtractor) callsIn(decl *tree_sitter.Node, src []byte) []CallRef {
 // inEcmaMethodOf reports whether node lies in a method that is its own
 // symbol as a member of the class decl. That method carries the call, so
 // the class must not carry it twice. The shape follows the decl query and
-// enclosingClassName: a method_definition named by a property_identifier,
-// directly in the class body. A private (#m) or computed method is no
-// symbol, so its calls stay with the class. For any other decl the shape
-// never matches.
+// enclosingClassName: a method_definition with a symbol name, directly in
+// the class body. A computed or string-named method is no symbol, so its
+// calls stay with the class. For any other decl the shape never matches.
 func inEcmaMethodOf(node, decl *tree_sitter.Node) bool {
 	for p := node.Parent(); p != nil && !sameNode(p, decl); p = p.Parent() {
 		if p.Kind() != "method_definition" {
 			continue
 		}
 
-		if name := p.ChildByFieldName("name"); name != nil && name.Kind() == "property_identifier" &&
-			memberOfClass(p, decl) {
+		if symbolMethodName(p.ChildByFieldName("name")) && memberOfClass(p, decl) {
 			return true
 		}
+	}
+
+	return false
+}
+
+// symbolMethodName reports whether a method with this name node is a
+// symbol. It must match the method patterns of the decl query, or a call
+// in the method is lost or counted on both the method and the class.
+func symbolMethodName(name *tree_sitter.Node) bool {
+	if name == nil {
+		return false
+	}
+
+	switch name.Kind() {
+	case "property_identifier", "private_property_identifier":
+		return true
 	}
 
 	return false
@@ -322,9 +340,9 @@ func sameNode(a, b *tree_sitter.Node) bool {
 // expressions) between the call and the declaration rebinds it.
 //
 // A method directly in the body of the class decl keeps it. Such a method
-// reaches here only when it is no symbol, such as a private (#m) method.
-// The class carries its calls, and its this is the same as in a named
-// method of that class.
+// reaches here only when it is no symbol, such as a computed ([k])
+// method. The class carries its calls, and its this is the same as in a
+// named method of that class.
 func thisIsReceiver(node, decl *tree_sitter.Node) bool {
 	for p := node.Parent(); p != nil; p = p.Parent() {
 		if p.StartByte() == decl.StartByte() && p.EndByte() == decl.EndByte() {

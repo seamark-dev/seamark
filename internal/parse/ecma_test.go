@@ -346,8 +346,9 @@ function run() {
 
 // TestEcmaClassBodyCalls proves that a class carries the calls of its body
 // outside its methods (field initializers, a static block, a method of an
-// object in a field, a private method, which is no symbol) and that a
-// method's calls stay on the method only.
+// object in a field, a method with a computed name, which is no symbol)
+// and that the calls of a method stay on the method only. A private (#m)
+// method is a symbol, so it keeps its own calls too.
 func TestEcmaClassBodyCalls(t *testing.T) {
 	src := `import * as fs from "fs";
 import { audit } from "./audit";
@@ -369,6 +370,10 @@ export class Store {
 	#hidden() {
 		return hide();
 	}
+
+	["legacy"]() {
+		return old();
+	}
 }
 `
 	res := extractTS(t, "web/src/store.ts", src)
@@ -380,21 +385,22 @@ export class Store {
 		{Qualifier: "fs", Name: "writeFileSync", Line: 6, Selector: true},
 		{Name: "register", Line: 8},
 		{Qualifier: "fs", Name: "rmSync", Line: 11, Selector: true},
-		{Name: "hide", Line: 19},
+		{Name: "old", Line: 23},
 	}, store.Calls)
 
 	assert.Equal(t, []CallRef{{Name: "audit", Line: 15}}, symbolByFQN(t, res, "web/src/store.Store.load").Calls)
+	assert.Equal(t, []CallRef{{Name: "hide", Line: 19}}, symbolByFQN(t, res, "web/src/store.Store.#hidden").Calls)
 }
 
 // TestEcmaClassBodyReceiverCalls proves that this.save() in a class body
 // is a receiver call of the class. A field arrow function keeps the this
-// of the class. A private method is no symbol, so the class carries its
-// calls, and its this is still the instance. A plain function, an object
-// literal method and a method of a nested class rebind this.
+// of the class. A method with a computed name is no symbol, so the class
+// carries its calls, and its this is still the instance. A plain function,
+// an object literal method and a method of a nested class rebind this.
 func TestEcmaClassBodyReceiverCalls(t *testing.T) {
 	src := `export class Panel {
 	onClick = () => { this.save(); };
-	#flush() {
+	["flush"]() {
 		this.save();
 	}
 	legacy = function () { return this.save(); };
@@ -419,4 +425,43 @@ func TestEcmaClassBodyReceiverCalls(t *testing.T) {
 	}
 
 	assert.Equal(t, map[uint32]bool{2: true, 4: true, 6: false, 8: false, 11: false}, receivers)
+}
+
+// TestEcmaPrivateMethodIsASymbol proves that a private (#m) method is a
+// method symbol of its class in both grammars. It carries its own calls,
+// and the class does not carry them. A call this.#m() keeps the # in its
+// name, so the same-class tier can find the private method by name.
+func TestEcmaPrivateMethodIsASymbol(t *testing.T) {
+	src := `export class Panel {
+	#flush(p) {
+		return this.#write(p);
+	}
+
+	#write(p) {
+		return save(p);
+	}
+
+	run() {
+		this.#flush("a");
+	}
+}
+`
+	ex, err := NewEcmaExtractor(EcmaJS)
+	require.NoError(t, err)
+	t.Cleanup(ex.Close)
+
+	js, err := ex.Extract("panel.js", []byte(src))
+	require.NoError(t, err)
+
+	for name, res := range map[string]*FileResult{"typescript": extractTS(t, "panel.ts", src), "javascript": js} {
+		flush := symbolByFQN(t, res, "panel.Panel.#flush")
+		assert.Equal(t, model.KindMethod, flush.Symbol.Kind, name)
+		assert.Equal(t, "#flush", flush.Symbol.Name, name)
+		assert.Equal(t, []CallRef{{Name: "#write", Line: 3, Selector: true, Receiver: true}}, flush.Calls, name)
+
+		assert.Equal(t, []CallRef{{Name: "save", Line: 7}}, symbolByFQN(t, res, "panel.Panel.#write").Calls, name)
+		assert.Equal(t, []CallRef{{Name: "#flush", Line: 11, Selector: true, Receiver: true}},
+			symbolByFQN(t, res, "panel.Panel.run").Calls, name)
+		assert.Empty(t, symbolByFQN(t, res, "panel.Panel").Calls, "%s: the class repeats no method call", name)
+	}
 }
