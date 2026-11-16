@@ -23,8 +23,8 @@ var toolDefs = []map[string]any{
 	{
 		"name": "why",
 		"description": "Explain a symbol or file: definition, callers/callees with confidence " +
-			"origins, files that historically change with it (N/M commits: N shared, M counted in the mined window), " +
-			"commits that explain it.",
+			"origins, files that historically change with its file (N/M commits: N shared, M counted in the mined window), " +
+			"commits that explain that file. The history describes the whole file, also for a symbol.",
 		"inputSchema": objSchema(map[string]any{
 			"query": map[string]any{
 				"type":        "string",

@@ -16,3 +16,12 @@ func TestWhyHelpSaysWhatMCounts(t *testing.T) {
 	assert.Contains(t, long, "counts in the mined window")
 	assert.Contains(t, long, "not the commit count of either file")
 }
+
+// TestWhyHelpNamesTheFileGrain keeps the grain of the history sections in
+// the help. They describe the whole file, also for a symbol, so a reader
+// must not take them for the history of the symbol.
+func TestWhyHelpNamesTheFileGrain(t *testing.T) {
+	long := strings.Join(strings.Fields(newWhyCmd(&options{}).Long), " ")
+
+	assert.Contains(t, long, "The history sections describe the whole file")
+}

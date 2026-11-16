@@ -675,6 +675,13 @@ model-boundary delivery.
   `expand` still mention it. Which symbols match does not change. `why`
   no longer calls a package of this repository external: it says that it
   is a package of this repository and lists it as `(package)`.
+- **`why` names the file of its history.** The `usually changed with`,
+  `fix density` and `recent decisions` sections describe the whole file,
+  also under a symbol, so every symbol of one file shows the same
+  history. Each header now names that file in the same line, as in
+  `recent decisions  (whole file <path>)`, so the report keeps its line
+  count. The skills, the MCP `why` description and `seamark why --help`
+  say the same.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

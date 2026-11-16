@@ -81,10 +81,12 @@ the review comments on its PR count as one event — and power a
 deterministic hotspot line in `why`:
 
 ```text
-fix density  9 of the last 20 commits here were fixes
+fix density  9 of the last 20 commits to internal/index/index.go were fixes
 ```
 
 phrased over a recent window so it decays as calmer history accumulates.
+The line counts the commits on the whole file, also under a symbol, so
+it names the file.
 
 The two sources degrade independently: review mining needs `gh`
 authenticated and a github.com remote; fix mining works offline on any

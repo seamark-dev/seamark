@@ -35,15 +35,20 @@ calls (8)  — 3 resolved by name match only
   [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
   ...
 
-usually changed with  (empirical, lift > 1 means beyond chance)
+usually changed with  (whole file internal/gate/gate.go; empirical, lift > 1 means beyond chance)
    6/58  commits  lift 4.1   internal/effects/effects.go  · mostly MatchCommand, Load
-recent decisions
+
+recent decisions  (whole file internal/gate/gate.go)
   2026-07-26  ...  Implement Python parser
 ```
 
 Read it top to bottom: this function _can ultimately spawn a process_
 (one hop away), here is its production surface (test callers collapse to
-a count instead of burying it), and here is the commit trail. Every call
+a count instead of burying it), and here is the commit trail. The
+history sections (`usually changed with`, `fix density`, and `recent
+decisions`) describe the whole file that defines the symbol, and each
+header names that file: commits touch files, so every symbol of
+`internal/gate/gate.go` shows the same history. Every call
 edge declares how it was derived (`[qualified]`, `[same-package]`,
 `[same-class]`, or the low-confidence `[unique-name]`), so you always
 know how much to trust an edge. Edges of the `[qualified]`,

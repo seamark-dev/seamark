@@ -196,9 +196,29 @@ func fileReport(w io.Writer, st *store.Store, cfg *reviews.Config, root, file st
 	return historySections(w, st, cfg, root, file)
 }
 
+// coChangeHeader is the header of the co-change section of why. The
+// section describes the whole file, also under a symbol, so the header
+// names the file. The text keeps the "usually changed with" prefix,
+// because the bench preflight parser opens the partner section on it.
+// The skills reference quotes this text with <path> in place of the file.
+// The path is repository text, so it is sanitized.
+func coChangeHeader(file string) string {
+	return "usually changed with  (whole file " + render.Sanitize(file) + "; empirical, lift > 1 means beyond chance)"
+}
+
+// decisionsHeader is the header of the decision section of why. The
+// decisions are the commits on the whole file, also under a symbol, so the
+// header names the file. The skills reference quotes this text too.
+func decisionsHeader(file string) string {
+	return "recent decisions  (whole file " + render.Sanitize(file) + ")"
+}
+
 // historySections prints the co-change and decision layers for a file —
 // the part of the report no structural tool can produce. root builds the
-// command that lists the lessons the section leaves out.
+// command that lists the lessons the section leaves out. A symbol report
+// passes the file that defines the symbol, so every symbol of one file
+// shows the same history. Each header names that file in the same line,
+// so the name adds no line to the report.
 func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, file string) error {
 	partners, err := st.CoChangePartners(file, 1.0, 10)
 	if err != nil {
@@ -206,7 +226,7 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 	}
 
 	if len(partners) > 0 {
-		fmt.Fprintf(w, "\nusually changed with  (empirical, lift > 1 means beyond chance)\n")
+		fmt.Fprintf(w, "\n%s\n", coChangeHeader(file))
 
 		// Function grain: name the functions of each partner that the
 		// shared commits actually touched — a factual report from git's
@@ -243,11 +263,13 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 	// Fix density: the deterministic hotspot signal — what share of this
 	// file's recent commits were corrections. Phrased over the last-K
 	// window so it decays as non-fix history accumulates, never an
-	// all-time tally. Needs a minimum of history to mean anything.
+	// all-time tally. Needs a minimum of history to mean anything. The line
+	// names the file, so that under a symbol a reader does not take the
+	// count for the commits of the symbol.
 	if len(decisions) >= MinFixDensityHistory {
 		if fixCount := FixCount(decisions); fixCount > 0 {
-			fmt.Fprintf(w, "\nfix density  %d of the last %d commits here were fixes\n",
-				fixCount, len(decisions))
+			fmt.Fprintf(w, "\nfix density  %d of the last %d commits to %s were fixes\n",
+				fixCount, len(decisions), render.Sanitize(file))
 		}
 	}
 
@@ -256,7 +278,7 @@ func historySections(w io.Writer, st *store.Store, cfg *reviews.Config, root, fi
 			decisions = decisions[:10]
 		}
 
-		fmt.Fprintf(w, "\nrecent decisions\n")
+		fmt.Fprintf(w, "\n%s\n", decisionsHeader(file))
 		printDecisions(w, decisions)
 	}
 
