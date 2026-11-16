@@ -303,8 +303,8 @@
   ],
   "content": {
     "schema": "apply-patch-content/1",
-    "client_version": "codex-cli 0.164.0",
-    "recorded": "2026-11-03",
+    "client_version": "codex-cli 0.169.0",
+    "recorded": "2026-11-16",
     "provenance": "Each case was applied offline by the installed codex binary run under the name apply_patch: no model, no login, a scratch CODEX_HOME, and a new scratch directory per case that holds the before files only. exit_status, stdout, and stderr are what the applier returned, with the scratch directory written as <scratch>. after holds every file in the scratch directory after the run, also after a refusal. The cases show the applier, not what tool_input.command carries in a live PreToolUse.",
     "cases": [
       {

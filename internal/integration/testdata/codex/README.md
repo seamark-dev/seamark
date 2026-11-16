@@ -106,9 +106,11 @@ Files:
   file records parser behavior only. It is not a hook payload, and it says
   nothing about what `tool_input.command` carries in a live `PreToolUse`.
   The `content` part of the same file is also **not synthetic**: schema
-  `apply-patch-content/1`, recorded from `codex-cli 0.164.0` on
-  2026-11-03 by `make agents-oracle-record ORACLE_VERSION=0.164.0`
-  (`native_codex_content_oracle_test.go`). Each case holds the before
+  `apply-patch-content/1`, recorded from `codex-cli 0.169.0` on
+  2026-11-16 by `make agents-oracle-record ORACLE_VERSION=0.169.0`
+  (`native_codex_content_oracle_test.go`). The first recording of the
+  same 29 cases, from `codex-cli 0.164.0` on 2026-11-03, gave the same
+  exit status, stdout, stderr, and after files for every case. Each case holds the before
   files, the patch text, and what the installed applier did with them,
   offline in a new scratch directory with a scratch `CODEX_HOME`: the
   exit status, stdout, stderr (the scratch directory written as
@@ -127,8 +129,8 @@ Files:
   tool call applies a patch inside a session, or any other version. The
   guard recording in `guard/` holds one live Update from a real Codex
   session (case `update-permitted`): the one-hunk shape of case
-  `01_one_hunk`, on codex-cli 0.169.0, so on another version than the
-  oracle. `make agents-native-check`
+  `01_one_hunk`, on codex-cli 0.169.0, the version of the oracle.
+  `make agents-native-check`
   replays every content case and skips with the reason when the
   installed version differs from the recorded one. A different version
   never rewrites the file by itself: the recorder runs only when
