@@ -347,9 +347,11 @@ func auditLinkRefused(path string) error {
 }
 
 // openAuditRead opens the firing log for reading. It refuses a link at
-// the log, as the writer does and as the lesson-check reader does, so a
-// planted link cannot feed outside records into a report. The read
-// creates nothing and changes no mode.
+// the log file itself, as the writer does and as the lesson-check reader
+// does, so a link planted at the file cannot feed outside records into a
+// report. It does not check .seamark: a link there is followed, unlike in
+// the writer, which refuses it. The read creates nothing and changes no
+// mode.
 func openAuditRead(path string) (*os.File, error) {
 	if err := privatedir.RefuseLink(path, auditLinkRefused); err != nil {
 		return nil, err

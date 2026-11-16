@@ -481,7 +481,12 @@ model-boundary delivery.
   reach. A Go `const` initializer and a function value without a call
   still get no edge. An index built by an older version is rebuilt once
   by the next index run or MCP call, except a database file that does
-  not accept writes.
+  not accept writes. A workspace that reads the database of another
+  repository, such as a sibling worktree started with `--db`, does not
+  rebuild it: `check` refuses with ``run `seamark index` in <root>`` and
+  MCP reads open with the `did not refresh` note until that root has
+  been indexed once with the new version, so run `seamark index` there
+  once.
 - **`why` says that a caller list can be incomplete.** The header of a
   non-empty caller list of a function or a method now ends with `can be
   incomplete: a call through a function value or a shared method name

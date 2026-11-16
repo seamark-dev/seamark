@@ -326,7 +326,13 @@ table in [Data flow](data-flow.md).
   type declares no call, so a struct needs no such rule.
   An index built before this rule is rebuilt once by the next index run
   or MCP call, also on an unchanged workspace; a database file that does
-  not accept writes keeps its old edges.
+  not accept writes keeps its old edges. A workspace that reads the
+  database of another repository, such as a sibling worktree started
+  with `--db`, does not rebuild it: `seamark check` refuses with
+  ``this database records another repository … run `seamark index` in <root>``,
+  and MCP reads open with the `did not refresh` note, until that root has
+  been indexed once with the new version. Run `seamark index` in the
+  recorded root once.
 - A local variable shadowing an import alias can produce a wrong edge
   (declared as such via its origin label). Scope tracking is future work.
 - Python's DB-API has no syntactic read/write split, so `cursor.execute`
