@@ -590,7 +590,10 @@ model-boundary delivery.
   `change_set` does, and `mined_root` names the original root.
   `lessons --stats` counts these records after `seamark index` runs in
   the checkout. A `--db` that records another repository gives the same
-  preparation for the `-C` checkout.
+  preparation for the `-C` checkout. `lessons --file` follows the same
+  rule, so the view that each omission names shows the pins of the
+  checkout. An absolute path inside the original root, as `why` names
+  it there, still reads the original root.
 - **A database inside the workspace no longer forces a rebuild on every
   run.** With `--db ./custom.db` as an untracked file, the freshness
   fingerprint included the file that every run writes. So every run

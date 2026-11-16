@@ -741,7 +741,13 @@ one theme never spend two slots:
   the firing record goes to its log. The mined lessons come from the
   index, so `mined_root` names the original root, and the text says that
   the mined lessons come from an index that records it. A path inside the
-  original root is outside the workspace. `lessons --stats` counts these
+  original root is outside the workspace. The `seamark lessons --file
+  <path>` command of each omission follows the same rule, so it shows the
+  pins of the checkout: there, `--file` reads a relative path, or an
+  absolute path of the checkout, against the checkout and its
+  `lessons.yaml`. `why` in such a checkout describes the original root
+  and names an absolute path there, so `--file` reads an absolute path
+  inside the original root against that root. `lessons --stats` counts these
   records after `seamark index` runs in the checkout. A `--db` that
   records another repository gives the same preparation for the `-C`
   checkout. `change_set`

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1077,5 +1078,65 @@ func TestLessonsPrepareMatchesChangeSetInACopy(t *testing.T) {
 		prepared := prepareJSON(t, copied, paths...)
 		served.Surface, served.PreparedAt, served.EventID = prepared.Surface, prepared.PreparedAt, prepared.EventID
 		assert.Equal(t, prepared, served)
+	})
+}
+
+// TestLessonsFileInACopiedCheckout follows the routes in a copy whose
+// index records the origin. Each omission of a preparation names a
+// --file view of the copy, and that view shows the pin from the
+// lessons.yaml of the copy. A relative path reads the copy too. why in
+// the copy describes the origin, so it names a path of the origin, and
+// that view still shows the pins of the origin.
+func TestLessonsFileInACopiedCheckout(t *testing.T) {
+	root, rules := manyPinsRepo(t, 12, "change_budget: 1\n")
+	copied := rootWriteCopy(t, root)
+
+	origin, err := filepath.EvalSymlinks(root)
+	require.NoError(t, err)
+
+	// One more pin in the origin makes a view of the origin differ from
+	// a view of the copy.
+	pins, err := os.ReadFile(filepath.Join(origin, ".seamark", "lessons.yaml"))
+	require.NoError(t, err)
+	verifyWrite(t, origin, ".seamark/lessons.yaml",
+		string(pins)+"  - {rule: origin-only, region: api, note: \"The pin of the origin.\"}\n")
+
+	t.Run("each omission names a view of the copy", func(t *testing.T) {
+		p := prepareJSON(t, copied, filepath.Join(copied, "api", "handler.go"))
+		require.Equal(t, origin, p.Guidance.MinedRoot)
+		require.Len(t, p.Omitted, len(rules)-1)
+
+		for _, o := range p.Omitted {
+			path, ok := strings.CutPrefix(o.Inspect, "seamark lessons --file ")
+			require.True(t, ok, "inspect route: %s", o.Inspect)
+			assert.Equal(t, filepath.Join(copied, "api", "handler.go"), path)
+
+			view, err := run(t, "-C", copied, "lessons", "--file", path)
+			require.NoError(t, err)
+			assert.Contains(t, pinLines(view), o.Rule, "%s names a view that shows %s", o.Inspect, o.Rule)
+			assert.NotContains(t, pinLines(view), "origin-only", "the view reads the lessons.yaml of the copy")
+		}
+	})
+
+	t.Run("a relative path reads the copy", func(t *testing.T) {
+		view, err := run(t, "-C", copied, "lessons", "--file", "api/handler.go")
+		require.NoError(t, err)
+		assert.Equal(t, rules, pinLines(view))
+		assert.Contains(t, view, "review lessons for api/handler.go")
+	})
+
+	t.Run("the route of why names the origin", func(t *testing.T) {
+		out, err := run(t, "-C", copied, "why", "api/handler.go")
+		require.NoError(t, err)
+
+		_, rest, ok := strings.Cut(out, "`seamark lessons --file ")
+		require.True(t, ok, "why names the full view: %s", out)
+
+		path, _, _ := strings.Cut(rest, "`")
+		assert.Equal(t, filepath.Join(origin, "api", "handler.go"), path)
+
+		view, err := run(t, "-C", copied, "lessons", "--file", path)
+		require.NoError(t, err)
+		assert.Equal(t, append(slices.Clone(rules), "origin-only"), pinLines(view), "the view that why names shows the pins that why counts")
 	})
 }
