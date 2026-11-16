@@ -318,20 +318,21 @@ func TestBuiltinClientsDeclareLessonCheckCapabilities(t *testing.T) {
 
 	t.Run("only a reviewed recording verifies a pre-write path", func(t *testing.T) {
 		// The reviewed Claude Code 2.1.319 recording verifies Write and
-		// Edit in both contexts. That client lets the write run after its
-		// 10 s hook timeout, so each verified path names the limit. The
-		// client made no MultiEdit call, and no reviewed Codex recording
-		// exists, so those paths wait for a recording. They name no
-		// version, because the recording sets the version it ran against.
+		// Edit in both contexts, and the reviewed codex-cli 0.169.0
+		// recording verifies apply_patch in both contexts. Both clients
+		// let the write run after their 10 s hook timeout, so each
+		// verified path names the limit. Claude Code made no MultiEdit
+		// call, so that path waits for a recording. It names no version,
+		// because the recording sets the version it ran against.
 		for _, tc := range []struct {
-			client   string
-			tool     string
-			verified bool
+			client  string
+			tool    string
+			version string // "" for a path that waits for a recording
 		}{
-			{ClaudeID, "Edit", true},
-			{ClaudeID, "Write", true},
-			{ClaudeID, "MultiEdit", false},
-			{CodexID, "apply_patch", false},
+			{ClaudeID, "Edit", "Claude Code 2.1.319"},
+			{ClaudeID, "Write", "Claude Code 2.1.319"},
+			{ClaudeID, "MultiEdit", ""},
+			{CodexID, "apply_patch", "codex-cli 0.169.0"},
 		} {
 			for _, context := range []lessoncheck.PathContext{"root", "child"} {
 				label := tc.client + " " + tc.tool + " " + string(context)
@@ -340,7 +341,7 @@ func TestBuiltinClientsDeclareLessonCheckCapabilities(t *testing.T) {
 				assert.Contains(t, evidence.Surface, tc.tool, label)
 				assert.Contains(t, evidence.Surface, string(context), label)
 
-				if !tc.verified {
+				if tc.version == "" {
 					assert.Equal(t, VerificationPending, evidence.Level, label)
 					assert.Empty(t, evidence.ClientVersion, "%s: the recording names the version it ran against", label)
 					assert.Empty(t, evidence.Limit, label)
@@ -349,7 +350,7 @@ func TestBuiltinClientsDeclareLessonCheckCapabilities(t *testing.T) {
 				}
 
 				assert.Equal(t, VerificationVerified, evidence.Level, label)
-				assert.Equal(t, "Claude Code 2.1.319", evidence.ClientVersion, label)
+				assert.Equal(t, tc.version, evidence.ClientVersion, label)
 				assert.Equal(t, "the client lets the write run after its 10 s hook timeout", evidence.Limit, label)
 			}
 		}

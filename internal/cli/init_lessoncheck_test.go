@@ -129,14 +129,17 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 	assert.Contains(t, out, "  lesson checks  claude check — ")
 
 	// Codex gets its own hooks in hooks.json, and setup never grants
-	// trust: the line names the unknown trust.
+	// trust: the line names the unknown trust. The reviewed Codex
+	// recording verifies the native evidence of apply_patch, so the line
+	// also names the timeout limit of the client.
 	root = t.TempDir()
 	out = initLessons(t, root, binary, hooks.LessonChecksCheck, "", integration.CodexID)
 	assert.Equal(t, hooks.LessonChecksCheck, lessonMode(t, root, integration.CodexID))
 	assert.Contains(t, out, "          PreToolUse apply_patch         "+binary+" lessons --baseline --hook --client codex\n")
 	assert.Contains(t, out, "          PostToolUse apply_patch        "+binary+" lessons --verify --hook --client codex\n")
 	assert.Contains(t, out, "setup never grants trust")
-	assert.Contains(t, out, "  lesson checks  codex check — pre-write apply_patch active-unverified (trust-unknown); "+
+	assert.Contains(t, out, "  lesson checks  codex check — pre-write apply_patch active-unverified (trust-unknown) "+
+		"(limit: the client lets the write run after its 10 s hook timeout); "+
 		"post-edit apply_patch active-unverified (trust-unknown)\n")
 
 	// The form without --client installs hooks for Claude Code only, so

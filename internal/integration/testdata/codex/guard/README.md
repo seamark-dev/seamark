@@ -169,7 +169,12 @@ the recording, which had no reviewed Codex evidence yet. So every guard
 record reads `native_blocking: unverified`, and in `enforce` both
 pre-write paths read `active-unverified (content-unprojectable,
 native-deny-unverified, native-timeout-unverified, trust-unknown)`. The
-replay checks that no report claims enforcement without evidence.
+replay checks that no report claims enforcement without evidence. The
+evidence registries of the current tree read this copy: the evidence of
+both paths reads verified, with the limit "the client lets the write
+run after its 10 s hook timeout". `trust-unknown` stays, because
+Seamark cannot read the Codex trust record, so no Codex path reads
+`active`.
 
 ## Sanitization
 

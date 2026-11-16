@@ -722,14 +722,15 @@ func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 }
 
 // TestLessonCheckPathsAttributions proves the attributions, one per
-// item and context. Only the items of the reviewed Claude Code timing
-// recording are verified: the call and the lane in both contexts, and
-// the turn and the model step in the root context. No reviewed Codex
-// recording exists. The identity items are unsupported for the Codex
-// child lane. The turn items are unsupported for a payload without a
-// turn identity (prompt_id). context-reset copies the evidence of the
-// resets capability. It is unsupported where no verified reset reaches
-// the context.
+// item and context. Only the items of the reviewed timing recordings
+// are verified. The Claude Code recording verifies the call and the
+// lane in both contexts, and the turn and the model step in the root
+// context. The Codex recording verifies the call, the lane, and the
+// turn in the root context. The identity items are unsupported for the
+// Codex child lane. The turn items are unsupported for a payload
+// without a turn identity (prompt_id). context-reset copies the
+// evidence of the resets capability. It is unsupported where no
+// verified reset reaches the context.
 func TestLessonCheckPathsAttributions(t *testing.T) {
 	root := t.TempDir()
 
@@ -756,10 +757,13 @@ func TestLessonCheckPathsAttributions(t *testing.T) {
 
 			// The only child case of the Claude Code recording is a
 			// subagent read. It shows the call and the lane of the child,
-			// but no turn or model step of the child.
+			// but no turn or model step of the child. No case of the Codex
+			// recording shows a model step.
 			identity := a.Item == lessoncheck.ItemMatchIdentity || a.Item == lessoncheck.ItemLaneIdentity
 			turn := a.Item == lessoncheck.ItemTurnBoundary || a.Item == lessoncheck.ItemModelBoundary
-			verified := clientID == ClaudeID && (identity || turn && a.Context == lessoncheck.ContextRoot)
+			root := a.Context == lessoncheck.ContextRoot
+			verified := clientID == ClaudeID && (identity || turn && root) ||
+				clientID == CodexID && root && (identity || a.Item == lessoncheck.ItemTurnBoundary)
 
 			want := lessoncheck.AttrUnverified
 
@@ -785,6 +789,16 @@ func TestLessonCheckPathsAttributions(t *testing.T) {
 		assert.Equal(t, VerificationPending, e.Level, "no case of the recording shows the turn of a child")
 		assert.Empty(t, e.ClientVersion, "a recording sets the version it ran against")
 		assert.NotEmpty(t, e.Surface)
+		require.NoError(t, e.Validate())
+
+		e = TimingEvidence(CodexID, lessoncheck.ItemTurnBoundary, lessoncheck.ContextRoot)
+		assert.Equal(t, VerificationVerified, e.Level)
+		assert.Equal(t, "codex-cli 0.169.0", e.ClientVersion, "the reviewed recording names the version it ran against")
+		require.NoError(t, e.Validate())
+
+		e = TimingEvidence(CodexID, lessoncheck.ItemModelBoundary, lessoncheck.ContextRoot)
+		assert.Equal(t, VerificationPending, e.Level, "no case of the Codex recording shows a model step")
+		assert.Empty(t, e.ClientVersion, "a recording sets the version it ran against")
 		require.NoError(t, e.Validate())
 
 		assert.Equal(t, VerificationEvidence{}, TimingEvidence(CodexID, lessoncheck.ItemLaneIdentity, lessoncheck.ContextChild))
