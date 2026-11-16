@@ -310,3 +310,78 @@ export const Panel = () => {
 	assert.Equal(t, model.KindFunction, panel.Symbol.Kind, "TSX component arrow const")
 	assert.Contains(t, panel.Calls, CallRef{Name: "useState", Line: 4})
 }
+
+// TestEcmaValueBindingCalls proves that a top-level const holding an
+// object of functions carries the calls inside it, that a binding without
+// a call carries none, and that a function-local binding stays out.
+func TestEcmaValueBindingCalls(t *testing.T) {
+	src := `import * as fs from "fs";
+import { audit } from "./audit";
+
+export const handlers = {
+	save: (p: string, d: string) => fs.writeFileSync(p, d),
+	check: function (p: string) { return audit(p); },
+};
+
+const plain = { a: 1 };
+
+function run() {
+	const local = setup();
+	return local;
+}
+`
+	res := extractTS(t, "web/src/handlers.ts", src)
+
+	handlers := symbolByFQN(t, res, "web/src/handlers.handlers")
+	assert.Equal(t, model.KindConst, handlers.Symbol.Kind)
+	assert.ElementsMatch(t, []CallRef{
+		{Qualifier: "fs", Name: "writeFileSync", Line: 5, Selector: true},
+		{Name: "audit", Line: 6},
+	}, handlers.Calls)
+
+	assert.Empty(t, symbolByFQN(t, res, "web/src/handlers.plain").Calls)
+	assert.NotContains(t, fqns(res), "web/src/handlers.local", "a function-local binding is no symbol")
+	assert.Equal(t, []CallRef{{Name: "setup", Line: 12}}, symbolByFQN(t, res, "web/src/handlers.run").Calls)
+}
+
+// TestEcmaClassBodyCalls proves that a class carries the calls of its body
+// outside its methods (field initializers, a static block, a method of an
+// object in a field, a private method, which is no symbol) and that a
+// method's calls stay on the method only.
+func TestEcmaClassBodyCalls(t *testing.T) {
+	src := `import * as fs from "fs";
+import { audit } from "./audit";
+
+export class Store {
+	static boot = setup();
+	save = (p: string, d: string) => fs.writeFileSync(p, d);
+	static {
+		register(Store);
+	}
+	handlers = {
+		rm(p: string) { fs.rmSync(p); },
+	};
+
+	load(p: string) {
+		return audit(p);
+	}
+
+	#hidden() {
+		return hide();
+	}
+}
+`
+	res := extractTS(t, "web/src/store.ts", src)
+
+	store := symbolByFQN(t, res, "web/src/store.Store")
+	assert.Equal(t, model.KindType, store.Symbol.Kind)
+	assert.ElementsMatch(t, []CallRef{
+		{Name: "setup", Line: 5},
+		{Qualifier: "fs", Name: "writeFileSync", Line: 6, Selector: true},
+		{Name: "register", Line: 8},
+		{Qualifier: "fs", Name: "rmSync", Line: 11, Selector: true},
+		{Name: "hide", Line: 19},
+	}, store.Calls)
+
+	assert.Equal(t, []CallRef{{Name: "audit", Line: 15}}, symbolByFQN(t, res, "web/src/store.Store.load").Calls)
+}

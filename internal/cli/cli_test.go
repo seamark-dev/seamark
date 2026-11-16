@@ -456,7 +456,7 @@ func TestIndexAndStatusNameUnstagedDeletions(t *testing.T) {
 
 	out, err = run(t, "-C", root, "status")
 	require.NoError(t, err)
-	assert.Contains(t, out, "parsed         1 of 2 seen files (0 skipped by config)\n"+
+	assert.Contains(t, out, "parsed         1 of 2 seen files (0 skipped by config, 1 with no language extractor)\n"+
 		"deleted        1 tracked file in the working tree (deletion not staged)\n")
 	assert.NotContains(t, out, "PARSE ERRORS")
 
@@ -465,13 +465,15 @@ func TestIndexAndStatusNameUnstagedDeletions(t *testing.T) {
 
 	var s struct {
 		Coverage struct {
-			FilesDeleted int `json:"files_deleted"`
-			ParseErrors  int `json:"parse_errors"`
+			FilesDeleted     int `json:"files_deleted"`
+			ParseErrors      int `json:"parse_errors"`
+			FilesUnsupported int `json:"files_unsupported"`
 		} `json:"coverage"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &s))
 	assert.Equal(t, 1, s.Coverage.FilesDeleted)
 	assert.Zero(t, s.Coverage.ParseErrors)
+	assert.Equal(t, 1, s.Coverage.FilesUnsupported, "go.mod has no language extractor; the deleted b.go is not counted")
 
 	// A clean tree has no note.
 	clean := writeFixture(t)

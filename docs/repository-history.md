@@ -26,7 +26,7 @@ internal/gate.EvalCommand  (function)
   sig      func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) (*Decision, error)
   effects  proc:exec [depth 1]
 
-callers (4)
+callers (4)  — can be incomplete: a call through a function value or a shared method name gets no edge
   [qualified]     internal/cli.newGateCmd                      internal/cli/gate.go:21
   (+3 in tests)
 
@@ -56,9 +56,13 @@ in Go neither does a common method name (`Close`, `Err`, …) from a file
 that neither shares the method's directory nor imports its package, a
 call whose operand
 starts at a package outside the repository, or an unexported method of
-another directory. When
+another directory. The same rules can drop a real caller from a list
+that is not empty, for example a function assigned to a package-level
+variable and called through it. So the header of a non-empty caller
+list of a function or a method ends with `can be incomplete: a call
+through a function value or a shared method name gets no edge`. When
 every caller edge is a guess, `why` lists them under
-`callers (N)  — N resolved by name match only`. The
+`callers (N)  — N resolved by name match only; can be incomplete: …`. The
 `usually changed with` lines carry **function grain**: `· mostly …`
 names the functions git's hunk headers show actually moved in the shared
 commits — a factual report, not a statistical claim. Hunk headers
@@ -137,7 +141,7 @@ Example status output:
 
 ```text
 workspace      current (schema v8)
-parsed         703 of 832 seen files (98 skipped by config)
+parsed         703 of 832 seen files (98 skipped by config, 31 with no language extractor)
 symbols        1221, 2931 edges — call resolution 71.3% qualified · 23.9% same-package · 4.8% unique-name (1796 calls)
 effects        83 direct-sink symbols, 692 by propagation
 history        3814 decisions; evidence median age 74d (oldest 1042d)
@@ -150,6 +154,14 @@ clients        claude  gate (warn) + lessons hooks installed; registered in .mcp
                claude  skills, mcp-registration, tool-grants, edits, commands, resets: not natively verified
                codex   no hooks installed; MCP registration not registered
 ```
+
+A seen file that is not parsed, not skipped by config, and not a parse
+error has no language extractor, for example a Markdown or YAML file.
+The `parsed` line counts those files, `--json` carries the count as
+`coverage.files_unsupported`, and the coverage line of `orient` adds
+`· 31 with no language extractor` when the count is above zero. The
+count comes from the counts that the index already stores, so an index
+from an older seamark shows it too.
 
 When git tracks files that the working tree no longer has, and the
 deletions are not staged, a `deleted` line after `parsed` says, for
@@ -210,7 +222,10 @@ from a half-parsed index is not "no effects."** The same honesty runs
 through the other surfaces — `orient` opens with the index health and
 warns when files failed to parse, and `seamark check` attaches a note
 when a changed file has changes outside every indexed symbol, so absence of evidence never silently reads as evidence of
-safety.
+safety. A change inside a package-level value initializer or a class
+field lies in the symbol of that value or class, and the symbol carries
+the calls there, so the change reports their effects instead of reading
+as reaching nothing.
 
 Installation health is the other half:
 
@@ -285,8 +300,26 @@ table in [Data flow](data-flow.md).
   `errors.Unwrap(err).Error()`). Go compiles no call that the
   unexported-method rule drops. Effects never cross a dropped edge, so
   the callee's effects do not reach the caller. `why` names these rules
-  only under `callers (0)`, so a symbol that keeps other callers shows
-  no sign of a dropped one.
+  in full only under `callers (0)`. A non-empty caller list says on its
+  header only that it can be incomplete, so it does not show which
+  caller was dropped.
+- A package-level Go `var`, a module-level JS/TS `const`/`let`/`var`,
+  and a module-level Python assignment carry the calls of their
+  initializer, function literals and lambdas in it included. Such a value
+  is listed as a caller, `why <value>` shows its calls and effects, and
+  `check` reports the effects of a change inside it. Every name of a Go
+  spec with several names (`var a, b = f(), g()`) carries every call of
+  that spec. A Go `const` initializer is not mined, and a function value
+  without a call (`var prepare = delivery.Prepare`) still gets no edge.
+  A JS/TS or Python class carries the calls of its body outside its
+  methods: field initializers, static blocks, class attributes, and a
+  method decorator that the grammar places outside the method (TypeScript
+  and Python; a JavaScript method decorator stays with its method). A
+  method keeps its own calls, and the class does not repeat them. A Go
+  type declares no call, so a struct needs no such rule.
+  An index built before this rule is rebuilt once by the next index run
+  or MCP call, also on an unchanged workspace; a database file that does
+  not accept writes keeps its old edges.
 - A local variable shadowing an import alias can produce a wrong edge
   (declared as such via its origin label). Scope tracking is future work.
 - Python's DB-API has no syntactic read/write split, so `cursor.execute`

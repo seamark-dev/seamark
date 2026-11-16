@@ -378,3 +378,73 @@ func (Box[T]) Len() int { return 0 }
 		symbolByFQN(t, res, fqn)
 	}
 }
+
+// TestVarInitializerCalls proves that a package-level var carries the
+// calls of its initializer, also inside function literals and in a
+// grouped block, that every name of a spec carries all calls of that spec,
+// and that a const or a var without a call carries none.
+func TestVarInitializerCalls(t *testing.T) {
+	src := `package p
+
+import "os"
+
+var runners = map[string]func(string) error{
+	"write": func(p string) error {
+		return os.WriteFile(p, nil, 0o600)
+	},
+	"audit": func(p string) error { return audit(p) },
+}
+
+var (
+	ready = setup()
+	plain = 4
+)
+
+var left, right = pick(), os.Getenv("X")
+
+var prepare = audit
+
+const Size = len("abc")
+
+func audit(p string) error {
+	var local = setup()
+	_ = local
+	return nil
+}
+
+func setup() bool { return true }
+
+func pick() int { return 1 }
+`
+	ex, err := NewGoExtractor()
+	require.NoError(t, err)
+	defer ex.Close()
+
+	res, err := ex.Extract("p.go", []byte(src))
+	require.NoError(t, err)
+
+	runners := symbolByFQN(t, res, "runners")
+	assert.Equal(t, model.KindVar, runners.Symbol.Kind)
+	assert.ElementsMatch(t, []CallRef{
+		{Qualifier: "os", Name: "WriteFile", Line: 7, Selector: true},
+		{Name: "audit", Line: 9},
+	}, runners.Calls)
+
+	assert.Equal(t, []CallRef{{Name: "setup", Line: 13}}, symbolByFQN(t, res, "ready").Calls,
+		"a spec in a grouped block carries its own calls only")
+	assert.Empty(t, symbolByFQN(t, res, "plain").Calls)
+
+	both := []CallRef{
+		{Name: "pick", Line: 17},
+		{Qualifier: "os", Name: "Getenv", Line: 17, Selector: true},
+	}
+	assert.ElementsMatch(t, both, symbolByFQN(t, res, "left").Calls, "every name carries every call of its spec")
+	assert.ElementsMatch(t, both, symbolByFQN(t, res, "right").Calls, "every name carries every call of its spec")
+
+	assert.Empty(t, symbolByFQN(t, res, "prepare").Calls, "a function value without a call is no call")
+	assert.Empty(t, symbolByFQN(t, res, "Size").Calls, "const initializers are not mined")
+
+	assert.NotContains(t, fqns(res), "local", "a function-local var is no symbol")
+	assert.Contains(t, symbolByFQN(t, res, "audit").Calls, CallRef{Name: "setup", Line: 24},
+		"the call of a local var initializer stays with its function")
+}

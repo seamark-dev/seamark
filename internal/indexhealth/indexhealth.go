@@ -35,6 +35,11 @@ type Coverage struct {
 	// before this field reads 0.
 	FilesDeleted int `json:"files_deleted"`
 	ParseErrors  int `json:"parse_errors"`
+	// FilesUnsupported counts the seen files that no language extractor
+	// handles, such as Markdown or YAML. The indexer counts every other
+	// seen file as parsed, skipped, or a parse error, so ParseCoverage
+	// derives it and the summary stores no count of its own.
+	FilesUnsupported int `json:"files_unsupported"`
 }
 
 // Freshness states: whether the index still matches the workspace.
@@ -162,6 +167,10 @@ func ParseCoverage(summary string) Coverage {
 	if !ok || !withinSeen(c) {
 		return Coverage{}
 	}
+
+	// withinSeen has checked that no step of this subtraction goes below
+	// zero.
+	c.FilesUnsupported = c.FilesSeen - c.FilesParsed - c.FilesSkipped - c.ParseErrors
 
 	return c
 }

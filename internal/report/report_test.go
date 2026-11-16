@@ -2201,15 +2201,81 @@ func TestWhyNamesMissingCallers(t *testing.T) {
 		assert.NotContains(t, out, "callers")
 	})
 
-	t.Run("function with callers keeps the normal header", func(t *testing.T) {
+	t.Run("function with callers keeps the count and the note lines out", func(t *testing.T) {
 		out := why(t, model.Symbol{
 			FQN: "pkg.Helper", Name: "Helper", Kind: model.KindFunction,
 			File: "pkg/helper.go", Span: model.Span{StartLine: 1, EndLine: 4},
 		}, []store.CallEdge{callEdge("pkg.main", model.OriginSamePackage)})
 
-		assert.Contains(t, out, "\ncallers (1)\n")
+		assert.Contains(t, out, "\ncallers (1)  — ")
 		assert.NotContains(t, out, "none resolved")
-		assert.NotContains(t, out, "gets no edge")
+		assert.NotContains(t, out, "in Go, ", "the three note lines stay under callers (0)")
+	})
+}
+
+// TestWhyQualifiesANonEmptyCallerList proves that the header of a
+// non-empty caller list of a function or a method says that the list can
+// be incomplete. The rules that leave a list empty also drop callers
+// from a full one, so a bare count read as every caller. The header
+// keeps its "callers (N)" start, gets no extra line, and other kinds
+// keep the bare count.
+func TestWhyQualifiesANonEmptyCallerList(t *testing.T) {
+	const qualifier = "can be incomplete: a call through a function value or a shared method name gets no edge"
+
+	why := func(t *testing.T, target model.Symbol, callers []store.CallEdge) string {
+		t.Helper()
+
+		st := seedCallGraph(t, target, callers, nil)
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, t.TempDir(), target.FQN))
+
+		return b.String()
+	}
+
+	function := model.Symbol{
+		FQN: "delivery.Prepare", Name: "Prepare", Kind: model.KindFunction,
+		File: "delivery/prepare.go", Span: model.Span{StartLine: 1, EndLine: 9},
+	}
+	method := model.Symbol{
+		FQN: "delivery.Lease.Commit", Name: "Commit", Kind: model.KindMethod,
+		File: "delivery/lease.go", Span: model.Span{StartLine: 3, EndLine: 9},
+	}
+
+	t.Run("resolved callers", func(t *testing.T) {
+		out := why(t, function, []store.CallEdge{
+			callEdge("cli.run", model.OriginQualified),
+			callEdge("delivery.helper", model.OriginSamePackage),
+		})
+
+		header := "callers (2)  — " + qualifier
+		assert.Contains(t, out, "\n"+header+"\n  [qualified]", "the qualifier adds no line")
+		assert.LessOrEqual(t, len(header)-len("callers (2)"), 100, "every why answer pays for the qualifier")
+	})
+
+	t.Run("name-match callers join the origin note", func(t *testing.T) {
+		out := why(t, method, []store.CallEdge{callEdge("cli.run", model.OriginUniqueName)})
+
+		assert.Contains(t, out, "\ncallers (1)  — 1 resolved by name match only; "+qualifier+"\n")
+	})
+
+	t.Run("other kinds keep the bare count", func(t *testing.T) {
+		out := why(t, model.Symbol{
+			FQN: "delivery.Lease", Name: "Lease", Kind: model.KindType,
+			File: "delivery/lease.go", Span: model.Span{StartLine: 1, EndLine: 2},
+		}, []store.CallEdge{callEdge("cli.run", model.OriginQualified)})
+
+		assert.Contains(t, out, "\ncallers (1)\n")
+		assert.NotContains(t, out, qualifier)
+	})
+
+	t.Run("calls keep their header", func(t *testing.T) {
+		st := seedCallGraph(t, function, nil, []store.CallEdge{callEdge("store.Open", model.OriginQualified)})
+
+		var b strings.Builder
+		require.NoError(t, Why(&b, st, t.TempDir(), function.FQN))
+
+		assert.Contains(t, b.String(), "\ncalls (1)\n")
 	})
 }
 

@@ -349,3 +349,140 @@ func TestEvalDiffNoFileInput(t *testing.T) {
 			"enforce mode blocks input that it cannot read as a diff", err.Error(), name)
 	}
 }
+
+// varInitFixture holds a package-level var whose function literal calls a
+// helper that writes a file, and a var with no call.
+const varInitFixture = `package main
+
+import "os"
+
+var runners = map[string]func(string) error{
+	"check": func(p string) error {
+		return audit(p)
+	},
+}
+
+var plain = map[string]int{
+	"a": 1,
+}
+
+func audit(p string) error {
+	return os.WriteFile(p, nil, 0o600)
+}
+`
+
+// TestEvalDiffInsideVarInitializerReachesEffects proves that a change in a
+// function literal of a package-level var reports the effects that the
+// literal reaches, so a rule over diff.effects fires. Before, the var had
+// no calls, and the same change read as a clean allow with no note.
+func TestEvalDiffInsideVarInitializerReachesEffects(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{
+		"go.mod":  "module example.com/cx\n",
+		"main.go": varInitFixture,
+	})
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "policy.yaml"), []byte(`
+require_approval:
+  - id: diff-writes-files
+    when: 'diff.effects.exists(e, e == "fs:write")'
+    message: the change can write files
+`), 0o644))
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	diff := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -7,1 +7,2 @@
+ 		return audit(p)
++		// touched
+`
+
+	d, err := EvalDiff(p, st, diff, SourceStdin)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fs:write"}, d.Effects)
+	assert.Equal(t, VerdictApproval, d.Verdict)
+	assert.Empty(t, d.Notes, "the change lies in an indexed symbol")
+}
+
+// TestEvalDiffInsideVarWithoutCallsIsAttributedAndClean pins that a change
+// in a var with no call counts as attributed and reaches nothing: no note
+// and no effect.
+func TestEvalDiffInsideVarWithoutCallsIsAttributedAndClean(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{
+		"go.mod":  "module example.com/cx\n",
+		"main.go": varInitFixture,
+	})
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	diff := `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -12,1 +12,2 @@
+ 	"a": 1,
++	"b": 2,
+`
+
+	d, err := EvalDiff(p, st, diff, SourceStdin)
+	require.NoError(t, err)
+	assert.Empty(t, d.Effects)
+	assert.Empty(t, d.Notes)
+	assert.Equal(t, VerdictAllow, d.Verdict)
+}
+
+// classFixture holds a class whose field writes a file and a class whose
+// only write lies in a method.
+const classFixture = `import * as fs from "fs";
+
+export class Store {
+	save = (p: string, d: string) => fs.writeFileSync(p, d);
+}
+
+export class Reader {
+	label = "reader";
+
+	dump(p: string) {
+		fs.writeFileSync(p, "");
+	}
+}
+`
+
+// TestEvalDiffOnAClassFieldReachesEffects proves that a change on a class
+// field line reports the effect of the call in the field, and that a
+// change on a field of a class whose write lies only in a method reports
+// none, because the method's calls are not copied onto the class.
+func TestEvalDiffOnAClassFieldReachesEffects(t *testing.T) {
+	st, root := indexedWorkspace(t, map[string]string{"store.ts": classFixture})
+
+	p, err := LoadPolicy(root)
+	require.NoError(t, err)
+
+	field := `diff --git a/store.ts b/store.ts
+--- a/store.ts
++++ b/store.ts
+@@ -4,1 +4,1 @@
+-	save = (p: string, d: string) => fs.writeFileSync(p, d);
++	save = (p: string, d: string) => fs.writeFileSync(p, d + "\\n");
+`
+
+	d, err := EvalDiff(p, st, field, SourceStdin)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"fs:write"}, d.Effects)
+	assert.Empty(t, d.Notes)
+
+	label := `diff --git a/store.ts b/store.ts
+--- a/store.ts
++++ b/store.ts
+@@ -8,1 +8,1 @@
+-	label = "reader";
++	label = "Reader";
+`
+
+	d, err = EvalDiff(p, st, label, SourceStdin)
+	require.NoError(t, err)
+	assert.Empty(t, d.Effects, "the write of dump stays with dump")
+	assert.Empty(t, d.Notes)
+}

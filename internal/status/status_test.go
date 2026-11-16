@@ -247,13 +247,15 @@ func TestPrintNamesUnstagedDeletionsApartFromParseErrors(t *testing.T) {
 		{1, "deleted        1 tracked file in the working tree (deletion not staged)\n"},
 		{47, "deleted        47 tracked files in the working tree (deletions not staged)\n"},
 	} {
-		s := &Status{Coverage: Coverage{Known: true, FilesSeen: 632, FilesParsed: 580, FilesSkipped: 5, FilesDeleted: tc.deleted}}
+		s := &Status{Coverage: Coverage{
+			Known: true, FilesSeen: 632, FilesParsed: 580, FilesSkipped: 5, FilesUnsupported: 47, FilesDeleted: tc.deleted,
+		}}
 
 		var b bytes.Buffer
 		Print(&b, s)
 		out := b.String()
 
-		parsed := "parsed         580 of 632 seen files (5 skipped by config)\n"
+		parsed := "parsed         580 of 632 seen files (5 skipped by config, 47 with no language extractor)\n"
 		assert.Contains(t, out, parsed+tc.want+"symbols", "the note follows the coverage line")
 		assert.NotContains(t, out, "PARSE ERRORS", "a deleted path is not a parse error")
 
@@ -265,7 +267,7 @@ func TestPrintNamesUnstagedDeletionsApartFromParseErrors(t *testing.T) {
 
 func TestPrintKeepsUnstagedDeletionsApartFromParseErrorLines(t *testing.T) {
 	s := &Status{Coverage: Coverage{
-		Known: true, FilesSeen: 632, FilesParsed: 578, FilesSkipped: 5, FilesDeleted: 47, ParseErrors: 2,
+		Known: true, FilesSeen: 632, FilesParsed: 578, FilesSkipped: 5, FilesUnsupported: 47, FilesDeleted: 47, ParseErrors: 2,
 	}}
 
 	var b bytes.Buffer
@@ -274,7 +276,7 @@ func TestPrintKeepsUnstagedDeletionsApartFromParseErrorLines(t *testing.T) {
 	// The note has its own label after the parse-error lines, so it
 	// does not read as one more line of the PARSE ERRORS statement.
 	assert.Contains(t, b.String(),
-		"parsed         578 of 632 seen files (5 skipped by config) — 2 PARSE ERRORS:\n"+
+		"parsed         578 of 632 seen files (5 skipped by config, 47 with no language extractor) — 2 PARSE ERRORS:\n"+
 			"               those files are invisible to every answer\n"+
 			"deleted        47 tracked files in the working tree (deletions not staged)\n"+
 			"symbols")

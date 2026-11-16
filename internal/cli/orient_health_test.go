@@ -48,6 +48,7 @@ func TestOrientHealthAgreesWithStatus(t *testing.T) {
 	assert.Regexp(t, `\n  health indexed \d{4}-\d\d-\d\d \d\d:\d\d UTC \(\d+m ago\) · freshness current\n`, orient,
 		"the index runs in this test, so its age is a count of minutes")
 	assert.True(t, strings.HasPrefix(lineAfter(t, status, "workspace      "), "current "), status)
-	assert.Contains(t, orient, "         parsed 1 of 2 seen files\n", "go.mod is seen and not parsed")
-	assert.Contains(t, status, "parsed         1 of 2 seen files (0 skipped by config)\n")
+	assert.Contains(t, orient, "         parsed 1 of 2 seen files · 1 with no language extractor\n",
+		"go.mod is seen and has no language extractor")
+	assert.Contains(t, status, "parsed         1 of 2 seen files (0 skipped by config, 1 with no language extractor)\n")
 }

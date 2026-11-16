@@ -132,7 +132,7 @@ func symbolReport(w io.Writer, st *store.Store, cfg *reviews.Config, root string
 
 	switch {
 	case len(callers) > 0:
-		fmt.Fprintf(w, "\ncallers (%d)%s\n", len(callers), originSummary(callers))
+		fmt.Fprintf(w, "\ncallers (%d)%s\n", len(callers), callerNotes(sym.Kind, originSummary(callers)))
 		printCallEdges(w, callers)
 	case sym.Kind == model.KindFunction || sym.Kind == model.KindMethod:
 		// Silence reads as "nothing calls this", but the index skips
@@ -1567,6 +1567,29 @@ func sortByConfidence(edges []store.CallEdge) {
 }
 
 // originSummary flags edge lists dominated by the name-guess tier.
+// callerQualifier follows the caller count of a function or a method.
+// The rules that leave a caller list empty also drop callers from a full
+// one, so the count must not read as complete. Every why answer pays for
+// the text, so it names only the two common rules. It is fixed and needs
+// no sanitizing.
+const callerQualifier = "can be incomplete: a call through a function value or a shared method name gets no edge"
+
+// callerNotes returns the text after the count of a non-empty caller
+// list: the origin summary, then the qualifier for a callable kind. Only
+// functions and methods get CALLS edges in, so other kinds keep the bare
+// summary.
+func callerNotes(kind model.SymbolKind, origins string) string {
+	if kind != model.KindFunction && kind != model.KindMethod {
+		return origins
+	}
+
+	if origins == "" {
+		return "  — " + callerQualifier
+	}
+
+	return origins + "; " + callerQualifier
+}
+
 func originSummary(edges []store.CallEdge) string {
 	guesses := 0
 

@@ -257,7 +257,7 @@ func TestWhyFileOutlineCallerRouteRuns(t *testing.T) {
 		lines := strings.Split(b.String(), "\n")
 		assert.Equal(t, "pkg.Hot  (function)", lines[0])
 		assert.Equal(t, "  defined  pkg/hot.go:4", lines[1])
-		assert.Contains(t, b.String(), "\ncallers (7)\n")
+		assert.Contains(t, b.String(), "\ncallers (7)  — can be incomplete: ")
 	})
 
 	const noRoute = "+5 more (no why route: this name does not resolve to this symbol)"

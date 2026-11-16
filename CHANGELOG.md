@@ -468,6 +468,36 @@ model-boundary delivery.
   in this workspace would be refused, the stale status line and the
   stale note of the CLI read commands print the route of that state
   instead.
+- **Calls in package-level values and class bodies.** A package-level Go
+  `var`, a module-level JS/TS `const`/`let`/`var`, and a module-level
+  Python assignment now carry the calls in their initializer, function
+  literals and lambdas included. A JS/TS or Python class now carries the
+  calls of its body outside its methods, such as field initializers,
+  static blocks and class attributes, while each method keeps its own
+  calls. Before, a change in such a place counted as inside a symbol
+  that reached nothing, so `check` gave a clean verdict with no effects
+  and no unknown-reach note. Now `why` lists these symbols as callers
+  with their calls and effects, and `check` reports what the change can
+  reach. A Go `const` initializer and a function value without a call
+  still get no edge. An index built by an older version is rebuilt once
+  by the next index run or MCP call, except a database file that does
+  not accept writes.
+- **`why` says that a caller list can be incomplete.** The header of a
+  non-empty caller list of a function or a method now ends with `can be
+  incomplete: a call through a function value or a shared method name
+  gets no edge`. The rules that leave a list empty can also drop a real
+  caller from a full one, for example a function that a package-level
+  variable holds and that is called through it. The header still starts
+  with `callers (N)`, and no line is added. The CLI and MCP both show
+  it.
+- **`status` and `orient` count the files with no language extractor.**
+  The `parsed` line of `status` now reads, for example, `parsed 937 of
+  1039 seen files (0 skipped by config, 102 with no language
+  extractor)`, and the coverage line of `orient` adds `· 102 with no
+  language extractor` when the count is above zero. `status --json` has
+  the new field `coverage.files_unsupported`. The count comes from the
+  counts that the index already stores, so an existing index shows it
+  without a rebuild.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

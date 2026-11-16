@@ -494,7 +494,13 @@ func Run(opts Options) (*Summary, error) {
 // Version "2": the Go extractor records the operand root of a call. gob
 // decodes an old blob with an empty root, so an old cache would skip the
 // rule that drops calls on values of packages outside the repository.
-const parseCacheVersion = "2"
+//
+// Version "3": package-level var initializers (Go) and module-level value
+// bindings (JS/TS, Python) carry the calls inside them, and a JS/TS or
+// Python class carries the calls of its body outside its methods. An old
+// blob decodes with no calls on these symbols, so their edges and effects
+// would stay missing. freshSummary rebuilds an index of another version.
+const parseCacheVersion = "3"
 
 // loadParseCache returns the stored per-file parse cache, or an empty map
 // when forced, version-stale, or unreadable — every one of which just
@@ -1195,6 +1201,18 @@ func freshSummary(root, dbPath, current string, start time.Time, open func(strin
 	// skipping would strand it on "coverage unknown" forever, because the
 	// fingerprint still matches. One full pass records it.
 	if summary, err := st.GetMeta(store.MetaIndexSummary); err != nil || summary == "" {
+		return nil
+	}
+
+	// An index built by an older extractor lacks facts that the current
+	// one records, such as the calls of value initializers, and the
+	// fingerprint still matches. A skip would keep that gap until a forced
+	// run, so one full pass rebuilds it and records the current version. A
+	// file that does not accept writes keeps the skip, as in
+	// recordsAnotherRoot, or every run would fail. In the refusal branch of
+	// Run the database records another repository: a mismatch there ends
+	// in that refusal, which names the route to a rebuild.
+	if v, _ := st.GetMeta(store.MetaParseCacheVersion); v != parseCacheVersion && fileAcceptsWrites(dbPath) {
 		return nil
 	}
 

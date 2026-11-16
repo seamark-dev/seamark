@@ -247,3 +247,65 @@ from ....outside import thing
 		{"", ""},
 	}, rows)
 }
+
+// TestPyAssignmentCalls proves that a module-level assignment carries the
+// calls of its right-hand side, lambdas in a dict included, and that an
+// assignment without a call carries none.
+func TestPyAssignmentCalls(t *testing.T) {
+	src := `import os
+
+HANDLERS = {"rm": lambda p: os.remove(p)}
+loader = make_loader()
+default_mode = "live"
+
+
+def make_loader():
+    local = os.getcwd()
+    return local
+`
+	res := extractPy(t, "api/handlers.py", src)
+
+	handlers := symbolByFQN(t, res, "api/handlers.HANDLERS")
+	assert.Equal(t, model.KindConst, handlers.Symbol.Kind)
+	assert.Equal(t, []CallRef{{Qualifier: "os", Name: "remove", Line: 3, Selector: true}}, handlers.Calls)
+
+	assert.Equal(t, []CallRef{{Name: "make_loader", Line: 4}}, symbolByFQN(t, res, "api/handlers.loader").Calls)
+	assert.Empty(t, symbolByFQN(t, res, "api/handlers.default_mode").Calls)
+	assert.NotContains(t, fqns(res), "api/handlers.local", "a function-local assignment is no symbol")
+}
+
+// TestPyClassBodyCalls proves that a class carries the calls of its body
+// outside its methods (class attributes, a decorator of a method) and that
+// a method's calls, a nested function included, stay on the method only.
+func TestPyClassBodyCalls(t *testing.T) {
+	src := `import os
+
+
+class Jobs:
+    HANDLERS = {"rm": lambda p: os.remove(p)}
+    loader = make_loader()
+
+    @retry(times=3)
+    def run(self, p):
+        return self.audit(p)
+
+    def audit(self, p):
+        def inner():
+            return check(p)
+        return inner()
+`
+	res := extractPy(t, "api/jobs.py", src)
+
+	jobs := symbolByFQN(t, res, "api/jobs.Jobs")
+	assert.Equal(t, model.KindType, jobs.Symbol.Kind)
+	assert.ElementsMatch(t, []CallRef{
+		{Qualifier: "os", Name: "remove", Line: 5, Selector: true},
+		{Name: "make_loader", Line: 6},
+		{Name: "retry", Line: 8},
+	}, jobs.Calls)
+
+	assert.Equal(t, []CallRef{{Qualifier: "self", Name: "audit", Line: 10, Selector: true, Receiver: true}},
+		symbolByFQN(t, res, "api/jobs.Jobs.run").Calls)
+	assert.ElementsMatch(t, []CallRef{{Name: "check", Line: 14}, {Name: "inner", Line: 15}},
+		symbolByFQN(t, res, "api/jobs.Jobs.audit").Calls)
+}

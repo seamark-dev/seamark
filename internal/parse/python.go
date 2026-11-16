@@ -128,8 +128,10 @@ func (p *PyExtractor) Extract(relPath string, src []byte) (*FileResult, error) {
 		case caps["func.decl"] != nil:
 			p.addFunction(res, src, moduleKey, caps["func.decl"], caps["func.name"])
 		case caps["class.decl"] != nil:
+			// The class carries the calls of its body outside its methods:
+			// class attributes and decorators of members.
 			if atPyModuleTopLevel(caps["class.decl"]) {
-				p.addSymbol(res, src, moduleKey, caps["class.decl"], caps["class.name"], "", model.KindType, "", false)
+				p.addSymbol(res, src, moduleKey, caps["class.decl"], caps["class.name"], "", model.KindType, "", true)
 			}
 		case caps["assign.spec"] != nil:
 			p.addAssignment(res, src, moduleKey, caps["assign.spec"], caps["assign.name"])
@@ -186,7 +188,10 @@ func pyFirstParamName(fn *tree_sitter.Node, src []byte) string {
 }
 
 // addAssignment records a module-level assignment. SCREAMING_SNAKE names
-// follow the constant convention; everything else is a var.
+// follow the constant convention; everything else is a var. The symbol
+// carries the calls of the right-hand side: its span covers them, so a
+// change there counts as attributed, and a table of handlers
+// ({"rm": lambda p: os.remove(p)}) must not read as reaching nothing.
 func (p *PyExtractor) addAssignment(res *FileResult, src []byte, moduleKey string,
 	spec, nameNode *tree_sitter.Node) {
 	if nameNode == nil {
@@ -198,7 +203,7 @@ func (p *PyExtractor) addAssignment(res *FileResult, src []byte, moduleKey strin
 		kind = model.KindConst
 	}
 
-	p.addSymbol(res, src, moduleKey, spec, nameNode, "", kind, "", false)
+	p.addSymbol(res, src, moduleKey, spec, nameNode, "", kind, "", true)
 }
 
 func (p *PyExtractor) addSymbol(res *FileResult, src []byte, moduleKey string,
@@ -241,6 +246,10 @@ func (p *PyExtractor) callsIn(decl *tree_sitter.Node, src []byte, selfName strin
 		for i := range m.Captures {
 			node := &m.Captures[i].Node
 
+			if inPyMethodOf(node, decl) {
+				continue
+			}
+
 			switch names[m.Captures[i].Index] {
 			case "call.bare":
 				out = append(out, CallRef{
@@ -269,6 +278,37 @@ func (p *PyExtractor) callsIn(decl *tree_sitter.Node, src []byte, selfName strin
 	}
 
 	return out
+}
+
+// inPyMethodOf reports whether node lies in a method that is its own
+// symbol as a member of the class decl. That method carries the call, so
+// the class must not carry it twice. The shape follows
+// enclosingPyClassName: a function_definition directly in the class
+// block, perhaps under a decorator. The decorator itself lies outside the
+// span of the method, so its calls stay with the class. Only a class
+// decl has methods: a function nested in a function stays with it.
+func inPyMethodOf(node, decl *tree_sitter.Node) bool {
+	if decl.Kind() != "class_definition" {
+		return false
+	}
+
+	for p := node.Parent(); p != nil && !sameNode(p, decl); p = p.Parent() {
+		if p.Kind() != "function_definition" {
+			continue
+		}
+
+		holder := p.Parent()
+		if holder != nil && holder.Kind() == "decorated_definition" {
+			holder = holder.Parent()
+		}
+
+		if holder != nil && holder.Kind() == "block" &&
+			holder.Parent() != nil && sameNode(holder.Parent(), decl) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // atPyModuleTopLevel reports whether a definition sits directly in module
