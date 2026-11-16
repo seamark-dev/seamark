@@ -252,12 +252,33 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 			texts:   []string{patternHead + " cannot evaluate src/new.go: unprojectable-edit; the file does not exist"},
 		},
 		{
-			name:    "a Codex update in a pattern scope denies",
+			name:  "a Codex update that adds a pattern line denies as a violation",
+			op:    codexOp(updateOp("src/a.go", plainChunk("-func A() {}", "+func A() {} // TODO(x)"))),
+			cause: GuardCauseViolation,
+			pins:  []pinOutcome{{todo.Identity, OutcomeViolation, ""}},
+			texts: []string{patternHead + ` "no-todo": apply_patch adds a line matching the pattern at src/a.go:3: func A() {} // TODO(x)`},
+		},
+		{
+			name:  "a clean Codex update in a pattern scope allows",
+			op:    codexOp(updateOp("src/a.go", plainChunk("-func A() {}", "+func B() {}"))),
+			allow: true,
+			pins:  []pinOutcome{{todo.Identity, OutcomePass, ""}},
+		},
+		{
+			name:    "a Codex update whose hunk does not match denies",
+			op:      codexOp(updateOp("src/a.go", plainChunk("-func Missing() {}", "+func B() {}"))),
+			cause:   GuardCauseUnknown,
+			reasons: []Reason{ReasonUnprojectableEdit},
+			pins:    []pinOutcome{{todo.Identity, OutcomeUnknown, ReasonUnprojectableEdit}},
+			texts:   []string{patternHead + " cannot evaluate src/a.go: unprojectable-edit; an update hunk does not match the current content"},
+		},
+		{
+			name:    "a Codex update outside the verified hunk grammar in a pattern scope denies",
 			op:      codexOp(FileOp{Kind: OpPatchUpdate, Path: "src/a.go", Hunks: true}),
 			cause:   GuardCauseUnknown,
 			reasons: []Reason{ReasonUnprojectableEdit},
 			pins:    []pinOutcome{{todo.Identity, OutcomeUnknown, ReasonUnprojectableEdit}},
-			texts:   []string{patternHead + " cannot evaluate src/a.go: unprojectable-edit; update hunks have no verified projection"},
+			texts:   []string{patternHead + " cannot evaluate src/a.go: unprojectable-edit; the update hunks have a form without a verified projection"},
 		},
 		{
 			name:  "a Codex update decides a forbid pin on paths alone",
@@ -286,7 +307,7 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 			},
 			texts: []string{
 				forbidHead + ` "frozen-assets": apply_patch would change generated/a.txt`,
-				patternHead + " cannot evaluate src/a.go: unprojectable-edit; update hunks have no verified projection",
+				patternHead + " cannot evaluate src/a.go: unprojectable-edit; the update hunks have a form without a verified projection",
 			},
 		},
 		{

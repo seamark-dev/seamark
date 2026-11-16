@@ -45,8 +45,21 @@ model-boundary delivery.
   `--verify`, `check --lessons`, the `lesson_checks` argument of the MCP
   `check` tool, mode changes and
   separate baseline/guard/post-edit hooks. Installation differs from
-  active or native-verified coverage. Codex Update content projection
-  is still incomplete and is required before release.
+  active or native-verified coverage.
+- **Codex Update projection.** The guard projects the bytes that the
+  Codex applier writes for an Update section, by the rules of the
+  codex-cli 0.169.0 applier, so `no-added-pattern/1` decides a Codex
+  Update before it runs and the post-edit record can read
+  `projection-match`. Each rule follows a case of
+  the `apply_patch` content oracle, now 96 cases recorded from
+  codex-cli 0.169.0; the first 29 match the earlier codex-cli 0.164.0
+  recording. A hunk form outside the verified grammar, such as a
+  change line that ends with a carriage return, a hunk that does not
+  match the current file, a file with a lone carriage return, and a
+  file that two sections name still give `unknown/unprojectable-edit`.
+  `make agents-native-check CLIENT=codex` adds a model-free seeded
+  differential against the installed applier. The Codex pre-write path
+  no longer carries the capability reason `content-unprojectable`.
 - **Codex native evidence.** Reviewed timing and guard recordings of
   codex-cli 0.169.0 replay offline with `make native-replay
   CLIENT=codex`. They verify the Codex `apply_patch` deny and in-budget

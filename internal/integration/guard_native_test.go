@@ -1205,6 +1205,9 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 		assertChild(t, CodexID, steps[1], e, deny)
 	})
 
+	// The binary of the recording had no Update projection, so its guard
+	// denied this update as unknown. The deny record stays the evidence of
+	// that binary. The current guard projects the same patch exactly.
 	t.Run("an update in the pattern scope is denied as unknown", func(t *testing.T) {
 		e, deny := r.assertDenied(t, guardUpdateUnknown, codexApplyPatch)
 		op := guardOp(t, CodexID, e)
@@ -1213,6 +1216,15 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 		assert.True(t, op.Ops[0].Hunks, "the update carries hunks")
 		assert.Equal(t, lessoncheck.GuardCauseUnknown, deny.Guard.Cause)
 		assert.Contains(t, deny.Guard.Reasons, lessoncheck.ReasonUnprojectableEdit)
+
+		// The fixture writes "alpha" into each file; the recorded digest
+		// shows it. The current projection gives exact content for it.
+		require.Equal(t, contentSHA256("alpha\n"), r.cases[guardUpdateUnknown].Before.Files["notes/update.txt"])
+
+		input, _ := e.raw["tool_input"].(map[string]any)
+		snap, _ := projectOracleCase(t, map[string]string{"notes/update.txt": "alpha\n"}, nativeString(input, "command"))
+		require.Len(t, snap.Changes, 1)
+		assert.True(t, projected(snap.Changes[0]), "the current guard projects the recorded update")
 	})
 
 	t.Run("a permitted patch completes and its post-edit check passes", func(t *testing.T) {
@@ -1247,11 +1259,19 @@ func TestNativeRecordCodexGuardRecording(t *testing.T) {
 		require.NotEqual(t, c.Before.Text["free/oracle.txt"], c.After.Text["free/oracle.txt"], "the native applier changed the file")
 
 		// The patch, the content before, and the content after are one
-		// native content case for the update applier. A verified content
-		// projection of an update needs such cases.
+		// native content case for the update applier. The guard projection
+		// of the recorded patch on the recorded before text must give the
+		// bytes that the native tool wrote in the live session.
 		input, _ := e.raw["tool_input"].(map[string]any)
+		patch := nativeString(input, "command")
 		t.Logf("update content case of codex-cli %s:\npatch: %q\nbefore: %q\nafter: %q", r.manifest.ClientVersion,
-			nativeString(input, "command"), c.Before.Text["free/oracle.txt"], c.After.Text["free/oracle.txt"])
+			patch, c.Before.Text["free/oracle.txt"], c.After.Text["free/oracle.txt"])
+
+		snap, _ := projectOracleCase(t, map[string]string{"free/oracle.txt": c.Before.Text["free/oracle.txt"]}, patch)
+		require.Len(t, snap.Changes, 1)
+		require.True(t, projected(snap.Changes[0]), "the live update has an exact projection")
+		assert.Equal(t, afterState(c.After.Text, "free/oracle.txt"), projectedState(snap.Changes[0]),
+			"the projection names the bytes that the live tool wrote")
 	})
 
 	t.Run("an invalid check set denies a patch outside every pin", func(t *testing.T) {

@@ -66,7 +66,6 @@ const (
 	CapPartialInstall          CapReason = "partial-install"
 	CapNativeDenyUnverified    CapReason = "native-deny-unverified"
 	CapNativeTimeoutUnverified CapReason = "native-timeout-unverified"
-	CapContentUnprojectable    CapReason = "content-unprojectable"
 	CapConfigurationError      CapReason = "configuration-error"
 	CapToolUncovered           CapReason = "tool-uncovered"
 )
@@ -181,7 +180,7 @@ func CapabilityReportOf(cfg *Config, cfgErrs []ConfigError, installed []Installe
 		Uncovered: []UncoveredWriter{},
 	}
 
-	join := capabilityJoin{invalid: len(cfgErrs) > 0, patternPin: enforcesPatternPin(cfg)}
+	join := capabilityJoin{invalid: len(cfgErrs) > 0}
 
 	var clients []clientJoin
 
@@ -241,22 +240,6 @@ func configReportOf(cfg *Config, errs []ConfigError) ConfigReport {
 	return report
 }
 
-// enforcesPatternPin reports whether the configuration holds an enforce
-// pin whose check is of kind no-added-pattern/1. The guard cannot
-// project the content of a Codex update with hunks yet, so it denies
-// such an update in the scope of that pin.
-func enforcesPatternPin(cfg *Config) bool {
-	if cfg == nil || cfg.Raw == nil {
-		return false
-	}
-
-	return slices.ContainsFunc(cfg.Pins, func(pin Pin) bool {
-		def, ok := cfg.Raw.Checks[pin.CheckID]
-
-		return pin.Mode == ModeEnforce && ok && Kind(def.Kind) == KindNoAddedPattern
-	})
-}
-
 // clientOrder returns the client IDs: first the clients of the paths in
 // path order, then the clients with attributions only, sorted.
 func clientOrder(installed []InstalledPath, attributions map[string][]CapAttribution) []string {
@@ -287,8 +270,6 @@ type capabilityJoin struct {
 	// invalid is true when the configuration does not validate. An
 	// installed guard then denies every covered edit.
 	invalid bool
-	// patternPin is true when an enforce no-added-pattern/1 pin exists.
-	patternPin bool
 }
 
 // path computes the state and the reasons of one path. The most
@@ -310,11 +291,7 @@ func (j capabilityJoin) path(p InstalledPath) PathCapability {
 	}
 
 	verified := p.Verification.Level == LevelVerified
-	reasons := slices.DeleteFunc(slices.Clone(p.Reasons), func(r CapReason) bool {
-		// The guard denies an update with hunks only in the scope of an
-		// enforce pattern pin, so the reason holds only while one exists.
-		return r == CapContentUnprojectable && (!j.patternPin || !p.Installed || !IsGuardMarker(p.Marker))
-	})
+	reasons := slices.Clone(p.Reasons)
 
 	if p.Installed {
 		reasons = append(reasons, binaryReasons(p.BinaryState)...)

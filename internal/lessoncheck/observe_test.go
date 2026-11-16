@@ -199,6 +199,31 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 		assert.Equal(t, AttributionProjectionDiffers, snap.attribution)
 	})
 
+	t.Run("an update with a projection reads projection-match when the result agrees", func(t *testing.T) {
+		g := todoRepo(t)
+
+		op := codexOp(updateOp("src/a.go", plainChunk(" func A() {}", "+", "+// TODO(update)")))
+		p := g.recordCall(cfg, op, DefaultLimits())
+		require.NotContains(t, p.Limitations, LimitationNoProjection)
+
+		// The bytes that the applier writes for this chunk.
+		g.write("src/a.go", "package a\n\nfunc A() {}\n\n// TODO(update)\n")
+
+		snap := g.observe(p)
+
+		assert.Equal(t, AttributionProjectionMatch, snap.attribution)
+		assert.Equal(t, OutcomeViolation, resultOfRule(t, Evaluate(cfg, snap), "no-todo").Outcome)
+	})
+
+	t.Run("an update with a projection reads projection-differs when the result differs", func(t *testing.T) {
+		g := todoRepo(t)
+
+		p := g.recordCall(cfg, codexOp(updateOp("src/a.go", plainChunk("+// end"))), DefaultLimits())
+		g.write("src/a.go", "package a\n\nfunc A() {}\n// other\n")
+
+		assert.Equal(t, AttributionProjectionDiffers, g.observe(p).attribution)
+	})
+
 	t.Run("an update without a projection is checked on the actual result", func(t *testing.T) {
 		g := todoRepo(t)
 

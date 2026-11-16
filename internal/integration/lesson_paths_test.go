@@ -711,8 +711,7 @@ func TestLessonCheckPathsReportsTrustAndDisabledHooks(t *testing.T) {
 		for _, p := range paths {
 			switch p.Stage {
 			case lessoncheck.StagePreWrite, lessoncheck.StagePostEdit:
-				assert.Equal(t, []lessoncheck.CapReason{lessoncheck.CapDocumentUnreadable}, slices.DeleteFunc(slices.Clone(p.Reasons),
-					func(r lessoncheck.CapReason) bool { return r == lessoncheck.CapContentUnprojectable }), pathKey(p))
+				assert.Equal(t, []lessoncheck.CapReason{lessoncheck.CapDocumentUnreadable}, p.Reasons, pathKey(p))
 				assert.False(t, p.Installed)
 			case lessoncheck.StageExploration:
 				assert.Empty(t, p.Reasons, "Codex has no exploration path to read")

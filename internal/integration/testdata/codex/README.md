@@ -106,10 +106,12 @@ Files:
   file records parser behavior only. It is not a hook payload, and it says
   nothing about what `tool_input.command` carries in a live `PreToolUse`.
   The `content` part of the same file is also **not synthetic**: schema
-  `apply-patch-content/1`, recorded from `codex-cli 0.164.0` on
-  2026-11-03 by `make agents-oracle-record ORACLE_VERSION=0.164.0`
-  (`native_codex_content_oracle_test.go`). Each case holds the before
-  files, the patch text, and what the installed applier did with them,
+  `apply-patch-content/1`, recorded from `codex-cli 0.169.0` on
+  2026-11-16 by `make agents-oracle-record ORACLE_VERSION=0.169.0`
+  (`native_codex_content_oracle_test.go`). It holds 96 cases. The first
+  recording of cases 01 to 29, from `codex-cli 0.164.0` on 2026-11-03,
+  gave the same exit status, stdout, stderr, and after files for every
+  case. Each case holds the before files, the patch text, and what the installed applier did with them,
   offline in a new scratch directory with a scratch `CODEX_HOME`: the
   exit status, stdout, stderr (the scratch directory written as
   `<scratch>`), and every file after the run, also after a refusal. The
@@ -118,7 +120,19 @@ Files:
   and without an `@@` anchor, `*** Move to` with a hunk, extra
   whitespace in headers, a context that does not match, a refusal after
   a good file, fuzzy context (trailing spaces, an en dash), Add with and
-  without a final newline, and Delete. What the cases prove: the bytes
+  without a final newline, and Delete. Cases 30 to 96 pin each rule of
+  the Update projection: context lines that keep the file bytes, the
+  line end of new lines, the final newline, pure insertions, the order
+  of the match passes, anchors with spaces or Unicode quotes,
+  `*** End of File`, the retry without a trailing empty line, the chunk
+  order and its refusals, grammar refusals, a byte order mark, lone CR
+  files, one file named twice, a move onto an existing CRLF file, line
+  separators inside a line, every character of the normalization table
+  with one unmapped neighbor per class, and change lines that end with
+  carriage returns, which the applier removes. The guard's Update projection follows
+  these cases: `apply_patch_projection_test.go` projects every case
+  offline and compares the result with the after files. What the cases
+  prove: the bytes
   that this applier version writes for these inputs. For example, it
   writes a final newline, it keeps CRLF line ends, it changes the first
   match of repeated context, and a refusal in a later file keeps the
@@ -127,8 +141,8 @@ Files:
   tool call applies a patch inside a session, or any other version. The
   guard recording in `guard/` holds one live Update from a real Codex
   session (case `update-permitted`): the one-hunk shape of case
-  `01_one_hunk`, on codex-cli 0.169.0, so on another version than the
-  oracle. `make agents-native-check`
+  `01_one_hunk`, on codex-cli 0.169.0, the version of the oracle.
+  `make agents-native-check`
   replays every content case and skips with the reason when the
   installed version differs from the recorded one. A different version
   never rewrites the file by itself: the recorder runs only when

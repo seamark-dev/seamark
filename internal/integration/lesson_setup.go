@@ -174,11 +174,6 @@ type lessonHookClient struct {
 	// trustReview is true for a client that runs a project hook only
 	// after the user reviews it. Seamark cannot read that trust record.
 	trustReview bool
-	// patchTool is the tool whose update hunks the guard cannot project
-	// yet. The guard denies such an update in the scope of an enforce
-	// no-added-pattern/1 pin. It is empty for a client whose edits are
-	// all projectable.
-	patchTool string
 	// uncovered lists the writer tools that no lesson-check hook covers.
 	// The report names them with reason tool-uncovered, so it never
 	// claims coverage that it does not have.
@@ -212,7 +207,7 @@ var (
 	}
 	codexLessonHooks = lessonHookClient{
 		id: CodexID, specs: hooks.CodexLessonCheckSpecs, fires: hooks.CodexMatcher, exec: hooks.CodexExecution,
-		trustReview: true, patchTool: codexApplyPatch, uncovered: []string{"shell"},
+		trustReview: true, uncovered: []string{"shell"},
 	}
 )
 

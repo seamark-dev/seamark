@@ -67,11 +67,46 @@ type FileOp struct {
 	// bytes that the applier writes. It is nil for every other kind.
 	Content *string
 	Edits   []TextEdit // edit (one), multi-edit (many, in order)
-	// Hunks is true for a patch-update that carries hunks. The content
-	// of such an update stays unprojectable until a verified applier
-	// exists, because a wrong projection could hide a violation.
+	// Hunks is true for a patch-update that carries hunks.
 	Hunks bool
+	// Chunks holds the hunks of a patch-update in patch order, when the
+	// decoder read every line of the section with the verified chunk
+	// grammar. It is nil for any other section. An update with Hunks and
+	// nil Chunks stays unprojectable, because the applier rules for its
+	// form are not known.
+	Chunks []PatchChunk
 }
+
+// PatchChunk is one hunk of a Codex Update section: an optional @@
+// anchor line and the change lines below it.
+type PatchChunk struct {
+	// Anchor is the text of an "@@ <text>" line without its trailing
+	// whitespace. It is "" for a chunk without an anchor. The grammar
+	// gives no empty anchor, because "@@ " alone trims to "@@".
+	Anchor string
+	Lines  []PatchLine
+	// EndOfFile is true when "*** End of File" closes the chunk. The
+	// chunk then matches only at the end of the file.
+	EndOfFile bool
+}
+
+// PatchLine is one change line of a chunk. Text is the raw line
+// without its first byte, with no trim, because the applier writes an
+// added line as it stands in the patch.
+type PatchLine struct {
+	Kind PatchLineKind
+	Text string
+}
+
+// PatchLineKind is the first byte of a change line.
+type PatchLineKind byte
+
+// The closed list of change line kinds.
+const (
+	PatchContext PatchLineKind = ' ' // a line that stays
+	PatchDelete  PatchLineKind = '-' // a line that goes
+	PatchAdd     PatchLineKind = '+' // a line that comes
+)
 
 // TextEdit is one text replacement of a Claude Edit or MultiEdit.
 type TextEdit struct {

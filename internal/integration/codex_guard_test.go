@@ -13,9 +13,23 @@ import (
 // TestCodexGuardDecodesApplyPatchOps checks the Codex guard decoder: an
 // apply_patch event gives one file operation per section, in patch
 // order, with the raw paths, and the identity of the event. An update
-// with hunks has complete paths and Hunks set, because its content has
-// no verified projection yet.
+// with hunks has complete paths, Hunks set, and the chunks that the
+// projection applies.
 func TestCodexGuardDecodesApplyPatchOps(t *testing.T) {
+	// change returns one change line of a chunk.
+	change := func(kind lessoncheck.PatchLineKind, text string) lessoncheck.PatchLine {
+		return lessoncheck.PatchLine{Kind: kind, Text: text}
+	}
+
+	// replace returns a chunk that replaces one line.
+	replace := func(anchor, old, replacement string, eof bool) []lessoncheck.PatchChunk {
+		return []lessoncheck.PatchChunk{{
+			Anchor:    anchor,
+			Lines:     []lessoncheck.PatchLine{change(lessoncheck.PatchDelete, old), change(lessoncheck.PatchAdd, replacement)},
+			EndOfFile: eof,
+		}}
+	}
+
 	cases := []struct {
 		fixture  string
 		match    string
@@ -26,7 +40,8 @@ func TestCodexGuardDecodesApplyPatchOps(t *testing.T) {
 			{Kind: lessoncheck.OpPatchAdd, Path: "docs/new-page.md", Content: strPtr("# New page\n\nBody.\n")},
 		}},
 		{"pre_tool_use_apply_patch_update.json", "call_synthetic_0002", receiverID("thr_synthetic_0001"), []lessoncheck.FileOp{
-			{Kind: lessoncheck.OpPatchUpdate, Path: "internal/api/handler.go", Hunks: true},
+			{Kind: lessoncheck.OpPatchUpdate, Path: "internal/api/handler.go", Hunks: true,
+				Chunks: replace("func Handle() error {", "\treturn nil", "\treturn err", false)},
 		}},
 		{"pre_tool_use_apply_patch_delete.json", "call_synthetic_0003", receiverID("thr_synthetic_0001"), []lessoncheck.FileOp{
 			{Kind: lessoncheck.OpPatchDelete, Path: "internal/api/obsolete.go"},
@@ -34,21 +49,25 @@ func TestCodexGuardDecodesApplyPatchOps(t *testing.T) {
 		// A move with a hunk changes the content, so it is an update with
 		// a move target, not a plain move.
 		{"pre_tool_use_apply_patch_move.json", "call_synthetic_0004", receiverID("thr_synthetic_0001"), []lessoncheck.FileOp{
-			{Kind: lessoncheck.OpPatchUpdate, Path: "internal/api/old_name.go", MoveTo: "internal/api/new_name.go", Hunks: true},
+			{Kind: lessoncheck.OpPatchUpdate, Path: "internal/api/old_name.go", MoveTo: "internal/api/new_name.go", Hunks: true,
+				Chunks: replace("package api", "// old", "// new", false)},
 		}},
 		{"pre_tool_use_apply_patch_multi.json", "call_synthetic_0005", receiverID("thr_synthetic_0001"), []lessoncheck.FileOp{
 			{Kind: lessoncheck.OpPatchAdd, Path: "hello.txt", Content: strPtr("Hello world\n")},
-			{Kind: lessoncheck.OpPatchUpdate, Path: "src/app.py", MoveTo: "src/main.py", Hunks: true},
+			{Kind: lessoncheck.OpPatchUpdate, Path: "src/app.py", MoveTo: "src/main.py", Hunks: true,
+				Chunks: replace("def greet():", `print("Hi")`, `print("Hello, world!")`, false)},
 			{Kind: lessoncheck.OpPatchDelete, Path: "obsolete.txt"},
 		}},
 		{"pre_tool_use_apply_patch_end_of_file.json", "call_synthetic_0010", receiverID("thr_synthetic_0001"), []lessoncheck.FileOp{
-			{Kind: lessoncheck.OpPatchUpdate, Path: "README.md", Hunks: true},
+			{Kind: lessoncheck.OpPatchUpdate, Path: "README.md", Hunks: true,
+				Chunks: replace("", "old last line", "new last line", true)},
 		}},
 		// A subagent edit names the child receiver, by the rule of the
 		// advisory decoder.
 		{"pre_tool_use_apply_patch_subagent.json", "call_synthetic_0012",
 			receiverID("thr_synthetic_0001", "agent_synthetic_0001"), []lessoncheck.FileOp{
-				{Kind: lessoncheck.OpPatchUpdate, Path: "/workspace/repo/src/child.txt", Hunks: true},
+				{Kind: lessoncheck.OpPatchUpdate, Path: "/workspace/repo/src/child.txt", Hunks: true,
+					Chunks: replace("", "child before", "child one", false)},
 			}},
 	}
 
