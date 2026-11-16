@@ -135,6 +135,29 @@ Files:
   `ORACLE_VERSION` names the installed version, and it keeps the bytes
   of the path cases. Every file in a case is UTF-8 text, so a JSON
   string holds its exact bytes.
+- `apply_patch_path_control_oracle.json`: **not synthetic.** Schema
+  `apply-patch-path-controls/1`, 28 cases recorded from `codex-cli
+  0.169.0` on 2026-11-16 by `make agents-oracle-record
+  ORACLE_VERSION=0.169.0` (`native_codex_path_control_oracle_test.go`), in the
+  form of the content cases: the before files, the patch text, the exit
+  status, stdout, stderr, and every file after the run, offline in a new
+  scratch directory with a scratch `CODEX_HOME`. Each case puts a control
+  or space character into a header path, or into added content. What the
+  cases prove for this applier version: it removes a tab and a carriage
+  return from an Add, Update, Delete, or Move to path when it writes, at
+  any position inside the path, while its report still names the path
+  with the character; it keeps a vertical tab, a form feed, U+0001, an
+  escape, DEL, NEL, a no-break space, U+2028, and a zero-width space in
+  the written path; a tab or a carriage return at the end of a header
+  line goes in the line trim; a line feed ends the header line; and added
+  content keeps a tab and a carriage return. The guard decoder is tested
+  against it offline: it refuses a header path with a tab or a carriage
+  return, and for every other case it names every file that the applier
+  changed. `make agents-native-check` replays the cases byte for byte
+  only on the recorded version, and on any version checks the same rule
+  over the cases and a generated sweep of control and space characters.
+  The cases say nothing about what `tool_input.command` carries in a
+  live `PreToolUse`.
 - `hooks.seamark.json`: the `.codex/hooks.json` entries the Codex setup
   adapter generates in warn mode (binary path is a placeholder; the lesson
   entry was confirmed by the native run of 2026-09-21, the gate entry by

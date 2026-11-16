@@ -229,7 +229,11 @@ return after `sen`, the path `sentinel/x.txt` is written, but the text
 names a path outside a `sentinel/` scope. An armed guard denies such a
 patch, the baseline handler stores no baseline, and the post-edit check
 reports every executable pin as `unknown/incomplete-paths`. The advisory
-edit hook keeps the path as the patch names it.
+edit hook keeps the path as the patch names it. Offline runs of that
+applier keep the other probed characters (every other C0 and C1
+control, DEL, and the Unicode space characters) in the written path, so
+such a path is checked as written. `make agents-native-check
+CLIENT=codex` checks this rule against the installed applier.
 
 Codex post-edit findings go back as `additionalContext` in the
 `PostToolUse` hook reply on stdout, with exit 0. The advisory edit hook
@@ -810,8 +814,8 @@ recordings. The guard recording of 0.169.0 holds one live Update (case
 | --- | --- | --- |
 | `make agents-test` | Go and the repository's build prerequisites; no agent CLI or credentials | adapter contracts, setup, hooks, delivery, gates, diagnostics, and fake subprocesses; also covered by `make test` and CI |
 | `make smoke` | the built binary | the generated Claude Code and Codex configuration in a fresh repository, the hook commands it wrote running as written, and no credential in a generated file; part of CI and of every release |
-| `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case, when the installed version is the recorded one (else it skips with the reason); the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
-| `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
+| `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case and path-control case, when the installed version is the recorded one (else it skips with the reason); on any version, that the guard decoder refuses each path-control patch or names every file that the applier changed, over the recorded cases and a generated sweep of control and space characters in header paths; the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
+| `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json` and of the path-control cases into `internal/integration/testdata/codex/apply_patch_path_control_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
 | `make agents-native-smoke CLIENT=codex` | the client CLI and operator authentication; costs tokens | one distillation group read through the client preset with no failed group and a proposed pin, the pin's client provenance in the ledger, the command disclosed by `--dry-run`, trigger extraction in dry-run only, and the workspace unchanged afterwards |
 | `make native-replay CLIENT=<client>` | Go and the repository's build prerequisites; no client CLI, no model, no credentials | the replay of the reviewed timing and guard recordings in `internal/integration/testdata/<client>/timing` and `.../guard`, and the offline tests of the recording script for that client; a replay without a reviewed recording skips as pending, and a skip gives no evidence |
 | `make native-record CLIENT=<client>` | the client CLI and operator authentication; costs tokens | the prompts of one scenario (`NATIVE_RECORD_SCENARIO=timing`, the default, or `guard`) in a scratch repository, with one cost line per run; it writes a sanitized copy for review and never writes into testdata; it refuses a binary or a tree with uncommitted changes unless `SEAMARK_ALLOW_DIRTY=1` |
@@ -891,6 +895,13 @@ Before release:
 - **Done:** Name the internal audit/lock exclusions in verification's
   `not covered` output, as one fixed text. Default selection semantics
   and explicit-path inclusion stay unchanged.
+- **Done:** Close the Codex guard bypass through a tab or a carriage
+  return in a patch header path. codex-cli 0.169.0 removes both
+  characters when it writes, so the guard and the post-edit check judged
+  a path that the applier did not write. Both now refuse such a path as
+  an incomplete path set (fail closed); the advisory edit hook is
+  unchanged. The applier behavior is recorded offline in
+  `internal/integration/testdata/codex/apply_patch_path_control_oracle.json`.
 - **Done:** Investigate and fix the known local-script timeout flake in the
   benchmark tests without weakening validated behavior. Handle any
   benchmark fingerprint change explicitly; successful reruns alone do
