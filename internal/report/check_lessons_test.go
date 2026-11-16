@@ -135,6 +135,38 @@ func TestCheckLessonsDiffPathsOutsideSnapshot(t *testing.T) {
 	assert.Empty(t, NewCheckLessonsEnvelope(d, v, PolicyInputStdinDiff, []string{"a.go", "new.go"}).Combined.DiffPathsOutsideSnapshot)
 }
 
+// TestCheckLessonsDiffPathsNeedAnExecutableCheck proves that the outside
+// paths of a supplied diff need an executable check: with none, no check
+// read the working tree, so the note and the JSON field would warn about
+// nothing. Every other state keeps them, also no applicable check, where
+// the supplied diff can hold the change that a check would apply to, and
+// incomplete, which an invalid configuration gives.
+func TestCheckLessonsDiffPathsNeedAnExecutableCheck(t *testing.T) {
+	d := &gate.Decision{Verdict: gate.VerdictAllow, Mode: "warn"}
+	diff := []string{"a.go", "src/b.go"}
+
+	none := NewCheckLessonsEnvelope(d, checkLessonsVerification(lessoncheck.SummaryNoExecutableChecks,
+		lessoncheck.Change{Path: "a.go"}), PolicyInputStdinDiff, diff)
+	assert.Empty(t, none.Combined.DiffPathsOutsideSnapshot)
+
+	data, err := json.Marshal(none)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "diff_paths_outside_snapshot")
+
+	var b strings.Builder
+	WriteCheckLessons(&b, none, "verdict  allow (mode: warn)\n", false)
+	assert.NotContains(t, b.String(), "note: the lesson checks read")
+
+	for _, state := range []lessoncheck.SummaryState{
+		lessoncheck.SummaryNoApplicableChecks, lessoncheck.SummaryPassed,
+		lessoncheck.SummaryIncomplete, lessoncheck.SummaryViolation,
+	} {
+		env := NewCheckLessonsEnvelope(d, checkLessonsVerification(state,
+			lessoncheck.Change{Path: "a.go"}), PolicyInputStdinDiff, diff)
+		assert.Equal(t, []string{"src/b.go"}, env.Combined.DiffPathsOutsideSnapshot, state)
+	}
+}
+
 // TestLessonChecksNotRequested proves the line that ends a check without
 // lesson verification. It names the count of executable pins that cover
 // a changed path, says that an invalid or unreadable lessons.yaml leaves

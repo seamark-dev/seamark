@@ -583,6 +583,12 @@ model-boundary delivery.
   repository. `status --json` keeps `"freshness": "stale"` and adds
   `stale_reason` (`other-version` or `workspace-changed`), and the
   preparation document adds `mined_stale_reason`.
+- **No supplied-diff note when no lesson check exists.** `check
+  --lessons` and MCP `check` with lesson checks no longer print the note
+  that the lesson checks read the working tree, or
+  `diff_paths_outside_snapshot`, when the lesson state is
+  `no-executable-checks`. No check ran, so the note warned about
+  nothing. Every other state keeps it, including `no-applicable-checks`.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

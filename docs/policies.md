@@ -252,7 +252,8 @@ pins after the existing policy check. MCP `check` opts in with
 `lesson_checks: true`. The policy uses its supplied diff; lesson checks
 read the current working tree against `HEAD`, including nonignored
 untracked changes. These inputs can differ: a supplied diff that names a
-file outside the verified snapshot gets a note under the combined line.
+file outside the verified snapshot gets a note under the combined line
+when an executable check exists.
 Plain `check` keeps its policy verdict and advisory guidance unchanged;
 when an executable pin covers a changed file, its text ends with a
 `lesson checks: not requested` line that names the route.

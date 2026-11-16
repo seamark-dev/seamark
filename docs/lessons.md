@@ -954,7 +954,9 @@ so, for example `note: the lesson checks read the working tree, not the
 supplied diff; 1 file of the diff is not in the verified snapshot
 (src/todo.go)`. The note names three files and counts the rest; the
 JSON lists every path in `combined.diff_paths_outside_snapshot`. The
-diff of `git diff HEAD` gets no note.
+diff of `git diff HEAD` gets no note, and neither does a repository with
+no executable check (`lessons no-executable-checks`), because then no
+check read the working tree. No applicable check keeps the note.
 
 A failed audit append never changes the verdict or the exit code. When
 the lesson-check audit record is not written and the command exits 0,

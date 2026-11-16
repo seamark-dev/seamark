@@ -978,8 +978,8 @@ func TestCheckNamesLessonChecksNotRequested(t *testing.T) {
 // supplied diff that the lesson checks did not read. The lesson checks
 // read the working tree, so a piped diff over a clean tree passed with
 // no word about it. The note follows the combined line, and the JSON
-// lists the paths. A diff whose paths are all in the snapshot, and git
-// diff HEAD, get no note.
+// lists the paths. A diff whose paths are all in the snapshot, git diff
+// HEAD, and a repository with no executable check get no note.
 func TestCheckLessonsNamesDiffPathsOutsideSnapshot(t *testing.T) {
 	sentinel := newInvokerEnvironment(t)
 
@@ -1013,6 +1013,25 @@ index 0000000..1111111
 		combined := decodeCheckLessons(t, jsonOut).Combined
 		assert.Equal(t, []string{"src/todo.go"}, combined.DiffPathsOutsideSnapshot)
 		assert.Equal(t, report.PolicyInputStdinDiff, combined.PolicyInput)
+	})
+
+	// No executable pin means that no check read the working tree, so
+	// the note would warn about nothing.
+	t.Run("a repository with no executable check", func(t *testing.T) {
+		root := checkLessonsFixture(t, sentinel)
+		verifyGit(t, root, "rm", "-q", ".seamark/lessons.yaml")
+		verifyGit(t, root, "commit", "-q", "-m", "Drop the pins")
+
+		stdout, _, err := runIn(t, todoDiff, "-C", root, "check", "--lessons")
+		require.NoError(t, err)
+
+		head, _, _ := strings.Cut(stdout, "\n")
+		assert.Contains(t, head, "lessons no-executable-checks")
+		assert.NotContains(t, stdout, "note: the lesson checks read")
+
+		jsonOut, _, err := runIn(t, todoDiff, "-C", root, "check", "--lessons", "--json")
+		require.NoError(t, err)
+		assert.NotContains(t, jsonOut, "diff_paths_outside_snapshot")
 	})
 
 	t.Run("a diff that the snapshot holds", func(t *testing.T) {
