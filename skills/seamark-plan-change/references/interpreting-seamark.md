@@ -22,7 +22,7 @@ Every call edge in `why` declares how it was derived: `[qualified]`, `[same-pack
 
 ## 5. Unindexed files, parse warnings, and empty sections are unknown, never safe
 
-`check` appends `note: N of M changed files have changes outside any indexed symbol (…) — their effect reach is unknown, not clean`. `orient` prints `WARN   N files failed to parse and are invisible below`. `change_set` prints `<file>: not in the index` for a file the index has not seen, a new file among them. An empty `effects` line, an empty callers list, or an empty co-change section means nothing was found in what the index covers. Quote the coverage note beside any "no effects" or "no callers" claim, and read the unindexed hunks yourself. Absence of evidence is never evidence of safety.
+`check` appends `note: N of M changed files have changes outside any indexed symbol (…) — their effect reach is unknown, not clean`. For a changed constant, variable, type, or class field it appends `note: N changed values or types have no effects of their own (…) — seamark does not track readers of a value, so their effect reach is unknown, not clean`. `orient` prints `WARN   N files failed to parse and are invisible below`. `change_set` prints `<file>: not in the index` for a file the index has not seen, a new file among them. An empty `effects` line, an empty callers list, or an empty co-change section means nothing was found in what the index covers. Quote the coverage note beside any "no effects" or "no callers" claim, read the unindexed hunks yourself, and find the readers of each named value. Absence of evidence is never evidence of safety.
 
 ## 6. `expand lessons:<dir>` holds the raw findings
 

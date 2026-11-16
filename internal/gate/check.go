@@ -3,6 +3,7 @@ package gate
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -36,12 +37,18 @@ const noFileHeader = "names no changed file (no diff --git, ---, +++ or rename h
 // EvalDiff computes the blast radius of a unified diff and evaluates
 // policy over it. Changed lines map to symbols. Each symbol already
 // carries the effect tags that it reaches through its callees. The union
-// of these tags is what the change can reach.
+// of these tags is what the changed code reaches through its own calls.
+// It leaves out the code that reads a changed value, because the index
+// records no edge from a reader to a value.
 //
 // The gate decides the unknown-reach note per change group. A file gets
 // the note when one of its change groups has no recorded line in an
 // indexed symbol. So one edit inside a symbol cannot hide a deleted
 // function or an import edit in the same file.
+//
+// A second note names the changed value and type symbols that carry no
+// effects, because a clean union says nothing about their readers.
+// valueSymbols decides which symbols the note names.
 //
 // source names where diffText comes from, one of the Source constants.
 // A diff with no changed file never reads as a clean allow. Empty text
@@ -62,6 +69,10 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 	files := make([]string, 0, len(parsed.paths))
 	tagSet := map[string]bool{}
 
+	// values holds the FQN of each value or type symbol for the value
+	// note, by symbol ID, so a symbol counts once.
+	values := map[int64]string{}
+
 	var unindexed []string
 
 	for _, f := range parsed.paths {
@@ -72,6 +83,11 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 		if err != nil {
 			return nil, err
 		}
+
+		// effectful tells for each touched symbol whether it carries
+		// effects. The value note leaves out a symbol with effects, because
+		// diff.effects already shows them.
+		effectful := map[int64]bool{}
 
 		for i := range syms {
 			sym := &syms[i]
@@ -88,6 +104,14 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 
 			for _, e := range effs {
 				tagSet[e.Tag] = true
+			}
+
+			effectful[sym.ID] = len(effs) > 0
+		}
+
+		for _, g := range parsed.groups[f] {
+			for _, sym := range valueSymbols(g, syms, effectful) {
+				values[sym.ID] = sym.FQN
 			}
 		}
 
@@ -116,9 +140,10 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 		"command": zeroCommand(),
 		"env":     p.DetectEnv(os.Environ()),
 		"diff": map[string]any{
-			"files":           files,
-			"effects":         tags,
-			"unindexed_files": len(unindexed),
+			"files":                 files,
+			"effects":               tags,
+			"unindexed_files":       len(unindexed),
+			"unknown_reach_symbols": len(values),
 		},
 	}
 
@@ -147,7 +172,95 @@ func EvalDiff(p *Policy, st *store.Store, diffText, source string) (*Decision, e
 			len(unindexed), len(files), strings.Join(unindexed, ", ")))
 	}
 
+	if len(values) > 0 {
+		d.Notes = append(d.Notes, valueNote(slices.Collect(maps.Values(values))))
+	}
+
 	return d, nil
+}
+
+// maxNamedValues limits the symbols that the value note names. A change
+// to a generated file can touch hundreds of types, and a long note hides
+// the verdict.
+const maxNamedValues = 10
+
+// valueNote says that seamark does not know who reads the changed value
+// and type symbols fqns. It names at most maxNamedValues of them in
+// sorted order and counts the rest.
+func valueNote(fqns []string) string {
+	sort.Strings(fqns)
+
+	named := strings.Join(fqns[:min(len(fqns), maxNamedValues)], ", ")
+	if extra := len(fqns) - maxNamedValues; extra > 0 {
+		named += fmt.Sprintf(", and %d more", extra)
+	}
+
+	if len(fqns) == 1 {
+		return "1 changed value or type has no effects of its own (" + named +
+			") — seamark does not track readers of a value, so its effect reach is unknown, not clean"
+	}
+
+	return fmt.Sprintf("%d changed values or types have no effects of their own (%s) — "+
+		"seamark does not track readers of a value, so their effect reach is unknown, not clean", len(fqns), named)
+}
+
+// valueSymbols returns the symbols of syms that the value note names for
+// one change group. A symbol is named when it holds a line of the group,
+// is a value or a type, and carries no effects (effectful is false). Its
+// readers can reach effects, but no edge records a reader of a value.
+//
+// A line in a function or a method names nothing, because the effects of
+// that code show. A class is not named when the same group edits one of
+// its methods. A removed line counts as the line above it, and in a class
+// that line is often the blank line before a method, which lies in the
+// class and in no method. So a method signature edit does not name its
+// class.
+func valueSymbols(group []uint32, syms []model.Symbol, effectful map[int64]bool) []*model.Symbol {
+	var edited []*model.Symbol
+
+	for i := range syms {
+		if isCode(syms[i].Kind) && slices.ContainsFunc(group, func(n uint32) bool { return inSpan(&syms[i], n) }) {
+			edited = append(edited, &syms[i])
+		}
+	}
+
+	var out []*model.Symbol
+
+	for _, n := range group {
+		var holders []*model.Symbol
+
+		for i := range syms {
+			if inSpan(&syms[i], n) {
+				holders = append(holders, &syms[i])
+			}
+		}
+
+		if slices.ContainsFunc(holders, func(s *model.Symbol) bool { return isCode(s.Kind) }) {
+			continue
+		}
+
+		for _, s := range holders {
+			if effectful[s.ID] || slices.ContainsFunc(edited, func(m *model.Symbol) bool { return encloses(s, m) }) {
+				continue
+			}
+
+			out = append(out, s)
+		}
+	}
+
+	return out
+}
+
+// isCode reports whether a symbol of kind k is a function or a method:
+// code whose own calls give its effects. Every other kind in a file is
+// a value or a type, whose readers the index does not record.
+func isCode(k model.SymbolKind) bool {
+	return k == model.KindFunction || k == model.KindMethod
+}
+
+// encloses reports whether the span of outer holds the span of inner.
+func encloses(outer, inner *model.Symbol) bool {
+	return outer.Span.StartLine <= inner.Span.StartLine && inner.Span.EndLine <= outer.Span.EndLine
 }
 
 // attributed reports whether a change group has a recorded line in the

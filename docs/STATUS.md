@@ -92,7 +92,7 @@ Command gate, diff check, audit, hooks.
 | Capability | State |
 |---|---|
 | Command classification (shell parser, wrappers, interpreter payloads, dynamic detection) | working |
-| Diff blast radius with coverage uncertainty (`unindexed_files`) | working |
+| Diff blast radius with coverage uncertainty (`unindexed_files`, `unknown_reach_symbols`) | working |
 | Warn mode (report, never block) | working; use this mode when evaluating experimental policies |
 | Secret-safe audit log (hashed by default, 0600, rotation, flock) | working |
 | Enforce mode (exit 2 on a blocking verdict or a gate failure) | **experimental**: an agent that can edit `policy.yaml` or `.claude/settings.json` can weaken it ([threat-model.md](threat-model.md)); the gate cannot block a command when the client stops the hook at its timeout or cannot start the binary ([policies.md](policies.md)) |

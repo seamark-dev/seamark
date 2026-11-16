@@ -299,6 +299,19 @@ model-boundary delivery.
   symbol. Before, one edit inside a symbol hid a deleted function or an
   import edit in the same file. A rule over `diff.unindexed_files` can
   now match, and under enforcement block, more diffs.
+- **A changed value no longer reads as clean.** A change to a constant
+  that a function passes to `exec.CommandContext` gave `check` no
+  effects and no note, while the same value written inline reached
+  `proc:exec`: the index records calls, not reads. `check` and MCP
+  `check`, in text and JSON, now add a note when a changed line lies in
+  a Go `const`, `var` or `type`, a JS/TS or Python module-level value or
+  type, or a class field or attribute, and in no function or method,
+  and that symbol has no effects of its own. The note names those
+  symbols and says that seamark does not track readers of a value, so
+  their reach is unknown, not clean. The new count
+  `diff.unknown_reach_symbols` lets a rule act on it. Effects and the
+  verdicts of existing rules do not change. docs/policies.md no longer
+  calls the union of effects what the change can ultimately reach.
 - **Git config and the git output that seamark reads.** `check` and MCP
   `check` run the `git diff HEAD` fallback with fixed color, external
   diff, textconv, path prefix, relative path, submodule, and rename

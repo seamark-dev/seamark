@@ -463,7 +463,12 @@ func gitPush(args []string, root string) (isPush, isForce bool, branch string) {
 // rules may access is present (CEL errors on missing keys), nothing is
 // touched.
 func emptyDiff() map[string]any {
-	return map[string]any{"files": []string{}, "effects": []string{}, "unindexed_files": 0}
+	return map[string]any{
+		"files":                 []string{},
+		"effects":               []string{},
+		"unindexed_files":       0,
+		"unknown_reach_symbols": 0,
+	}
 }
 
 // evaluate runs every rule and keeps the strongest verdict.

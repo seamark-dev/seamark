@@ -286,7 +286,10 @@ when a changed file has changes outside every indexed symbol, so absence of evid
 safety. A change inside a package-level value initializer or a class
 field lies in the symbol of that value or class, and the symbol carries
 the calls there, so the change reports their effects instead of reading
-as reaching nothing.
+as reaching nothing. A change to a value or type with no effects of its
+own, such as a constant that a function passes to a sink, gets a second
+note: seamark does not track readers of a value, so its reach is
+unknown, not clean.
 
 Installation health is the other half:
 
@@ -372,6 +375,9 @@ table in [Data flow](data-flow.md).
   spec with several names (`var a, b = f(), g()`) carries every call of
   that spec. A Go `const` initializer is not mined, and a function value
   without a call (`var prepare = delivery.Prepare`) still gets no edge.
+  No edge records that a function reads a value, so a change to a value
+  reaches none of the effects of its readers; `check` names such a value
+  in a note when it has no effects of its own.
   A JS/TS or Python class carries the calls of its body outside its
   methods: field initializers, static blocks, class attributes, and a
   method decorator that the grammar places outside the method (TypeScript
