@@ -233,6 +233,13 @@ func healthLines(h indexhealth.Health, now time.Time) [3]string {
 			coverage += fmt.Sprintf(" · %d skipped by config", c.FilesSkipped)
 		}
 
+		// A Markdown or YAML file is seen and not parsed. The count says
+		// why the parsed count is lower, so the gap does not read as lost
+		// code.
+		if c.FilesUnsupported > 0 {
+			coverage += fmt.Sprintf(" · %d with no language extractor", c.FilesUnsupported)
+		}
+
 		switch {
 		case c.FilesDeleted == 1:
 			coverage += " · 1 tracked file deleted, not staged"

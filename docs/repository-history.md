@@ -141,7 +141,7 @@ Example status output:
 
 ```text
 workspace      current (schema v8)
-parsed         703 of 832 seen files (98 skipped by config)
+parsed         703 of 832 seen files (98 skipped by config, 31 with no language extractor)
 symbols        1221, 2931 edges — call resolution 71.3% qualified · 23.9% same-package · 4.8% unique-name (1796 calls)
 effects        83 direct-sink symbols, 692 by propagation
 history        3814 decisions; evidence median age 74d (oldest 1042d)
@@ -154,6 +154,14 @@ clients        claude  gate (warn) + lessons hooks installed; registered in .mcp
                claude  skills, mcp-registration, tool-grants, edits, commands, resets: not natively verified
                codex   no hooks installed; MCP registration not registered
 ```
+
+A seen file that is not parsed, not skipped by config, and not a parse
+error has no language extractor, for example a Markdown or YAML file.
+The `parsed` line counts those files, `--json` carries the count as
+`coverage.files_unsupported`, and the coverage line of `orient` adds
+`· 31 with no language extractor` when the count is above zero. The
+count comes from the counts that the index already stores, so an index
+from an older seamark shows it too.
 
 When git tracks files that the working tree no longer has, and the
 deletions are not staged, a `deleted` line after `parsed` says, for

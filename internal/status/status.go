@@ -340,12 +340,13 @@ func Print(w io.Writer, s *Status) {
 	case !s.Coverage.Known:
 		fmt.Fprintf(w, "parsed         unknown — reindex with this seamark to record coverage\n")
 	case s.Coverage.ParseErrors > 0:
-		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config) — %d PARSE ERRORS:\n"+
+		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config, %d with no language extractor) — %d PARSE ERRORS:\n"+
 			"               those files are invisible to every answer\n",
-			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped, s.Coverage.ParseErrors)
+			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped, s.Coverage.FilesUnsupported,
+			s.Coverage.ParseErrors)
 	default:
-		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config)\n",
-			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped)
+		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config, %d with no language extractor)\n",
+			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped, s.Coverage.FilesUnsupported)
 	}
 
 	// A deleted path is a state of the working tree. The index misses

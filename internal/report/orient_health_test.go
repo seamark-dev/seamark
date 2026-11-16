@@ -132,7 +132,8 @@ func TestOrientPrintsTheHealthHeader(t *testing.T) {
 	out := orientWith(t, st, root, "fp")
 
 	header := "  health indexed 2026-11-15 09:00 UTC (3h ago) · freshness current\n" +
-		"         parsed 120 of 340 seen files · 12 skipped by config · 1 tracked file deleted, not staged\n" +
+		"         parsed 120 of 340 seen files · 12 skipped by config · 208 with no language extractor · " +
+		"1 tracked file deleted, not staged\n" +
 		"         call edges by origin: 62.3% qualified · 30.1% same-package · 7.6% unique-name (1000 calls)\n"
 
 	assert.Equal(t, strings.Split(strings.TrimSuffix(header, "\n"), "\n"), headerLines(t, out))
@@ -216,14 +217,25 @@ func TestOrientHealthFreshnessWords(t *testing.T) {
 func TestOrientHealthCoverageLine(t *testing.T) {
 	const unknown = "         coverage unknown (no readable coverage summary) — `seamark status` has details"
 
+	// A seen file that is not parsed, skipped, or a parse error has no
+	// language extractor. The line names that count only when it is above
+	// zero.
 	cases := map[string]string{
-		`{"files_seen":9,"files_parsed":7,"parse_errors":0}`:                     "         parsed 7 of 9 seen files",
-		`{"files_seen":9,"files_parsed":7,"files_skipped":0,"parse_errors":0}`:   "         parsed 7 of 9 seen files",
-		`{"files_seen":30,"files_parsed":7,"files_skipped":12,"parse_errors":0}`: "         parsed 7 of 30 seen files · 12 skipped by config",
-		`{"files_seen":9,"files_parsed":7,"files_deleted":1,"parse_errors":0}`:   "         parsed 7 of 9 seen files · 1 tracked file deleted, not staged",
-		`{"files_seen":9,"files_parsed":7,"files_deleted":3,"parse_errors":0}`:   "         parsed 7 of 9 seen files · 3 tracked files deleted, not staged",
+		`{"files_seen":7,"files_parsed":7,"parse_errors":0}`:                   "         parsed 7 of 7 seen files",
+		`{"files_seen":8,"files_parsed":7,"files_skipped":1,"parse_errors":0}`: "         parsed 7 of 8 seen files · 1 skipped by config",
+		`{"files_seen":9,"files_parsed":7,"parse_errors":0}`:                   "         parsed 7 of 9 seen files · 2 with no language extractor",
+		`{"files_seen":9,"files_parsed":7,"files_skipped":0,"parse_errors":0}`: "         parsed 7 of 9 seen files · 2 with no language extractor",
+		`{"files_seen":30,"files_parsed":7,"files_skipped":12,"parse_errors":0}`: "         parsed 7 of 30 seen files · 12 skipped by config · " +
+			"11 with no language extractor",
+		`{"files_seen":9,"files_parsed":7,"files_deleted":1,"parse_errors":0}`: "         parsed 7 of 9 seen files · 2 with no language extractor · " +
+			"1 tracked file deleted, not staged",
+		`{"files_seen":9,"files_parsed":7,"files_deleted":3,"parse_errors":0}`: "         parsed 7 of 9 seen files · 2 with no language extractor · " +
+			"3 tracked files deleted, not staged",
 		`{"files_seen":9,"files_parsed":7,"files_skipped":1,"files_deleted":3,"parse_errors":0}`: "         parsed 7 of 9 seen files · " +
-			"1 skipped by config · 3 tracked files deleted, not staged",
+			"1 skipped by config · 1 with no language extractor · 3 tracked files deleted, not staged",
+		// The parse error is left to the warning line and is not counted
+		// as a file with no extractor.
+		`{"files_seen":4,"files_parsed":2,"parse_errors":1}`: "         parsed 2 of 4 seen files · 1 with no language extractor",
 	}
 
 	for summary, want := range cases {

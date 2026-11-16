@@ -490,6 +490,14 @@ model-boundary delivery.
   variable holds and that is called through it. The header still starts
   with `callers (N)`, and no line is added. The CLI and MCP both show
   it.
+- **`status` and `orient` count the files with no language extractor.**
+  The `parsed` line of `status` now reads, for example, `parsed 937 of
+  1039 seen files (0 skipped by config, 102 with no language
+  extractor)`, and the coverage line of `orient` adds `· 102 with no
+  language extractor` when the count is above zero. `status --json` has
+  the new field `coverage.files_unsupported`. The count comes from the
+  counts that the index already stores, so an existing index shows it
+  without a rebuild.
 
 Upgrade note: the database upgrades to schema 8 in place on first open
 (the scope choice of a proposal), and state bundles move to version 4.

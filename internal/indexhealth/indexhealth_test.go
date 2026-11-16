@@ -2,6 +2,7 @@ package indexhealth
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -167,7 +168,9 @@ func TestParseCoverageIsStrict(t *testing.T) {
 			Known: true, FilesSeen: 9, FilesParsed: 5, FilesSkipped: 1, FilesDeleted: 2, ParseErrors: 3,
 		}},
 		{`{"files_seen":0,"files_parsed":0,"parse_errors":0}`, Coverage{Known: true}},
-		{`{"files_seen":5,"files_parsed":1,"parse_errors":0,"extra":"x"}`, Coverage{Known: true, FilesSeen: 5, FilesParsed: 1}},
+		{`{"files_seen":5,"files_parsed":1,"parse_errors":0,"extra":"x"}`, Coverage{
+			Known: true, FilesSeen: 5, FilesParsed: 1, FilesUnsupported: 4,
+		}},
 		{` { "files_seen" : 2 , "files_parsed" : 2 , "parse_errors" : 0 } `, Coverage{Known: true, FilesSeen: 2, FilesParsed: 2}},
 		{`{"files_seen":` + maxInt + `,"files_parsed":` + maxInt + `,"parse_errors":0}`, Coverage{
 			Known: true, FilesSeen: math.MaxInt, FilesParsed: math.MaxInt,
@@ -210,6 +213,27 @@ func TestParseCoverageIsStrict(t *testing.T) {
 	for _, summary := range unknown {
 		assert.Equal(t, Coverage{}, ParseCoverage(summary), summary)
 	}
+}
+
+// TestParseCoverageDerivesUnsupportedFiles proves that the seen files
+// that are not parsed, skipped, or a parse error count as files with no
+// language extractor, and that status --json carries that count. The
+// summary stores no such count, so an older summary gets it too.
+func TestParseCoverageDerivesUnsupportedFiles(t *testing.T) {
+	for summary, want := range map[string]int{
+		`{"files_seen":1039,"files_parsed":937,"files_skipped":0,"parse_errors":0}`:  102,
+		`{"files_seen":1039,"files_parsed":900,"files_skipped":30,"parse_errors":7}`: 102,
+		`{"files_seen":10,"files_parsed":8,"files_deleted":4,"parse_errors":2}`:      0,
+		`{"files_seen":3,"files_parsed":3,"parse_errors":0}`:                         0,
+	} {
+		c := ParseCoverage(summary)
+		require.True(t, c.Known, summary)
+		assert.Equal(t, want, c.FilesUnsupported, summary)
+	}
+
+	data, err := json.Marshal(ParseCoverage(`{"files_seen":5,"files_parsed":2,"files_skipped":1,"parse_errors":0}`))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"files_unsupported":2`)
 }
 
 func TestAge(t *testing.T) {
