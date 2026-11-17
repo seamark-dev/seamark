@@ -97,7 +97,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # golangci-lint refuses a module whose go directive is newer than
+      # the Go that built it. v2.15.0 is built with Go 1.27, the version
+      # that go.mod names.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.12
+          version: v2.15.0
