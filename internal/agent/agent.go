@@ -14,6 +14,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -253,9 +254,10 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 // a last kill ends the group after every run, whatever its outcome.
 //
 // The watch repeats the kill every groupKillInterval until Wait
-// returns. On macOS one group kill can miss a process that a member
-// starts at that moment. That process stays in the group and holds
-// stdout, so the stop waits for it. The next kill reaches it.
+// returns or the group has no member left. On macOS one group kill can
+// miss a process that a member starts at that moment. That process
+// stays in the group and holds stdout, so the stop waits for it. The
+// next kill reaches it.
 func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 	if !c.ownGroup {
 		return cmd.Run()
@@ -278,8 +280,12 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 		defer tick.Stop()
 
 		for {
-			// An error means that the group is gone already.
-			_ = killGroup(cmd)
+			// os.ErrProcessDone means that the group has no member left.
+			// Its ID can then go to an unrelated new group, so the
+			// watch stops here instead of signaling that ID again.
+			if errors.Is(killGroup(cmd), os.ErrProcessDone) {
+				return
+			}
 
 			select {
 			case <-tick.C:
