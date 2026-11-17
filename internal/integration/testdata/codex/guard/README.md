@@ -18,10 +18,10 @@ same client version.
 `make native-record CLIENT=codex NATIVE_RECORD_SCENARIO=guard` ran
 `scripts/native-record.sh` at commit `d7a24f9` of the release branch,
 with the Seamark binary of that commit (`v0.8.0-301-gd7a24f9`). The
-sanitizer `scripts/native-record-sanitize.py` at commit `334e43a` of the
-same branch, with the Codex ID pass, the time shift, and the commit ID
-and agent role masks, made this copy from the same raw recording (see
-"Sanitization").
+sanitizer `scripts/native-record-sanitize.py` at commit `abc794b` of the
+same branch, with the Codex ID pass, the time shift, and the commit ID,
+agent role, and model override masks, made this copy from the same raw
+recording (see "Sanitization").
 
 The script made a scratch Git repository with an enforce pin on
 `sentinel/` (rule `frozen-sentinel`, a path check) and one on `notes/`
@@ -197,7 +197,10 @@ writes the HEAD commit of the scratch repository there, and a commit ID
 hashes the commit time and the local time offset. The agent role list
 of the spawn tool reads `<sanitized>` in the 3 tool outputs that print
 that tool, because the list names the roles of the operator's own Codex
-configuration. The sanitizer kept the other tool outputs, so the
+configuration. The model override list of the same tool reads
+`<sanitized>` in those outputs too, because it names the models and the
+reasoning efforts of the operator's account; the model of the run,
+`gpt-5.6-luna`, stays. The sanitizer kept the other tool outputs, so the
 rollouts still hold the 9 deny outputs as `custom_tool_call_output`
 records. The 4 post-edit records are
 developer messages, so only `guard-context.jsonl` keeps their text, as
