@@ -1019,12 +1019,17 @@ other `lessons` mode. `--verify --hook` takes no `--file` and no
 `--json`, because it reads its paths from the event. Setup gives the
 baseline handler and the guard a 10 s hook timeout, and the post-edit
 handler 15 s. Claude Code 2.1.325 and codex-cli 0.169.0 stop a
-post-edit hook at 15 s: the findings never reach the agent, the edit
-stays, and the agent gets no notice. codex-cli 0.169.0 also runs no
-post-edit hook after a patch that fails during its execution. In both
-cases the baseline stays in `.seamark/checks/pending/` until a later
-hook or `lessons --verify` discards it after `pending-max-age` (1 h),
-and `seamark lessons --verify` checks the working tree on request.
+post-edit hook on `PostToolUse` at 15 s: the findings never reach the
+agent, the edit stays, and the agent gets no notice. The recordings
+show this stop only for a root `Write` and a root patch; no child case
+and no `Edit` case shows it. The Claude Code `PostToolUseFailure` entry
+has the same timeout, but no recording has a slow or a stopped hook on
+that event. codex-cli 0.169.0 also runs no post-edit hook after a
+patch that fails during its execution. After the stop and after the
+failed patch, the baseline stays in `.seamark/checks/pending/` until
+a later hook or `lessons --verify` discards it after `pending-max-age`
+(1 h), and `seamark lessons --verify` checks the working tree on
+request.
 
 A deny prints the reason on stderr, as the gate does. This is a guard run
 on a Claude Code `Write` event that adds a forbidden marker:
