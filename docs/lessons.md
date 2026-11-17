@@ -1018,7 +1018,18 @@ the cause. `--guard` and `--baseline` need `--hook` and combine with no
 other `lessons` mode. `--verify --hook` takes no `--file` and no
 `--json`, because it reads its paths from the event. Setup gives the
 baseline handler and the guard a 10 s hook timeout, and the post-edit
-handler 15 s.
+handler 15 s. Claude Code 2.1.325 and codex-cli 0.169.0 stop a
+post-edit hook on `PostToolUse` at 15 s: the findings never reach the
+agent, the edit stays, and the agent gets no notice. The recordings
+show this stop only for a root `Write` and a root patch; no child case
+and no `Edit` case shows it. The Claude Code `PostToolUseFailure` entry
+has the same timeout, but no recording has a slow or a stopped hook on
+that event. codex-cli 0.169.0 also runs no post-edit hook after a
+patch that fails during its execution. After the stop and after the
+failed patch, the baseline stays in `.seamark/checks/pending/` until
+a later hook or `lessons --verify` discards it after `pending-max-age`
+(1 h), and `seamark lessons --verify` checks the working tree on
+request.
 
 A deny prints the reason on stderr, as the gate does. This is a guard run
 on a Claude Code `Write` event that adds a forbidden marker:
@@ -1050,9 +1061,13 @@ The guard requests denial. Reviewed recordings verify native denial of
 Claude Code `Write` and `Edit` (Claude Code 2.1.319) and of Codex
 `apply_patch` (codex-cli 0.169.0) in the root and child contexts, with
 one limit: the client lets the write run after its 10 s hook timeout.
-Seamark cannot read the Codex trust record, so a Codex path still reads
-`active-unverified`. Native denial of `MultiEdit` and the post-edit
-reply remain unverified. The guard projects Codex Update content by the
+Reviewed recordings of Claude Code 2.1.325 and codex-cli 0.169.0 verify
+the post-edit reply on `PostToolUse` of the same tools in the root and
+child contexts, with one limit: the client drops the findings after
+its 15 s hook timeout, and the edit stays. Seamark cannot read the
+Codex trust record, so a Codex path still reads `active-unverified`.
+Native denial and the post-edit reply of `MultiEdit` remain pending.
+The guard projects Codex Update content by the
 rules of the codex-cli 0.169.0 applier. A hunk that does not match the
 current file, a hunk form outside the verified grammar, a file with a
 lone carriage return, a file that the patch names twice, and an added

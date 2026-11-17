@@ -335,7 +335,11 @@ hook can reshape the pending arguments. Reviewed recordings of Claude
 Code 2.1.319 and codex-cli 0.169.0 verify native guard denial of
 Claude Code `Write` and `Edit` and of Codex `apply_patch`, with the
 limit that the client lets the write run after its 10 s hook timeout.
-Native denial of `MultiEdit` and the reply evidence remain pending;
+Reviewed recordings of Claude Code 2.1.325 and codex-cli 0.169.0 verify
+the post-edit reply on `PostToolUse` of the same tools, with the limit
+that the client drops the post-edit findings after its 15 s hook
+timeout; the edit stays. Native denial and the post-edit reply of
+`MultiEdit` remain pending;
 v0.9.0 cannot ship without
 [reviewed native evidence and the required fixes](agent-integrations.md#release-checklist).
 

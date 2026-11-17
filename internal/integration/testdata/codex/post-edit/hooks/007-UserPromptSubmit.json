@@ -1,0 +1,10 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000002",
+  "turn_id": "20000000-0000-4000-8000-000000000002",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/17/rollout-2026-11-17T21-00-13-10000000-0000-4000-8000-000000000002.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use apply_patch once to add the new file sentinel/slow-post.txt with the single line: slow\nMake each tool call once. Do not retry a call, also when it fails, and do not try another tool or another way.\nThen reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came."
+}

@@ -243,7 +243,8 @@ func TestSetupLessonChecksSummaryKeepsContextsDistinct(t *testing.T) {
 	})
 	assert.Contains(t, out, "pre-write Edit child active-unverified (native-deny-unverified, native-timeout-unverified)")
 	assert.NotContains(t, out, "pre-write Edit root active-unverified")
-	assert.NotContains(t, out, "limit:", "a client that waits for its hook gives no limit")
+	assert.NotContains(t, out, "limit: the client lets the write run",
+		"a client that waits for its pre-write hook gives no pre-write limit")
 }
 
 func TestSetupLessonChecksSummaryNamesTheFailOpenLimit(t *testing.T) {
@@ -1022,7 +1023,9 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		// enforce pattern pin adds no reason, because the guard projects
 		// the content of each patch. The reviewed Codex recording
 		// verifies the native deny and the slow deny, so the line names
-		// the timeout limit of the client.
+		// the timeout limit of the client. The reviewed post-edit
+		// recording verifies the post-edit reply, so the post-edit path
+		// names the post-edit timeout limit.
 		root := t.TempDir()
 		binary := fakeSeamark(t, t.TempDir(), "self")
 		writeRel(t, root, ".seamark/lessons.yaml", lessonPatternYAML)
@@ -1031,19 +1034,23 @@ func TestSetupLessonChecksEnforceRefusesBeforeWrite(t *testing.T) {
 		assert.Contains(t, readRel(t, root, codexHooksFile), binary+" "+hooks.CodexLessonGuardMarker)
 		assert.Contains(t, out, "  lesson checks  codex enforce — pre-write apply_patch active-unverified "+
 			"(trust-unknown) (limit: the client lets the write run after its 10 s hook timeout); "+
-			"post-edit apply_patch active-unverified (trust-unknown)\n")
+			"post-edit apply_patch active-unverified (trust-unknown) "+
+			"(limit: the client drops the post-edit findings after its 15 s hook timeout; the edit stays)\n")
 		assert.Contains(t, findings, codexTrustFinding, "setup never grants trust")
 
 		// Claude Code has no trust review, and no pattern pin limits it.
-		// The reviewed recording verifies Write and Edit, so these paths
-		// are active and name the timeout limit of the client.
+		// The reviewed recordings verify Write and Edit, so these paths
+		// are active and name the timeout limit of each stage. MultiEdit
+		// stays active-unverified in both stages.
 		root = t.TempDir()
 		out, _ = applyLessonSetupWithBinary(t, root, binary, enforce(ClaudeID))
 		assert.Contains(t, out, "  lesson checks  claude enforce — "+
 			"pre-write Edit active (limit: the client lets the write run after its 10 s hook timeout); "+
 			"pre-write Write active (limit: the client lets the write run after its 10 s hook timeout); "+
 			"pre-write MultiEdit active-unverified (native-deny-unverified, native-timeout-unverified); "+
-			"post-edit Edit active-unverified; post-edit Write active-unverified; post-edit MultiEdit active-unverified\n")
+			"post-edit Edit active (limit: the client drops the post-edit findings after its 15 s hook timeout; the edit stays); "+
+			"post-edit Write active (limit: the client drops the post-edit findings after its 15 s hook timeout; the edit stays); "+
+			"post-edit MultiEdit active-unverified\n")
 		assert.NotContains(t, out, "trust-unknown")
 	})
 }
@@ -1161,7 +1168,8 @@ func TestSetupLessonChecksPreservesGateAndOtherHooks(t *testing.T) {
 			ClientSetup{ClientID: CodexID, Hooks: true, LessonChecks: hooks.LessonChecksCheck})
 		assert.Contains(t, out, "  lesson checks  codex check — pre-write apply_patch inactive (configuration-error, trust-unknown) "+
 			"(limit: the client lets the write run after its 10 s hook timeout); "+
-			"post-edit apply_patch inactive (configuration-error, trust-unknown)\n")
+			"post-edit apply_patch inactive (configuration-error, trust-unknown) "+
+			"(limit: the client drops the post-edit findings after its 15 s hook timeout; the edit stays)\n")
 	})
 
 	t.Run("a partial install keeps its pre-write mode", func(t *testing.T) {

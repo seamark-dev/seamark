@@ -103,8 +103,20 @@ model-boundary delivery.
   and the child context, and whether Codex runs the post-edit hook after
   a patch that fails during its execution. With `NATIVE_RECORD_RUNS=0`
   it only sets up the scratch repository, and a new Codex repository
-  stops at the trust review. No reviewed copy exists yet, so `make
-  native-replay` skips its replay as pending and no evidence changes.
+  stops at the trust review.
+- **Post-edit native evidence.** Reviewed post-edit recordings of
+  Claude Code 2.1.325 and codex-cli 0.169.0 replay offline with `make
+  native-replay`. They verify the `PostToolUse` reply of Claude Code
+  `Write` and `Edit` and of Codex `apply_patch` in the root and child
+  contexts, also after a hook that waits 12 s, with the limit that the
+  client drops the post-edit findings after its 15 s hook timeout and
+  the edit stays. The Claude Code `Write` and `Edit` post-edit paths now
+  read `active` with that limit. The Codex paths keep `trust-unknown`,
+  and `MultiEdit` stays pending. The claim covers `PostToolUse` only:
+  the Claude Code `PostToolUseFailure` entry has no slow case.
+  codex-cli 0.169.0 sends no `PostToolUse` after a patch that fails
+  during its execution, so no post-edit check runs for that patch, and
+  its baseline stays pending until the sweep.
 - **Lesson delivery reading.** `lessons --delivery [--pin <ref>]`
   (`delivery/1` JSON) reads the delivery records of each pin version
   from the audit logs, with separate check and guard counts. The text

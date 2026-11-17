@@ -208,10 +208,10 @@ implemented handlers, not verified native prevention:
 
 | Client / tool | Pre-write | Post-edit | Contexts and current evidence |
 | --- | --- | --- | --- |
-| Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offers no MultiEdit tool. The model's replies in the 2.1.319 recording say so, and the model-free check of `make agents-native-check CLIENT=claude` shows that 2.1.325 offers none, inline or deferred, and refuses a MultiEdit call. Post-edit reply: seen in the recording, still unverified in the report |
+| Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offers no MultiEdit tool. The model's replies in the 2.1.319 recording say so, and the model-free check of `make agents-native-check CLIENT=claude` shows that 2.1.325 offers none, inline or deferred, and refuses a MultiEdit call. Post-edit reply on `PostToolUse`: verified for `Write` and `Edit` on Claude Code 2.1.325, with the client's 15 s limit (the findings are lost, the edit stays); `MultiEdit` pending. The `PostToolUseFailure` reply is seen on 2.1.319, with no slow case |
 | Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; reply seen in the next model request on Claude Code 2.1.319, still unverified in the report; main-context repeats reset at compaction, child reminders repeat |
 | Claude Code `NotebookEdit`, `Bash` | No lesson-check hook | No lesson-check hook | Uncovered writers in both contexts; a shell command can write files |
-| Codex `apply_patch` | Baseline or guard; Add, Delete, move, and Update content projection; an Add or Update outside the verified rules reads unknown | `PostToolUse` verification; the handler reads a failed exit status, but no recording shows a hook after a failed patch | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply: seen in the thread, still unverified in the report. Child call and lane attribution: unsupported |
+| Codex `apply_patch` | Baseline or guard; Add, Delete, move, and Update content projection; an Add or Update outside the verified rules reads unknown | `PostToolUse` verification; the handler reads a failed exit status, but codex-cli 0.169.0 sends no `PostToolUse` after a patch that fails during its execution | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply verified on codex-cli 0.169.0, with the client's 15 s limit; the paths still read `active-unverified (trust-unknown)`. Child call and lane attribution: unsupported |
 | Codex structured `Read` | Unsupported | No exploration hook | Setup prints the no-Read notice and installs nothing for exploration; use preparation |
 | Codex `shell` | No lesson-check hook | No lesson-check hook | Uncovered writer in both contexts |
 
@@ -273,9 +273,23 @@ uses the same form on `PreToolUse`. A native recording of codex-cli
 channel is no longer used. The guard recording of codex-cli 0.169.0
 shows the new reply in the thread: each post-edit reply is a hook
 developer record after the patch and before the next model step, in the
-root and in a worker. The Codex post-edit path still reads
-`active-unverified` in root and child contexts, because its evidence
-names no client version.
+root and in a worker. The post-edit recording of the same version shows
+the same order after a hook that waits 12 seconds, so the Codex
+post-edit evidence reads verified in both contexts. The path still
+reads `active-unverified`, because every Codex path keeps
+`trust-unknown`.
+
+codex-cli 0.169.0 sends no `PostToolUse` after a patch that passes
+`PreToolUse` and fails during its execution, such as an Add into a
+read-only directory. So no post-edit check runs for that patch, and its
+baseline stays in `.seamark/checks/pending/` until the sweep discards
+it after `pending-max-age` (1 hour). A patch that the client refuses in
+its own patch check, such as a pure move, reaches no hook at all. These
+are the two recorded failure shapes. No recording shows an Update whose
+hunk does not match, a write that the sandbox refuses, or a patch of
+several files that fails at a later file. Run
+`seamark lessons --verify` after a failed patch to check what it left
+on disk.
 
 Codex bounds model-visible hook context with `additionalContextLimit`,
 about 2,500 tokens by default. So the Codex reply holds at most 3,072
@@ -300,10 +314,22 @@ validates it for `apply_patch` in the root and child contexts in the
 same way: it waits about 7 seconds for a slow deny and honors it. A
 root patch case also shows that it stops a hook at 10 seconds and lets
 the patch run, without a message. No child case of either client
-records the stop at 10 seconds. The post-edit timeout and the
-`MultiEdit` pre-edit timeout remain candidates. No recording can
-validate the second while the client offers no MultiEdit tool, as on
-Claude Code 2.1.319 and 2.1.325.
+records the stop at 10 seconds.
+
+Claude Code 2.1.325 validates the post-edit timeout on `PostToolUse`
+for `Write` and `Edit` in the root and child contexts: it waits for a
+post-edit hook that ends after about 12 seconds, and the reply reaches
+the next model request. codex-cli 0.169.0 validates it for
+`apply_patch` in the root and a worker in the same way: the call output
+waits for the hook, and the reply enters the thread before the next
+model step. A root case of each client (a `Write`, a patch) shows that
+the client stops a post-edit hook at 15 seconds: the findings are lost,
+the edit stays, and neither client tells the model. No child case and
+no `Edit` case records that stop. The Claude Code `PostToolUseFailure`
+entry has the same 15-second timeout, but no recording has a slow or a
+stopped hook on that event. The `MultiEdit` pre-edit and post-edit
+timeouts remain candidates. No recording can validate them while the
+client offers no MultiEdit tool, as on Claude Code 2.1.319 and 2.1.325.
 
 ### Installed, active, and verified are different
 
@@ -361,6 +387,26 @@ cannot read the Codex trust record, so every installed Codex path keeps
 reads `enforced-unverified`. Status,
 doctor, and the TUI print a limit only beside an `active` path, so for
 Codex the setup line and the JSON report show it.
+
+A post-edit path can carry a limit too. A post-edit hook runs after the
+edit, so it can never block it. Claude Code 2.1.325 and codex-cli
+0.169.0 stop a post-edit hook at its 15-second timeout: the findings
+are lost, the edit stays, and the model gets no notice. A post-edit
+path has verified evidence only when a reviewed native recording of
+that client version, tool, and context shows a post-edit hook that ends
+inside the timeout, after a wait of about 12 seconds, and its reply
+before the next model step. The reviewed post-edit recordings give this
+proof on `PostToolUse` for Claude Code `Write` and `Edit` and for Codex
+`apply_patch`, in the root and child contexts. Status prints the Claude
+Code paths as `post-edit Edit, Write active (limit: the client drops
+the post-edit findings after its 15 s hook timeout; the edit stays);
+MultiEdit active-unverified`. The Codex paths keep `trust-unknown` and
+read `active-unverified`, so the setup line and the JSON report show
+their limit. A check pin reads `checked` with or without this evidence.
+The `MultiEdit` post-edit paths stay pending. The claim covers
+`PostToolUse` only: the Claude Code `PostToolUseFailure` entry has the
+same timeout, and no recording has a slow or a stopped hook on that
+event.
 
 Setup keeps warning-and-install behavior for unknown local capability or
 trust. It refuses known-bad enforce states, such as disabled hooks (Claude
@@ -883,17 +929,16 @@ the client reads its generated registration; your project's trust stays
 unchanged. The hook trust check writes no trust record at all. Scripted
 responses come from a local test server, not a model.
 `CLIENT=claude` runs the shell configuration checks, the Go tests
-that replay the reviewed Claude Code timing and guard recordings, and
-one tool check. That check runs the installed Claude Code against a
-scripted Messages API on the loopback interface, with a dummy key and a
-scratch `CLAUDE_CONFIG_DIR`, so no model runs. It reads the tools that
+that replay the reviewed Claude Code timing, guard, and post-edit
+recordings, and one tool check. That check runs the installed Claude
+Code against a scripted Messages API on the loopback interface, with a
+dummy key and a scratch `CLAUDE_CONFIG_DIR`, so no model runs. It reads the tools that
 the client offers in the tools field and in the deferred tool list of
 its message text, and checks that neither names `MultiEdit`. It checks
 that `ToolSearch select:MultiEdit` loads nothing, and that a scripted
 `MultiEdit` call gets the error `No such tool available: MultiEdit`.
 An offline test in `make test` runs the same verdict against fake
-clients. The Claude Code post-edit replay skips as pending until a
-reviewed post-edit copy exists. The other Go native tests are Codex-only.
+clients. The other Go native tests are Codex-only.
 
 The credential canary belongs to the offline check only; the smoke
 leaves the operator's environment as it is. The smoke's distillation
@@ -933,19 +978,53 @@ Before release:
   on 2.1.325. Its paths stay pending. Codex: the timing and guard
   recordings of codex-cli 0.169.0 are reviewed and committed in
   `internal/integration/testdata/codex/timing` and `.../guard`; that
-  client refuses a pure move before any hook, no recording shows a hook
-  after a failed patch, and every Codex path keeps `trust-unknown`.
-- Validate the candidate 10-second pre-edit and 15-second post-edit
-  timeouts per tool/context, including slow cases. Change defaults if
-  validation fails. Verify post-edit reply visibility separately from
-  pre-write denial.
+  client refuses a pure move before any hook, sends no `PostToolUse`
+  after a patch that fails during its execution, and every Codex path
+  keeps `trust-unknown`. The post-edit recordings of Claude Code 2.1.325
+  and codex-cli 0.169.0 are reviewed and committed in
+  `internal/integration/testdata/claude/post-edit` and
+  `internal/integration/testdata/codex/post-edit`.
+- Validate the candidate 10-second pre-edit timeout per tool/context,
+  including slow cases. Change the default if validation fails.
   Claude Code 2.1.319 validates the 10-second pre-edit timeout for
   `Write` and `Edit` in both contexts, and codex-cli 0.169.0 for
   `apply_patch` in both contexts, each with a fail-open limit at 10
-  seconds. The post-edit scenario (below) holds the cases for the
-  15-second post-edit timeout, for the Claude Code `Edit` post-edit
-  reply, and for a Codex hook after a failed patch. It has no reviewed
-  copy yet.
+  seconds. `MultiEdit` stays a candidate in both stages: no recording
+  can validate it while Claude Code offers no MultiEdit tool.
+- **Done** for `PostToolUse`: Validate the 15-second post-edit timeout
+  per tool/context, including slow cases. Claude Code 2.1.325 waits for
+  a post-edit hook of `Write` and `Edit` that ends after about 12
+  seconds, in the root and child contexts, and codex-cli 0.169.0 does
+  the same for `apply_patch` in the root and a worker. A root `Write`
+  and a root patch show that each client stops a post-edit hook at 15
+  seconds, drops the findings without a notice, and keeps the edit. So
+  these paths carry the limit "the client drops the post-edit findings
+  after its 15 s hook timeout; the edit stays", and the default stays
+  15 seconds. Not covered: `MultiEdit` (see the item above), a stop in
+  a child context or for an `Edit`, and the Claude Code
+  `PostToolUseFailure` entry, which has the same timeout and no slow
+  case.
+- **Done** for `PostToolUse`: Verify post-edit reply visibility
+  separately from pre-write denial. The post-edit scenario runs check
+  pins, so no case can deny. On Claude Code 2.1.325 each post-edit reply
+  of `Write` and `Edit`, root and child, is in the chain of the next
+  assistant record, and the next request holds it. On codex-cli 0.169.0
+  each reply is a hook developer record after the patch and before the
+  next model step, in the root and a worker. The capability report
+  reads this evidence: the Claude Code `Write` and `Edit` post-edit
+  paths read `active` with the limit above, and the Codex paths read
+  verified evidence and stay `active-unverified (trust-unknown)`. The
+  Claude Code `PostToolUseFailure` reply keeps the proof of the 2.1.319
+  guard recording.
+- **Done** as unsupported: Record whether Codex runs the post-edit hook
+  after a failed patch. codex-cli 0.169.0 sends no `PostToolUse` after a
+  patch that passes `PreToolUse` and fails during its execution, and it
+  refuses a pure move in its own patch check before any hook. So a
+  Codex post-edit check after a failed patch is unsupported on that
+  version for these two recorded shapes. Other failure shapes are not
+  recorded, so the docs claim nothing about them. The baseline of a
+  call with no post-edit run stays in `.seamark/checks/pending/` until
+  the sweep discards it after `pending-max-age` (1 hour).
 - **Done:** Verify Codex trust without granting it in setup.
   `make agents-native-check CLIENT=codex` runs the setup of
   `seamark init --client codex --lesson-checks enforce` in a scratch
@@ -1039,7 +1118,11 @@ For Codex, setup moves the owned post-edit entry alone into the last
 `PostToolUse` group, so one trust review of the setup covers every case.
 `NATIVE_RECORD_RUNS=0` sets up the scratch repository without a paid
 turn: a new Codex repository stops at the trust step, and a new Claude
-Code repository collects an empty copy.
+Code repository collects an empty copy. The reviewed copies of Claude
+Code 2.1.325 and codex-cli 0.169.0 are committed in
+`internal/integration/testdata/claude/post-edit` and
+`internal/integration/testdata/codex/post-edit`. The README of each
+names the cases, the review verdicts, and how to record again.
 
 A sanitized recording needs review before evidence declarations change.
 The reviewer copies a reviewed recording into

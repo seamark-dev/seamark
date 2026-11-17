@@ -347,15 +347,6 @@ func TestGuardEvidenceMatchesRecordings(t *testing.T) {
 				"%s %s %s: the entry names no pre-write path, so it never reaches the report", p.client, p.tool, p.context)
 		}
 	})
-
-	t.Run("post-edit evidence names no client, so it stays below verified", func(t *testing.T) {
-		// postEditEvidence takes no client, tool, or context. A verified
-		// level would then claim every client version at once. A reviewed
-		// native guard recording verifies one client, so the function must
-		// first take the client.
-		assert.NotEqual(t, VerificationVerified, postEditEvidence().Level)
-		require.NoError(t, postEditEvidence().Validate())
-	})
 }
 
 // TestGuardToolsMatchTheInstalledMatchers ties the tools that the guard

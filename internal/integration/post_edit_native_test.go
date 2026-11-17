@@ -19,7 +19,8 @@ package integration
 // The replay tests run only when SEAMARK_NATIVE_CLIENT names the client
 // (make native-replay). Without a reviewed recording they skip as
 // pending. A skip gives no evidence, so it never verifies a post-edit
-// path.
+// path. TestPostEditEvidenceMatchesRecordings reads the same recordings
+// in every test run (post_edit_evidence_test.go).
 
 import (
 	"errors"

@@ -67,6 +67,13 @@ const (
 		"pre-write Edit, Write active (limit: the client lets the write run after its 10 s hook timeout); " +
 		"MultiEdit active-unverified\n"
 	activeCodexInactive = "active: codex requested; inactive: not-installed\n"
+	// activeCheckClaude is the active line of a check pin under the Claude
+	// Code hooks. The reviewed post-edit recording verifies Edit and
+	// Write, so their post-edit paths read active with the post-edit
+	// timeout limit, and MultiEdit stays active-unverified.
+	activeCheckClaude = "active: claude checked · post-edit Edit, Write active " +
+		"(limit: the client drops the post-edit findings after its 15 s hook timeout; the edit stays); " +
+		"MultiEdit active-unverified\n"
 )
 
 // TestLessonsSetModeShowsActiveState proves that the active state is
@@ -88,8 +95,7 @@ func TestLessonsSetModeShowsActiveState(t *testing.T) {
 		assert.NotContains(t, stdout, "\nactive: "+lessoncheck.ActiveRequested+"\n", "the fixed active line is gone")
 
 		stdout, _ = goldenRun(t, root, "lessons", "--set-mode", "check", "--pin", setModePinRef)
-		assert.Contains(t, stdout, "\nrequested mode: check\n"+
-			"active: claude checked · post-edit active-unverified\n"+activeCodexInactive)
+		assert.Contains(t, stdout, "\nrequested mode: check\n"+activeCheckClaude+activeCodexInactive)
 		assert.Contains(t, stdout, "  active: requested; claude checked, codex requested-inactive (not-installed)\n")
 
 		stdout, _ = goldenRun(t, root, "lessons", "--set-mode", "advisory", "--pin", setModePinRef)
@@ -224,7 +230,9 @@ func TestLessonCheckHealthSurfacesCallNoInvoker(t *testing.T) {
 
 	setMode, err := run(t, "-C", root, "lessons", "--set-mode", "check", "--pin", frozen)
 	require.NoError(t, err)
-	assert.Contains(t, setMode, "active: claude checked · post-edit active-unverified\n")
+	assert.Contains(t, setMode, activeCheckClaude)
+	// Codex keeps trust-unknown, so its verified post-edit paths stay
+	// active-unverified, and the line names no limit.
 	assert.Contains(t, setMode, "active: codex checked (trust-unknown) · post-edit active-unverified\n")
 
 	prepared := prepareJSON(t, root, filepath.Join(root, "generated", "a.txt"))

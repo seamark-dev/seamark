@@ -82,13 +82,16 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 	assert.Contains(t, out, "  updated .claude/settings.json (lesson-check hooks)\n")
 	assert.Contains(t, out, "          PreToolUse Edit|Write|MultiEdit "+binary+" lessons --baseline --hook\n")
 	assert.Contains(t, out, "          PostToolUseFailure Edit|Write|MultiEdit "+binary+" lessons --verify --hook\n")
-	// The reviewed Claude Code recording shows that the client waits for
-	// a slow pre-write hook of Edit and Write. So the baseline paths of
-	// these tools read active, with the timeout limit of the client.
+	// The reviewed Claude Code recordings show that the client waits for
+	// a slow pre-write and a slow post-edit hook of Edit and Write. So
+	// both paths of these tools read active, each with the timeout limit
+	// of its stage.
 	assert.Contains(t, out, "  lesson checks  claude check — "+
 		"pre-write Edit active (limit: the client lets the write run after its 10 s hook timeout); "+
 		"pre-write Write active (limit: the client lets the write run after its 10 s hook timeout); "+
-		"pre-write MultiEdit active-unverified; post-edit Edit active-unverified; post-edit Write active-unverified; "+
+		"pre-write MultiEdit active-unverified; "+
+		"post-edit Edit active (limit: the client drops the post-edit findings after its 15 s hook timeout; the edit stays); "+
+		"post-edit Write active (limit: the client drops the post-edit findings after its 15 s hook timeout; the edit stays); "+
 		"post-edit MultiEdit active-unverified\n")
 	assert.Contains(t, out, "  gate    warn — verdicts are reported, nothing blocks")
 	assert.Contains(t, out, uncheckedLocalNote, "the lesson rule reads the personal file, the gate line still leaves it out")
@@ -140,7 +143,8 @@ func TestRunInitLessonChecksInstallsAndPreserves(t *testing.T) {
 	assert.Contains(t, out, "setup never grants trust")
 	assert.Contains(t, out, "  lesson checks  codex check — pre-write apply_patch active-unverified (trust-unknown) "+
 		"(limit: the client lets the write run after its 10 s hook timeout); "+
-		"post-edit apply_patch active-unverified (trust-unknown)\n")
+		"post-edit apply_patch active-unverified (trust-unknown) "+
+		"(limit: the client drops the post-edit findings after its 15 s hook timeout; the edit stays)\n")
 
 	// The form without --client installs hooks for Claude Code only, so
 	// it never touches the Codex hooks.

@@ -56,14 +56,16 @@ type guardProof struct {
 // claudeEvidenceVersion is the client version of the reviewed Claude
 // Code recordings in testdata/claude/guard and testdata/claude/timing.
 // Both recordings ran on this version, so the guard, timeout, and timing
-// entries of Claude Code name it.
+// entries of Claude Code name it. The post-edit recording ran on a later
+// version, so its entries name claudePostEditEvidenceVersion.
 const claudeEvidenceVersion = "Claude Code 2.1.319"
 
 // codexEvidenceVersion is the client version of the reviewed Codex
-// recordings in testdata/codex/guard and testdata/codex/timing. Both
-// recordings ran on this version, so the guard, timeout, and timing
-// entries of Codex name it. timeoutLimit finds the timeout outcome by
-// this exact string, so the guard proofs and the timeout key share it.
+// recordings in testdata/codex/guard, testdata/codex/timing, and
+// testdata/codex/post-edit. All three recordings ran on this version,
+// so the guard, timeout, timing, and post-edit entries of Codex name it.
+// timeoutLimit and postEditTimeoutLimit find the timeout outcomes by
+// this exact string, so the proofs and the timeout keys share it.
 const codexEvidenceVersion = "codex-cli 0.169.0"
 
 // guardRecorded lists the pre-write paths that a reviewed native guard
