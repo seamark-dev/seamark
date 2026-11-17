@@ -88,8 +88,8 @@ client (a Write, a patch) shows that the client stops the hook at
 15 s: the findings are lost, the edit stays, and the model gets no
 notice; no child case and no Edit case records the stop. The Claude
 PostToolUseFailure entry has the same timeout and no slow case. The
-MultiEdit timeouts of both stages remain open in the same checklist.
-None is completed by documenting it. The benchmark script-timeout flake is fixed in the tests (the two
+MultiEdit timeouts of both stages stay pending, because Claude Code
+offers no MultiEdit tool. The benchmark script-timeout flake is fixed in the tests (the two
 interrupted-session tests and the `CommandVersion` test), with no
 benchmark fingerprint change. `TestOTelHistogramPreparedFixtureContract`
 can still fail under load: its judge's 30 s `go test` limit is in an
@@ -151,6 +151,7 @@ future work; editor integrations remain experimental.
   supply no native compatibility or prevention evidence. The reviewed
   Claude Code 2.1.319 and codex-cli 0.169.0
   [native timing and guard recordings](agent-integrations.md#release-checklist)
+  and the Claude Code 2.1.325 and codex-cli 0.169.0 post-edit recordings
   replay offline with `make native-replay CLIENT=claude` and
   `make native-replay CLIENT=codex`. The Claude MultiEdit path has no
   recorded call: `make agents-native-check CLIENT=claude` shows without

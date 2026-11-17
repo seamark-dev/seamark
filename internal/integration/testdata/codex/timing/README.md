@@ -16,7 +16,7 @@ same client version.
 `make native-record CLIENT=codex NATIVE_RECORD_SCENARIO=timing` ran
 `scripts/native-record.sh` at commit `d7a24f9` of the release branch,
 with the Seamark binary of that commit (`v0.8.0-301-gd7a24f9`). The
-sanitizer `scripts/native-record-sanitize.py` at commit `abc794b` of the
+sanitizer `scripts/native-record-sanitize.py` at the commit "fix: mask the account's Codex model overrides in sanitized recordings" of the
 same branch, with the Codex ID pass, the time shift, and the commit ID,
 agent role, and model override masks, made this copy from the same raw
 recording (see "Sanitization").

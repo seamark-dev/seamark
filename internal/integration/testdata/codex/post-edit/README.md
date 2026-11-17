@@ -19,7 +19,7 @@ and `../guard` come from the same client version.
 `scripts/native-record.sh` and the sanitizer
 `scripts/native-record-sanitize.py` at commit `facb617` of the release
 branch, with the Seamark binary of that commit (`v0.8.0-353-gfacb617`).
-The sanitizer at commit `abc794b` of the same branch made this copy
+The sanitizer at the commit "fix: mask the account's Codex model overrides in sanitized recordings" of the same branch made this copy
 from the same raw recording. It also masks the commit ID in each
 `session_meta`, and the agent role list and the model override list of
 the spawn tool (see "Sanitization"). The copy differs from the output
