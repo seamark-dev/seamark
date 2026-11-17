@@ -28,6 +28,12 @@ compaction summary. It refuses to finish when a deny-listed value is
 still present in any output file, for example the home path or the user
 name in a form that no rule replaces.
 
+A member named commit_hash becomes the marker. Codex writes the HEAD
+commit of the scratch repository there, and a commit ID hashes the
+commit time and the local time offset. The check also refuses the copy
+when a commit ID of the scratch repository remains anywhere, in full or
+cut to 7 hex digits or more, as Git prints it.
+
 For a Claude Code recording, an ID pass also replaces each ID that
 Claude Code or its API generates: the session, prompt, agent, tool use,
 transcript record, message, request, task-notification run, and
@@ -85,6 +91,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 
@@ -126,6 +133,20 @@ PLACEHOLDERS = {
 # and the scratch repository's Git identity.
 ALLOWED_EMAILS = {"noreply@anthropic.com", "native@example.invalid"}
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+# The member that holds a commit ID. Codex writes the HEAD commit of the
+# scratch repository into the git object of each session_meta record. A
+# commit ID is the hash of the commit text, and that text holds the
+# commit time and the local time offset. A reader can test candidate
+# times against the ID, so the member becomes the marker. No decoder
+# reads it.
+COMMIT_KEY = "commit_hash"
+
+# A run of hex digits between other characters. Git prints a commit ID
+# in full or cut to 7 digits or more, for example in `git log --oneline`
+# or after the "g" of `git describe`. The check compares each run with
+# the commit IDs of the scratch repository.
+COMMIT_TEXT = re.compile(r"(?<![0-9A-Fa-f])[0-9a-f]{7,40}(?![0-9A-Fa-f])")
 
 # Claude Code writes its task output files under a per-user directory
 # of the system temporary directory.
@@ -383,6 +404,30 @@ def scratch_pattern(record):
     return re.compile("|".join(re.escape(n) for n in names), re.IGNORECASE)
 
 
+def scratch_commits(repo):
+    """Return the commit IDs of the scratch repository.
+
+    Every ref and every reflog entry count, because a reset or an amend
+    leaves a commit that only the reflog names. A directory without Git
+    metadata has no commit. The script stops when git cannot read the
+    metadata, because a commit ID could then stay in the copy unseen.
+    The GIT_ variables of the caller stay out, so git reads the scratch
+    repository and not the repository of a calling Git hook.
+    """
+    if not os.path.exists(os.path.join(repo, ".git")):
+        return set()
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+    try:
+        out = subprocess.run(["git", "-C", repo, "rev-list", "--all", "--reflog"], env=env,
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        sys.exit("sanitization incomplete:\n  git cannot read the commit IDs of the scratch repository")
+
+    return set(out.split())
+
+
 def replaced_member(parent, key, v):
     """Return the placeholder of one JSON member, or None to keep it.
 
@@ -390,10 +435,15 @@ def replaced_member(parent, key, v):
     that a tool reads can be personal, and the decoders store only a
     reference to it. The "base64" member of a Claude Code tool output
     holds the bytes. So does the "data" member of a Claude API source
-    block (type "base64") and of an MCP image or document block.
+    block (type "base64") and of an MCP image or document block. A
+    commit ID becomes the marker, because it hashes the commit time
+    (see COMMIT_KEY).
     """
     if key == "timezone":
         return TIMEZONE
+
+    if key == COMMIT_KEY and isinstance(v, str):
+        return MARKER
 
     carrier = key == "data" and parent.get("type") in ("base64", "image", "document")
     if isinstance(v, str) and (key == "base64" or carrier):
@@ -877,6 +927,7 @@ class Sanitizer:
         self.deny += record.get("deny", [])
         self.repo_forms = repo_forms(self.repo)
         self.scratch = scratch_pattern(record)
+        self.commits = scratch_commits(self.repo)
 
         # The ID map of the ID pass and the time shift. Each client has
         # its own ID pass, and both share the time shift.
@@ -961,11 +1012,13 @@ class Sanitizer:
         return shown_name(os.path.relpath(path, out_dir).replace(os.sep, "/"))
 
     def check(self, out_dir):
-        """Fail when a deny-listed value, a repository path form, or an e-mail address remains.
+        """Fail when a deny-listed value, a repository path form, an e-mail address, or a commit ID remains.
 
         The deny-list match ignores case, because a tool can print the
-        user name or a path in another case. A false hit only refuses
-        the copy, which is the safe direction.
+        user name or a path in another case. A commit ID of the scratch
+        repository counts in full and cut to 7 hex digits or more. The
+        message never names the value. A false hit only refuses the
+        copy, which is the safe direction.
         """
         problems = []
         deny = [d.casefold() for d in self.deny if d]
@@ -989,6 +1042,9 @@ class Sanitizer:
                 for m in EMAIL.findall(data):
                     if m not in ALLOWED_EMAILS:
                         problems.append("%s: holds an e-mail address" % self.label(out_dir, path))
+
+                if self.commits and any(c.startswith(run) for run in COMMIT_TEXT.findall(data) for c in self.commits):
+                    problems.append("%s: holds a commit ID of the scratch repository" % self.label(out_dir, path))
 
         return problems
 

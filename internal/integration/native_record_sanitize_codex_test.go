@@ -585,3 +585,91 @@ func TestNativeRecordSanitizeRefusesACodexResidual(t *testing.T) {
 		assert.Contains(t, got, "sessions/2026/11/10/rollout-<time>-<id>.jsonl: holds an unmapped fc_ ID")
 	})
 }
+
+// TestNativeRecordSanitizeMasksTheCodexCommitID proves that the commit ID
+// in the git object of a session_meta becomes the marker. Codex writes
+// the HEAD commit of the scratch repository there, and the ID hashes the
+// commit time and the local time offset. The branch stays, and no file
+// of the copy holds a part of the ID.
+func TestNativeRecordSanitizeMasksTheCodexCommitID(t *testing.T) {
+	requireTools(t, "python3", "git")
+
+	fixture := newCodexRecordFixture(t)
+	head := scratchCommit(t, fixture.repo)
+	fixture.rollout[0] = strings.Replace(fixture.rollout[0], `"cli_version":"0.169.0"`,
+		`"cli_version":"0.169.0","git":{"commit_hash":"`+head+`","branch":"main"}`, 1)
+	require.Contains(t, fixture.rollout[0], head)
+
+	f := fixture.write(t)
+
+	got, err := f.sanitize(t, f.out)
+	require.NoError(t, err, got)
+
+	meta := codexPayload(codexLines(t, filepath.Join(f.out, codexRootCopy))[0])
+	assert.Equal(t, map[string]any{"commit_hash": "<sanitized>", "branch": "main"}, meta["git"])
+
+	for name, data := range outputFiles(t, f.out) {
+		assert.NotContains(t, data, head[:7], "%s holds a part of the commit ID", name)
+	}
+}
+
+// TestNativeRecordSanitizeRefusesACommitIDOfTheScratchRepository proves
+// the commit ID check. A commit ID of the scratch repository in a text
+// refuses the copy, in full, cut to 7 digits, or after the "g" of `git
+// describe`. A hex digest that no commit ID starts with passes. Git
+// metadata that git cannot read stops the script, because a commit ID
+// could then stay unseen. The message never names the ID.
+func TestNativeRecordSanitizeRefusesACommitIDOfTheScratchRepository(t *testing.T) {
+	requireTools(t, "python3", "git")
+
+	for _, tc := range []struct {
+		name string
+		text func(head string) string
+	}{
+		{"the full commit ID", func(head string) string { return "HEAD is " + head }},
+		{"a commit ID cut to 7 digits", func(head string) string { return "[main " + head[:7] + "] fixture" }},
+		{"a commit ID in git describe output", func(head string) string { return "v0.8.0-3-g" + head[:7] }},
+	} {
+		t.Run("a refusal for "+tc.name, func(t *testing.T) {
+			fixture := newCodexRecordFixture(t)
+			head := scratchCommit(t, fixture.repo)
+			codexModelText(t, tc.text(head))(fixture)
+			f := fixture.write(t)
+
+			got, err := f.sanitize(t, f.out)
+			require.Error(t, err, got)
+			assert.Contains(t, got, "sessions/2026/11/10/rollout-<time>-<id>.jsonl: holds a commit ID of the scratch repository")
+			assert.NotContains(t, got, head[:7], "the message holds no part of the commit ID")
+		})
+	}
+
+	t.Run("a hex digest that no commit ID starts with passes", func(t *testing.T) {
+		fixture := newCodexRecordFixture(t)
+		head := scratchCommit(t, fixture.repo)
+
+		// The digest differs from the commit ID in its first digit, so no
+		// run of it can start the ID.
+		first := "0"
+		if head[0] == '0' {
+			first = "1"
+		}
+
+		digest := first + head[1:]
+		codexModelText(t, "digest "+digest+" and "+digest[:7])(fixture)
+		f := fixture.write(t)
+
+		got, err := f.sanitize(t, f.out)
+		require.NoError(t, err, got)
+		assert.Contains(t, outputFiles(t, f.out)[codexRootCopy], digest)
+	})
+
+	t.Run("unreadable Git metadata stops the script", func(t *testing.T) {
+		fixture := newCodexRecordFixture(t)
+		writeLines(t, filepath.Join(fixture.repo, ".git"), "not a gitfile")
+		f := fixture.write(t)
+
+		got, err := f.sanitize(t, f.out)
+		require.Error(t, err, got)
+		assert.Contains(t, got, "git cannot read the commit IDs of the scratch repository")
+	})
+}

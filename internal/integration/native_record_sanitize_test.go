@@ -930,3 +930,52 @@ func TestNativeRecordSanitizeRefusesAnUnmatchedRepoPath(t *testing.T) {
 		assert.Equal(t, "native-scratch\nrecord.json\n", response["stdout"])
 	})
 }
+
+// scratchCommit makes the fixture repository a Git repository with
+// one commit and returns its commit ID. The Claude Code and Codex tests of
+// the commit ID check share it. The commit has a fixed time with
+// a local offset, as a real scratch commit has, so the ID is the same in
+// every run.
+func scratchCommit(t *testing.T, repo string) string {
+	t.Helper()
+
+	git := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_DATE=2026-11-10T10:30:00+01:00", "GIT_COMMITTER_DATE=2026-11-10T10:30:00+01:00")
+
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+
+		return strings.TrimSpace(string(out))
+	}
+
+	writeLines(t, filepath.Join(repo, "notes", "a.txt"), "alpha")
+	git("init", "-q", "-b", "main")
+	git("config", "user.name", "native")
+	git("config", "user.email", "native@example.invalid")
+	git("add", "notes")
+	git("commit", "-q", "-m", "fixture")
+
+	return git("rev-parse", "HEAD")
+}
+
+// TestNativeRecordSanitizeRefusesAClaudeCommitID proves that the commit ID
+// check covers a Claude Code recording too. The Bash output of `git
+// commit` names the new commit cut to 7 digits, and the message never
+// names it.
+func TestNativeRecordSanitizeRefusesAClaudeCommitID(t *testing.T) {
+	requireTools(t, "python3", "git")
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	head := scratchCommit(t, repo)
+	f := addDenyPayload(t, newSanitizeFixtureAt(t, repo), []any{}, map[string]any{
+		"session_id": sanitizeSession, "hook_event_name": "PostToolUse", "tool_name": "Bash",
+		"tool_response": map[string]any{"stdout": "[main " + head[:7] + "] fixture\n"},
+	})
+
+	got, err := f.sanitize(t, f.out)
+	require.Error(t, err, got)
+	assert.Contains(t, got, "hooks/006-PostToolUse.json: holds a commit ID of the scratch repository")
+	assert.NotContains(t, got, head[:7], "the message holds no part of the commit ID")
+}
