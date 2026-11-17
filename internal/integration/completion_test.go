@@ -197,7 +197,9 @@ func TestCompletionDecodersReadToolOutcome(t *testing.T) {
 		}
 
 		// Codex has no failure event, so every outcome gets the
-		// PostToolUse reply. Its stderr text with exit 0 never reached
+		// PostToolUse reply. On codex-cli 0.169.0 a patch that fails
+		// during its execution gets no PostToolUse, so the failed outcome
+		// has no native case. Its stderr text with exit 0 never reached
 		// the model on codex-cli 0.164.0.
 		for _, outcome := range []lessoncheck.ToolOutcome{
 			lessoncheck.ToolSucceeded, lessoncheck.ToolFailed, lessoncheck.ToolUnknown,

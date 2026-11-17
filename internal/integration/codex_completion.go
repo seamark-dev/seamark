@@ -10,9 +10,11 @@ import (
 // codexCompletions translates the Codex PostToolUse apply_patch event
 // for the post-edit verification. Codex has no separate failure event,
 // so the decoder reads a failed tool from a non-zero exit status in
-// tool_response. No native recording shows a hook after a failed patch:
-// codex-cli 0.169.0 refused a patch without a hunk in its own patch
-// check, before any hook. codex_events.go declares the event name
+// tool_response. No native recording shows a hook after a failed patch.
+// On codex-cli 0.169.0, a patch that fails during its execution gets no
+// PostToolUse, and a patch without a hunk fails the client's own patch
+// check before any hook. So the failed outcome is a decoder rule without
+// a native case. codex_events.go declares the event name
 // (codexPostToolUse).
 type codexCompletions struct{}
 
@@ -78,7 +80,9 @@ func (codexCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completion
 
 // EncodeFindings wraps the findings in the additionalContext reply of
 // PostToolUse, on stdout with exit 0. Codex has no failure event, so a
-// failed patch that reaches the hook gets the same event name. A native
+// failed patch that reaches the hook gets the same event name. No
+// recorded failed patch reaches it: codex-cli 0.169.0 sends no
+// PostToolUse after a patch that fails during its execution. A native
 // guard recording of codex-cli 0.164.0 showed that PostToolUse text on
 // stderr never reaches the model. That binary embeds the PostToolUse
 // output schema with hookSpecificOutput and additionalContext. The

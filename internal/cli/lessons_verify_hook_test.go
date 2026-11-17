@@ -235,10 +235,13 @@ func TestLessonsVerifyHookReportsActualDelta(t *testing.T) {
 // TestLessonsVerifyHookFailedAndInterrupted proves the post-edit check
 // of a failed or interrupted tool. The hook checks the state on disk
 // anyway, names the tool outcome, and answers with the event of the
-// failure. A failed tool that wrote nothing gives no finding. Codex
-// reports a failed patch by a non-zero exit code in PostToolUse. The
-// findings go to stdout as the PostToolUse additionalContext reply with
-// exit 0, and a pass writes nothing.
+// failure. A failed tool that wrote nothing gives no finding. The Codex
+// handler reads a failed patch from a non-zero exit code in a
+// PostToolUse event. No recorded Codex failure reaches this path,
+// because codex-cli 0.169.0 sends no PostToolUse after a patch that
+// fails during its execution. The findings go to stdout as the
+// PostToolUse additionalContext reply with exit 0, and a pass writes
+// nothing.
 func TestLessonsVerifyHookFailedAndInterrupted(t *testing.T) {
 	root, sentinel := guardFixture(t)
 	content := "readme\nTODO(partial): x\n"

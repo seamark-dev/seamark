@@ -89,8 +89,10 @@ var (
 		matcher: claudeEditMatcher, postEvents: []string{"PostToolUse", "PostToolUseFailure"},
 		background: ClaudeBackgroundKeys,
 	}
-	// Codex has no failure event: PostToolUse also runs after a failed
-	// apply_patch.
+	// Codex has no failure event, so PostToolUse is its only post-edit
+	// event. codex-cli 0.169.0 sends no PostToolUse after a patch that
+	// fails during its execution, so no post-edit check runs for that
+	// patch, and its baseline waits for the sweep.
 	codexLessonChecks = lessonCheckClient{
 		guard: CodexLessonGuardMarker, baseline: CodexLessonBaselineMarker, verify: CodexLessonVerifyMarker,
 		matcher: codexEditMatcher, postEvents: []string{"PostToolUse"},
