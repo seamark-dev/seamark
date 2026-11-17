@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -269,6 +270,11 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 
 	waited := make(chan struct{})
 
+	// gone records that a kill found no member left in the group. The
+	// last kill below then skips the ID, which an unrelated new group can
+	// have by then.
+	var gone atomic.Bool
+
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -284,6 +290,8 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 			// Its ID can then go to an unrelated new group, so the
 			// watch stops here instead of signaling that ID again.
 			if errors.Is(killGroup(cmd), os.ErrProcessDone) {
+				gone.Store(true)
+
 				return
 			}
 
@@ -299,8 +307,11 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 	close(waited)
 
 	// The group is empty after a clean exit, and then the kill fails with
-	// nothing to report.
-	_ = killGroup(cmd)
+	// nothing to report. A watch that found the group empty already
+	// skips it.
+	if !gone.Load() {
+		_ = killGroup(cmd)
+	}
 
 	return err
 }
