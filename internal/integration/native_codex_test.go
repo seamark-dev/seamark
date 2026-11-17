@@ -79,32 +79,42 @@ func codexVersion(t *testing.T, codex string) string {
 // the process at it. Codex then finds no login, no user configuration,
 // no rules, and no trust records: the check observes the binary, not
 // the user's account.
-//
-// The cleanup removes the directory itself and ignores a failure, so it
-// does not use t.TempDir. Codex keeps background work in its home for a
-// moment after the run, a plugin catalogue clone under .tmp. A removal
-// that races that work must not fail a check that produced its evidence.
 func scratchCodexHome(t *testing.T) string {
 	t.Helper()
 
-	home, err := os.MkdirTemp("", "seamark-native-codex-home-")
+	home := scratchClientDir(t, "seamark-native-codex-home-")
+	t.Setenv("CODEX_HOME", home)
+
+	return home
+}
+
+// scratchClientDir creates an empty directory for the home or the
+// configuration of a client CLI during one check.
+//
+// The cleanup removes the directory itself and ignores a failure, so it
+// does not use t.TempDir. A client can keep background work in its
+// directory for a moment after the run, for example a Codex plugin
+// catalogue clone under .tmp. A removal that races that work must not
+// fail a check that produced its evidence.
+func scratchClientDir(t *testing.T, prefix string) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", prefix)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
 		for range 20 {
-			if os.RemoveAll(home) == nil {
+			if os.RemoveAll(dir) == nil {
 				return
 			}
 
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		t.Logf("scratch CODEX_HOME %s could not be removed; Codex may still write to it", home)
+		t.Logf("scratch directory %s could not be removed; the client may still write to it", dir)
 	})
 
-	t.Setenv("CODEX_HOME", home)
-
-	return home
+	return dir
 }
 
 // TestNativeCodexRecordsTheVersionAndTheExecSurface records the

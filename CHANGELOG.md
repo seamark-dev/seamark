@@ -76,6 +76,17 @@ model-boundary delivery.
   the baseline handler stores no baseline, and the post-edit check
   reports every executable pin as `unknown/incomplete-paths`. The
   advisory edit hook is unchanged.
+- **MultiEdit tool check.** `make agents-native-check CLIENT=claude`
+  runs the installed Claude Code against a scripted loopback Messages
+  API with a scratch configuration, so no model runs. Claude Code
+  2.1.325 offers no MultiEdit tool, inline or deferred, and refuses a
+  MultiEdit call. The MultiEdit paths stay `active-unverified`, because
+  no recording can show a MultiEdit deny.
+- **Codex hook trust check.** `make agents-native-check CLIENT=codex`
+  runs Codex setup with enforce lesson checks in a scratch repository
+  and reads the hook list of `codex app-server`, with no model. On
+  codex-cli 0.169.0 setup writes nothing into `CODEX_HOME` and leaves
+  every Seamark hook untrusted. Codex paths keep `trust-unknown`.
 - **Lesson delivery reading.** `lessons --delivery [--pin <ref>]`
   (`delivery/1` JSON) reads the delivery records of each pin version
   from the audit logs, with separate check and guard counts. The text
