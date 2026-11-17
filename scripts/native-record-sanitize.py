@@ -51,18 +51,31 @@ session_id to the session_meta of a rollout, an agent_id to a worker
 thread, and a transcript_path to a rollout file. A Codex thread ID is a
 UUIDv7 and holds its creation time, so no synthetic value has that form.
 
-A Codex recording also moves every recorded time by one constant offset
-in whole seconds: ISO strings, epoch numbers, the time and the date
-directory of each rollout file name, and the current_date tag. The
+Every recording also moves every recorded time by one constant offset
+in whole seconds: ISO strings in any text, also inside a longer text
+such as a debug log line, and epoch numbers under any member name. The
 offset moves the first recorded time to 21:00:00 UTC on its own UTC
 date, so the copy shows no real time of day. The window counts in UTC,
-so the script names no local time zone. Every duration stays exact. A
-rollout file name holds the local wall time of the thread start, so
-the pass writes that name in UTC. The offset is written nowhere, and
-the manifest says only that the times are shifted. The
-additional_tools record lists the operator's tools, so its tool list
-becomes a marker. A Codex residual check refuses the copy when a real
-ID, a home path, a local time offset, or an unshifted time remains.
+so the script names no local time zone. Every duration stays exact.
+The offset is written nowhere, and the manifest says only that the
+times are shifted. Epoch digits inside a text never move, because a
+digit run can also be part of a digest or a count.
+
+For a Claude Code recording, a time residual check refuses the copy
+when an unshifted time remains: an ISO time without a zone or with a
+local offset, a time outside the window, or epoch digits of a recorded
+time in a text or a file name. A time in a Claude Code file name moves
+only when it is an ISO time with a zone in a transcript path, because
+that path goes through the text rules. Any other time in a file name
+refuses the copy, because its zone is unknown.
+
+A Codex recording also moves the time and the date directory of each
+rollout file name and the current_date tag. A rollout file name holds
+the local wall time of the thread start, so the pass writes that name
+in UTC. The additional_tools record lists the operator's tools, so its
+tool list becomes a marker. A Codex residual check refuses the copy
+when a real ID, a home path, a local time offset, or an unshifted time
+remains.
 """
 
 import calendar
@@ -296,12 +309,18 @@ UUID_ANY = re.compile(UUID_TEXT)
 # rule also refuses the home of another user.
 HOME_ROOT = "/Users/"
 
-# The time forms of a Codex recording. An ISO time can have a zone. A
+# The time forms of a recording. An ISO time can have a zone. A Codex
 # rollout file name writes the time with hyphens.
 ISO_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})?")
 NAME_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})")
 CURRENT_DATE = re.compile(r"<current_date>(\d{4}-\d{2}-\d{2})</current_date>")
 EPOCH_TEXT = re.compile(r"(?<![\d.])(\d{10}(?:\.\d+)?|\d{13}|\d{16}|\d{19})(?![\d.])")
+
+# Epoch digits in a Claude Code text or file name. A dot can follow
+# when no digit follows the dot, so a run before a file name extension or
+# at the end of a sentence counts too. The Codex check keeps EPOCH_TEXT,
+# so its refusals stay as they are.
+EPOCH_DIGITS = re.compile(r"(?<![\d.])(\d{10}(?:\.\d+)?|\d{13}|\d{16}|\d{19})(?!\.?\d)")
 
 # The window of the shifted times: 21:00 to 08:00 UTC. Every shifted
 # time falls in it, so a copy shows no real time of day. The window
@@ -705,7 +724,7 @@ def in_night(ns):
 
 
 class TimeShift:
-    """Moves every recorded time of a Codex recording by one offset.
+    """Moves every recorded time of a recording by one offset.
 
     The first walk collects the ISO times with a zone and every number.
     settle then gives the offset in whole seconds, so every duration and
@@ -859,8 +878,8 @@ class Sanitizer:
         self.repo_forms = repo_forms(self.repo)
         self.scratch = scratch_pattern(record)
 
-        # The ID map of the ID pass, and the time shift of a Codex
-        # recording. A Claude Code recording keeps its times.
+        # The ID map of the ID pass and the time shift. Each client has
+        # its own ID pass, and both share the time shift.
         self.ids = None
         self.times = None
 
@@ -977,16 +996,21 @@ class Sanitizer:
 def shown_name(rel):
     """Return an output file name with each ID part replaced by <id>.
 
-    The time of a rollout file name becomes <time>, so the message never
-    prints a time that the shift missed.
+    Each time of a file name becomes <time>: a rollout name time, an ISO
+    time, and a digit run of an epoch length. So the message never prints
+    a time that the shift missed. The ID parts go first, because a
+    synthetic agent ID ends in a digit run of an epoch length.
     """
     parts = []
 
     for part in rel.split("/"):
+        part = ISO_TIME.sub("<time>", part)
         part = NAME_TIME.sub("<time>", part)
 
         for pattern in HIDDEN_NAME_PARTS:
             part = pattern.sub("<id>", part)
+
+        part = EPOCH_DIGITS.sub("<time>", part)
 
         stem, dot, ext = part.partition(".")
         bare = stem[len("agent-"):] if stem.startswith("agent-") else stem
@@ -1048,6 +1072,46 @@ def residual(out_dir, ids, label):
     return problems
 
 
+def time_text_hits(text, times):
+    """Yield each time of a text that the shift did not move.
+
+    An ISO time without a zone or with a local offset counts, because the
+    shift writes every ISO time with a zone in UTC. An ISO time or a
+    rollout name time outside the shifted window counts too.
+    """
+    for m in ISO_TIME.finditer(text):
+        zone = m.group(8)
+        if not zone:
+            yield "a timestamp without a time zone"
+        elif zone not in ("Z", "+00:00"):
+            yield "a timestamp with a local offset"
+        elif not times.shifted(iso_ns(m)):
+            yield "an unshifted time"
+
+    for m in NAME_TIME.finditer(text):
+        if not times.shifted(name_seconds(m) * NS):
+            yield "an unshifted file name time"
+
+
+def epoch_digit_hits(text, times, pattern):
+    """Yield a hit for each epoch digit run of a text within one day of the real times.
+
+    The shift never moves digits inside a text, so such digits still
+    tell the real time.
+    """
+    for m in pattern.finditer(text):
+        ns = epoch_ns(decimal.Decimal(m.group(1)))
+        if ns is not None and times.near_real(ns):
+            yield "epoch digits of a recorded time"
+
+
+def epoch_number_hits(v, times):
+    """Yield a hit when a JSON number of epoch size lies outside the shifted window."""
+    ns = epoch_ns(v)
+    if ns is not None and not times.shifted(ns):
+        yield "an unshifted epoch time"
+
+
 def codex_text_hits(text, ids, times):
     """Yield what a text of a Codex copy holds that the copy must not hold.
 
@@ -1072,18 +1136,7 @@ def codex_text_hits(text, ids, times):
     if HOME_ROOT in text:
         yield "a home path"
 
-    for m in ISO_TIME.finditer(text):
-        zone = m.group(8)
-        if not zone:
-            yield "a timestamp without a time zone"
-        elif zone not in ("Z", "+00:00"):
-            yield "a timestamp with a local offset"
-        elif not times.shifted(iso_ns(m)):
-            yield "an unshifted time"
-
-    for m in NAME_TIME.finditer(text):
-        if not times.shifted(name_seconds(m) * NS):
-            yield "an unshifted file name time"
+    yield from time_text_hits(text, times)
 
     if times.bounds is not None:
         dates = times.dates()
@@ -1106,17 +1159,12 @@ def codex_value_hits(v, ids, times, key=None):
         for x in v:
             yield from codex_value_hits(x, ids, times, key)
     elif isinstance(v, str):
-        for m in EPOCH_TEXT.finditer(v):
-            ns = epoch_ns(decimal.Decimal(m.group(1)))
-            if ns is not None and times.near_real(ns):
-                yield "epoch digits of a recorded time"
+        yield from epoch_digit_hits(v, times, EPOCH_TEXT)
 
         if key == PROCESS_KEY and v not in ids.processes.values():
             yield "an unmapped process ID"
     elif is_number(v):
-        ns = epoch_ns(v)
-        if ns is not None and not times.shifted(ns):
-            yield "an unshifted epoch time"
+        yield from epoch_number_hits(v, times)
 
         if key == PROCESS_KEY and str(v) not in ids.processes.values():
             yield "an unmapped process ID"
@@ -1171,6 +1219,56 @@ def codex_residual(out_dir, ids, times, label):
                     hits.add("a rollout file name that is not the UTC start of its thread")
 
             problems += ["%s: holds %s" % (shown, hit) for hit in hits]
+
+    return problems
+
+
+def claude_value_hits(v, times):
+    """Yield each time of a decoded JSON value of a Claude Code copy that the shift did not move.
+
+    A number of epoch size must lie in the shifted window, under any
+    member name. Epoch digits inside a string or a member name count
+    when they lie near a real time.
+    """
+    if isinstance(v, dict):
+        for k, x in v.items():
+            yield from epoch_digit_hits(k, times, EPOCH_DIGITS)
+            yield from claude_value_hits(x, times)
+    elif isinstance(v, list):
+        for x in v:
+            yield from claude_value_hits(x, times)
+    elif isinstance(v, str):
+        yield from epoch_digit_hits(v, times, EPOCH_DIGITS)
+    elif is_number(v):
+        yield from epoch_number_hits(v, times)
+
+
+def claude_time_residual(out_dir, times, label):
+    """Fail when a Claude Code copy holds a time that the shift did not move.
+
+    Each file name and each text is scanned, and each JSON value is
+    read. A file name also counts when it holds epoch digits near a real
+    time, because the pass moves no digits in a file name. The message
+    names the file and the kind, never the value. A false hit only
+    refuses the copy, which is the safe direction.
+    """
+    problems = []
+
+    for base, _, files in os.walk(out_dir):
+        for name in files:
+            path = os.path.join(base, name)
+            rel = os.path.relpath(path, out_dir).replace(os.sep, "/")
+
+            with open(path, encoding="utf-8", errors="replace") as f:
+                data = f.read()
+
+            hits = set(time_text_hits(rel, times)) | set(epoch_digit_hits(rel, times, EPOCH_DIGITS))
+            hits.update(time_text_hits(data, times))
+
+            for v in json_values(path, data):
+                hits.update(claude_value_hits(v, times))
+
+            problems += ["%s: holds %s" % (label(path), hit) for hit in hits]
 
     return problems
 
@@ -1561,6 +1659,30 @@ def build_ids(record):
     return ids
 
 
+def build_times(record):
+    """Build the time shift of a Claude Code recording before any output exists.
+
+    It reads the hook payloads, the transcripts, and the extras in the
+    forms that the write path reads. So a time inside a dropped request
+    copy or a masked attachment never widens the span. The order of the
+    inputs does not matter, because only the first and the last time
+    count.
+    """
+    times = TimeShift()
+
+    units = [("json", os.path.join(record["observed"], meta["file"])) for meta in observed_metas(record)]
+    units += [("transcript" if p.endswith(".jsonl") else "json", p) for p in record.get("transcripts", [])]
+    units += [("extra", src) for _, src in sorted(record.get("extras", {}).items())]
+
+    for form, path in units:
+        for v in read_values(form, path):
+            times.read(v)
+
+    times.settle()
+
+    return times
+
+
 def build_codex(record):
     """Build the ID map and the time shift of a Codex recording before any output exists.
 
@@ -1678,6 +1800,7 @@ def main():
 
     if claude:
         s.ids = build_ids(record)
+        s.times = build_times(record)
     else:
         s.ids, s.times = build_codex(record)
 
@@ -1688,12 +1811,10 @@ def main():
     manifest = {"client": client, "client_version": record["client_version"], "placeholders": dict(PLACEHOLDERS)}
 
     # The count of each kind lets the testdata README state the replaced
-    # IDs without their values. A Codex copy also says whether its times
-    # are shifted, and never by how much.
+    # IDs without their values. A copy also says whether its times are
+    # shifted, and never by how much.
     manifest["synthetic_ids"] = dict(s.ids.counts)
-
-    if not claude:
-        manifest["times_shifted"] = s.times.offset is not None
+    manifest["times_shifted"] = s.times.offset is not None
 
     if record.get("observed") and os.listdir(record["observed"]):
         manifest["hooks"] = hooks(record, s, out_dir)
@@ -1752,6 +1873,7 @@ def main():
 
     if claude:
         problems += residual(out_dir, s.ids, label)
+        problems += claude_time_residual(out_dir, s.times, label)
     else:
         problems += codex_residual(out_dir, s.ids, s.times, label)
 
