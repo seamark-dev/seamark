@@ -606,6 +606,28 @@ func TestLessonCheckProjectPatchOps(t *testing.T) {
 		assert.Equal(t, "package b", projectedText(t, changeAt(t, snap, "src/b.go")))
 	})
 
+	// The decoder gives an add section no content when an added line ends
+	// with more than one carriage return, because the applier then writes
+	// other bytes than the decoded lines hold.
+	t.Run("an add section without a content is unprojectable", func(t *testing.T) {
+		g := todoRepo(t)
+		snap := g.project(codexOp(FileOp{Kind: OpPatchAdd, Path: "src/b.go"}, FileOp{Kind: OpPatchAdd, Path: "src/a.go"}))
+
+		assert.Equal(t, []string{"modify src/a.go", "add src/b.go"}, changeList(snap))
+		assert.True(t, snap.PathsComplete, "the paths of the sections stay complete")
+
+		for _, path := range []string{"src/a.go", "src/b.go"} {
+			ch := changeAt(t, snap, path)
+			assert.Equal(t, noteAddedLines, ch.unprojectable, path)
+			assert.Equal(t, []string{LimitationNoProjection}, ch.Limitations, path)
+			assert.Equal(t, ContentNotRead, ch.After.Content, path)
+		}
+
+		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
+		assert.Equal(t, OutcomeUnknown, res.Outcome)
+		assert.Equal(t, ReasonUnprojectableEdit, res.Reason)
+	})
+
 	t.Run("a delete section removes the file", func(t *testing.T) {
 		g := todoRepo(t)
 		snap := g.project(codexOp(FileOp{Kind: OpPatchDelete, Path: "generated/a.txt"}))
@@ -1105,7 +1127,6 @@ func TestLessonCheckProjectBoundsAndDeadline(t *testing.T) {
 			"parent path":        writeOp("../x", "x"),
 			"empty path":         writeOp("", "x"),
 			"write, no content":  {Kind: OpWrite, Path: "src/a.go"},
-			"add, no content":    {Kind: OpPatchAdd, Path: "src/a.go"},
 			"edit, two edits":    {Kind: OpEdit, Path: "src/a.go", Edits: []TextEdit{{Old: "a"}, {Old: "b"}}},
 			"multi-edit, none":   {Kind: OpMultiEdit, Path: "src/a.go"},
 			"move, no target":    {Kind: OpPatchMove, Path: "src/a.go"},

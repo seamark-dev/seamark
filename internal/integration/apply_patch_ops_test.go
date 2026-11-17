@@ -3,6 +3,7 @@ package integration
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 			for _, op := range ops {
 				switch op.Kind {
 				case lessoncheck.OpPatchAdd:
-					require.NotNil(t, op.Content, "an add always has a content")
+					require.NotNil(t, op.Content, "no added line of a path case ends with two carriage returns, so every add has a content")
 				case lessoncheck.OpPatchDelete:
 					assert.Nil(t, op.Content)
 					assert.Empty(t, op.MoveTo)
@@ -117,13 +118,51 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 		}
 	})
 
+	// The applier removes two carriage returns at a line end and patchBody
+	// one, so a line that ends with two or more of them has other bytes on
+	// disk than in the decoded line (oracle cases 97 and 98).
+	t.Run("an added line that ends with more than one carriage return gives no content", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			patch   string
+			paths   []string
+			content []*string // the content of each add section, in order
+		}{
+			{"two carriage returns", "*** Begin Patch\n*** Add File: n.txt\n+x\r\r\n*** End Patch",
+				[]string{"n.txt"}, []*string{nil}},
+			{"three carriage returns between other lines", "*** Begin Patch\n*** Add File: n.txt\n+a\n+x\r\r\r\n+b\n*** End Patch",
+				[]string{"n.txt"}, []*string{nil}},
+			{"an empty line with two carriage returns", "*** Begin Patch\n*** Add File: n.txt\n+\r\r\n*** End Patch",
+				[]string{"n.txt"}, []*string{nil}},
+			{"a CRLF patch with one more carriage return", "*** Begin Patch\r\n*** Add File: n.txt\r\n+x\r\r\n*** End Patch",
+				[]string{"n.txt"}, []*string{nil}},
+			{"only the section with the line loses its content", "*** Begin Patch\n*** Add File: x.txt\n+1\r\r\n*** Add File: y.txt\n+2\r\n*** End Patch",
+				[]string{"x.txt", "y.txt"}, []*string{nil, strPtr("2\n")}},
+			{"a carriage return inside a line stays content", "*** Begin Patch\n*** Add File: n.txt\n+x\ry\n*** End Patch",
+				[]string{"n.txt"}, []*string{strPtr("x\ry\n")}},
+		} {
+			ops, err := applyPatchOps(tc.patch)
+			require.NoError(t, err, tc.name)
+
+			var contents []*string
+
+			for _, op := range ops {
+				require.Equal(t, lessoncheck.OpPatchAdd, op.Kind, tc.name)
+				contents = append(contents, op.Content)
+			}
+
+			assert.Equal(t, tc.paths, patchOpPaths(ops), "%s: the paths stay complete", tc.name)
+			assert.Equal(t, tc.content, contents, tc.name)
+		}
+	})
+
 	// A new recording that changes the add bytes must fail here, offline,
 	// and not only in the native check that needs an installed Codex.
 	t.Run("add content equals every recorded native add", func(t *testing.T) {
 		_, oracle := loadApplyPatchOracle(t)
 		require.NotNil(t, oracle.Content, "the oracle file holds a content part")
 
-		var seen []string
+		var seen, unknown []string
 
 		for _, tc := range oracle.Content.Cases {
 			if tc.ExitStatus != 0 {
@@ -137,9 +176,17 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 				continue
 			}
 
-			for _, op := range ops {
-				require.NotNil(t, op.Content, tc.Name)
+			// A case without content must be one that the projection
+			// keeps unknown on purpose, with a written reason.
+			if slices.ContainsFunc(ops, func(op lessoncheck.FileOp) bool { return op.Content == nil }) {
+				assert.Contains(t, oracleUnknown, tc.Name, "%s: an add without content is not listed as unknown", tc.Name)
 
+				unknown = append(unknown, tc.Name)
+
+				continue
+			}
+
+			for _, op := range ops {
 				want, ok := tc.After[op.Path]
 				require.True(t, ok, "%s: Codex wrote no %s", tc.Name, op.Path)
 				assert.Equal(t, want, *op.Content, "%s: the projection of %s differs from the native bytes", tc.Name, op.Path)
@@ -153,6 +200,9 @@ func TestApplyPatchOpsKeepThePathOracle(t *testing.T) {
 			"22_add_two_lines", "23_add_last_line_empty", "24_add_patch_final_newline",
 			"25_add_empty", "26_add_over_existing", "27_add_crlf_patch",
 		}, seen, "the recorded add cases")
+		assert.Equal(t, []string{
+			"97_add_lines_end_with_two_carriage_returns", "98_add_line_ends_with_three_carriage_returns",
+		}, unknown, "the recorded add cases without content")
 	})
 
 	t.Run("any line under an update header is a hunk", func(t *testing.T) {

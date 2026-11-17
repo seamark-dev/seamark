@@ -65,6 +65,7 @@ const (
 	noteLink        = "the path is a symbolic link"
 	noteThroughLink = "a parent directory is a symbolic link"
 	noteHunks       = "the update hunks have a form without a verified projection"
+	noteAddedLines  = "the added lines have a form without a verified projection"
 	noteNoMatch     = "an update hunk does not match the current content"
 	noteLoneCR      = "the current content has a carriage return without a line feed"
 	noteSamePath    = "the move target is the source path"
@@ -150,10 +151,13 @@ func checkOperation(op Operation) error {
 		var problem string
 
 		switch fop.Kind {
-		case OpWrite, OpPatchAdd:
+		case OpWrite:
 			if fop.Content == nil {
 				problem = "has no content"
 			}
+		case OpPatchAdd:
+			// A nil content is a valid decoder result. The projection
+			// then keeps the added file unknown.
 		case OpEdit:
 			if len(fop.Edits) != 1 {
 				problem = "needs exactly one text edit"
@@ -300,18 +304,27 @@ func (p *projector) project(fop FileOp) []Change {
 
 // write projects a Claude Write or a Codex Add File section: the after
 // side is the full content. Both tools create the file when it is
-// absent and replace its content when it exists.
+// absent and replace its content when it exists. A Codex Add File
+// section without a content stays unprojectable, because the decoder
+// does not know the bytes that the applier writes.
 func (p *projector) write(fop FileOp) Change {
 	f, before := p.r.current(fop.Path)
 
-	ch := Change{Path: fop.Path, Kind: ChangeModify, Before: before, After: p.content([]byte(*fop.Content), keptMode(before))}
+	ch := Change{Path: fop.Path, Kind: ChangeModify, Before: before, After: Side{Type: ObjectFile, Mode: keptMode(before)}}
+	if fop.Content != nil {
+		ch.After = p.content([]byte(*fop.Content), keptMode(before))
+	}
+
 	if before.Type == ObjectAbsent {
 		ch.Kind = ChangeAdd
 	}
 
-	if before.Type == ObjectOther {
+	switch {
+	case before.Type == ObjectOther:
 		// The native tool cannot write over a directory or a device.
 		unprojectable(&ch, noteNotFile)
+	case fop.Content == nil:
+		unprojectable(&ch, noteAddedLines)
 	}
 
 	p.target(&ch, f, fop)

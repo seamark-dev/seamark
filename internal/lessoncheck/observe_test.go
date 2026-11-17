@@ -242,6 +242,27 @@ func TestLessonCheckObserveAfter(t *testing.T) {
 		assert.Equal(t, 5, res.Evidence[0].Line)
 	})
 
+	// The decoder gives no content for "+// TODO(add)\r\r", because the
+	// applier writes the line without both carriage returns. The record
+	// then holds no projected bytes that could differ from the result.
+	t.Run("an add without a content reads no-projection and is checked on the actual result", func(t *testing.T) {
+		g := todoRepo(t)
+
+		p := g.recordCall(cfg, codexOp(FileOp{Kind: OpPatchAdd, Path: "src/new.go"}), DefaultLimits())
+		require.Contains(t, p.Limitations, LimitationNoProjection)
+
+		g.write("src/new.go", "package a\n// TODO(add)\n")
+
+		snap := g.observe(p)
+
+		assert.Equal(t, AttributionNoProjection, snap.attribution)
+		assert.Equal(t, []string{"src/new.go"}, limitedPaths(snap, LimitationNoProjection))
+
+		res := resultOfRule(t, Evaluate(cfg, snap), "no-todo")
+		require.Equal(t, OutcomeViolation, res.Outcome, "the actual result has content, also without a projection")
+		assert.Equal(t, 2, res.Evidence[0].Line)
+	})
+
 	t.Run("a record without usable text gives missing-baseline", func(t *testing.T) {
 		for name, content := range map[string]string{"no content": "", "other content": "b3RoZXIK"} {
 			g := todoRepo(t)

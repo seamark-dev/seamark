@@ -26,11 +26,14 @@ import (
 // that the projection keeps unknown on purpose, each with its reason.
 // Every other accepted case must project exactly.
 var oracleUnknown = map[string]string{
-	"76_lone_cr_line_ends":                      "the applier reads a lone CR as a line end, and the projection keeps such a file unknown",
-	"77_lone_cr_inside_line":                    "the applier reads a lone CR as a line end, and the projection keeps such a file unknown",
-	"78_same_file_twice":                        "the applier applies two sections of one path in sequence, and the projection reads each path once",
-	"79_add_then_update_same_file":              "the applier applies two sections of one path in sequence, and the projection reads each path once",
-	"96_change_lines_end_with_carriage_returns": "the applier removes every carriage return at a line end, and the decoder keeps such a section outside its grammar",
+	"76_lone_cr_line_ends":                            "the applier reads a lone CR as a line end, and the projection keeps such a file unknown",
+	"77_lone_cr_inside_line":                          "the applier reads a lone CR as a line end, and the projection keeps such a file unknown",
+	"78_same_file_twice":                              "the applier applies two sections of one path in sequence, and the projection reads each path once",
+	"79_add_then_update_same_file":                    "the applier applies two sections of one path in sequence, and the projection reads each path once",
+	"96_change_lines_end_with_carriage_returns":       "the applier removes two carriage returns at a line end and the decoder one, so the decoder keeps such a section outside its grammar",
+	"97_add_lines_end_with_two_carriage_returns":      "the applier removes two carriage returns at a line end and the decoder one, so the decoder gives such an add no content",
+	"98_add_line_ends_with_three_carriage_returns":    "the applier removes two carriage returns at a line end and the decoder one, so the decoder gives such an add no content",
+	"99_change_line_ends_with_three_carriage_returns": "the applier removes two carriage returns at a line end and the decoder one, so the decoder keeps such a section outside its grammar",
 }
 
 // refusedPathPattern finds the path that a refusal of the applier names.

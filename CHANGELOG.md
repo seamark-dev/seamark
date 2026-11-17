@@ -51,7 +51,7 @@ model-boundary delivery.
   codex-cli 0.169.0 applier, so `no-added-pattern/1` decides a Codex
   Update before it runs and the post-edit record can read
   `projection-match`. Each rule follows a case of
-  the `apply_patch` content oracle, now 96 cases recorded from
+  the `apply_patch` content oracle, now 99 cases recorded from
   codex-cli 0.169.0; the first 29 match the earlier codex-cli 0.164.0
   recording. A hunk form outside the verified grammar, such as a
   change line that ends with a carriage return, a hunk that does not
@@ -76,6 +76,15 @@ model-boundary delivery.
   the baseline handler stores no baseline, and the post-edit check
   reports every executable pin as `unknown/incomplete-paths`. The
   advisory edit hook is unchanged.
+- **Codex added lines with extra carriage returns.** codex-cli 0.169.0
+  removes two carriage returns at the end of a patch line and the
+  decoder removed one, so the Add line `+x\r\r` gave the content
+  `x\r\n` while Codex writes `x\n`, and a line-end pattern could judge
+  the wrong bytes. An Add section with a line that ends with two or
+  more carriage returns now gives no projected content: a content
+  check reads `unknown/unprojectable-edit`, an armed guard requests
+  denial, and the post-edit record reads `no-projection`. One carriage
+  return at a line end is unchanged.
 - **MultiEdit tool check.** `make agents-native-check CLIENT=claude`
   runs the installed Claude Code against a scripted loopback Messages
   API with a scratch configuration, so no model runs. Claude Code

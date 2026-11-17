@@ -2,6 +2,7 @@ package integration
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -35,7 +36,9 @@ import (
 //   - An add section gives OpPatchAdd. Its content is the "+" lines
 //     without the "+", each ended by "\n". The Codex applier writes a
 //     final newline, and the projection must hold the bytes on disk. A
-//     section without lines gives an empty content, not a nil one.
+//     section without lines gives an empty content, not a nil one. A
+//     section with an added line that still ends with a carriage return
+//     keeps a nil content (addContent), so the guard projects no bytes.
 //   - A delete section gives OpPatchDelete.
 //   - An update section with a move and no other line gives
 //     OpPatchMove, so the guard checks both paths. codex-cli 0.164.0
@@ -73,12 +76,7 @@ func applyPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 		if n := len(ops); n > 0 {
 			switch last := &ops[n-1]; {
 			case last.Kind == lessoncheck.OpPatchAdd:
-				content := ""
-				if len(added) > 0 {
-					content = strings.Join(added, "\n") + "\n"
-				}
-
-				last.Content = &content
+				last.Content = addContent(added)
 			case last.Hunks:
 				last.Chunks = patchChunks(changes)
 			}
@@ -191,6 +189,31 @@ func guardPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 	return ops, nil
 }
 
+// addContent returns the bytes that the Codex applier writes for the
+// added lines of one add section, each line without its "+". It returns
+// nil when an added line still ends with a carriage return.
+//
+// patchBody removes one carriage return at each line end, and the
+// applier removes two (oracle cases 97 and 98). So "+x\r\r" gives the
+// decoded text "x\r", and the applier writes "x\n". A content of
+// "x\r\n" would let a line-end pattern such as "x$" judge other bytes
+// than the file gets. The decoder does not copy the removal of the
+// second carriage return, because a later applier can change it and the
+// guard must not guess content. A single carriage return at a line end
+// gives the same bytes in both, so that content stays as decoded.
+func addContent(added []string) *string {
+	if slices.ContainsFunc(added, func(line string) bool { return strings.HasSuffix(line, "\r") }) {
+		return nil
+	}
+
+	content := ""
+	if len(added) > 0 {
+		content = strings.Join(added, "\n") + "\n"
+	}
+
+	return &content
+}
+
 // patchChunks reads the chunks of one update section from its raw lines
 // below the header and the move line. It returns nil when a line breaks
 // the chunk grammar that the content oracle verifies:
@@ -207,8 +230,9 @@ func guardPatchOps(patch string) ([]lessoncheck.FileOp, error) {
 //     line. Only an "@@" line may follow it.
 //   - A chunk holds at least one line.
 //   - No change line ends with a carriage return. patchBody removes one
-//     carriage return at each line end, and the applier removes all of
-//     them (oracle case 96), so the text of such a line is not known.
+//     carriage return at each line end, and the applier removes two
+//     (oracle cases 96 and 99), so the decoded text has one carriage
+//     return more than the applier writes.
 //
 // The applier accepts some other forms, such as "*** End of File" as
 // the first line of a section. A nil result keeps such a section

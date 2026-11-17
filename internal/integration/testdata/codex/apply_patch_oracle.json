@@ -304,7 +304,7 @@
   "content": {
     "schema": "apply-patch-content/1",
     "client_version": "codex-cli 0.169.0",
-    "recorded": "2026-11-16",
+    "recorded": "2026-11-17",
     "provenance": "Each case was applied offline by the installed codex binary run under the name apply_patch: no model, no login, a scratch CODEX_HOME, and a new scratch directory per case that holds the before files only. exit_status, stdout, and stderr are what the applier returned, with the scratch directory written as <scratch>. after holds every file in the scratch directory after the run, also after a refusal. The cases show the applier, not what tool_input.command carries in a live PreToolUse.",
     "cases": [
       {
@@ -1642,6 +1642,44 @@
         "stderr": "",
         "after": {
           "f.txt": "a\nB\n"
+        }
+      },
+      {
+        "name": "97_add_lines_end_with_two_carriage_returns",
+        "shape": "Add whose first line ends with two carriage returns before the line feed",
+        "before": {},
+        "patch": "*** Begin Patch\n*** Add File: n.txt\n+a\r\r\n+b\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nA n.txt\n",
+        "stderr": "",
+        "after": {
+          "n.txt": "a\nb\n"
+        }
+      },
+      {
+        "name": "98_add_line_ends_with_three_carriage_returns",
+        "shape": "Add whose first line ends with three carriage returns before the line feed",
+        "before": {},
+        "patch": "*** Begin Patch\n*** Add File: n.txt\n+a\r\r\r\n+b\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nA n.txt\n",
+        "stderr": "",
+        "after": {
+          "n.txt": "a\r\nb\n"
+        }
+      },
+      {
+        "name": "99_change_line_ends_with_three_carriage_returns",
+        "shape": "added line of an Update that ends with three carriage returns before the line feed",
+        "before": {
+          "f.txt": "a\nb\n"
+        },
+        "patch": "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\r\r\r\n*** End Patch",
+        "exit_status": 0,
+        "stdout": "Success. Updated the following files:\nM f.txt\n",
+        "stderr": "",
+        "after": {
+          "f.txt": "a\nB\r\n"
         }
       }
     ]

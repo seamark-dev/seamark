@@ -992,6 +992,24 @@ func TestLessonsGuardHookCodexApplyPatch(t *testing.T) {
 			reasons: patternHead + "apply_patch adds a line matching the pattern at src/new.go:2: // TODO(owner): x",
 		},
 		{
+			// The decoder removes the one carriage return at each line end,
+			// as the applier does, so the content stays projected.
+			name:    "an Add with a TODO line that ends with one carriage return",
+			body:    "*** Add File: src/new.go\r\n+package src\r\n+// TODO(owner): x\r\n",
+			cause:   lessoncheck.GuardCauseViolation,
+			reasons: patternHead + "apply_patch adds a line matching the pattern at src/new.go:2: // TODO(owner): x",
+		},
+		{
+			// The applier removes two carriage returns at a line end and the
+			// decoder one, so the decoded line is not the written line. The
+			// line holds no TODO, and the pin still cannot allow it.
+			name:  "an Add whose line ends with two carriage returns in a pattern scope",
+			body:  "*** Add File: src/new.go\n+package src\r\r\n",
+			cause: lessoncheck.GuardCauseUnknown,
+			reasons: "lesson check no-todo (no-added-pattern/1) of pin " + pins["no-todo"].Ref +
+				" cannot evaluate src/new.go: unprojectable-edit; the added lines have a form without a verified projection",
+		},
+		{
 			name:    "a Delete of a frozen path",
 			body:    "*** Delete File: generated/a.txt\n",
 			cause:   lessoncheck.GuardCauseViolation,

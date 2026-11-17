@@ -695,6 +695,24 @@ var contentInputs = []contentInput{
 		before: map[string]string{"f.txt": "a\nb\n"},
 		patch:  "*** Begin Patch\n*** Update File: f.txt\n@@\n a\r\r\n-b\n+B\r\r\n*** End Patch",
 	},
+	{
+		name:   "97_add_lines_end_with_two_carriage_returns",
+		shape:  "Add whose first line ends with two carriage returns before the line feed",
+		before: map[string]string{},
+		patch:  "*** Begin Patch\n*** Add File: n.txt\n+a\r\r\n+b\n*** End Patch",
+	},
+	{
+		name:   "98_add_line_ends_with_three_carriage_returns",
+		shape:  "Add whose first line ends with three carriage returns before the line feed",
+		before: map[string]string{},
+		patch:  "*** Begin Patch\n*** Add File: n.txt\n+a\r\r\r\n+b\n*** End Patch",
+	},
+	{
+		name:   "99_change_line_ends_with_three_carriage_returns",
+		shape:  "added line of an Update that ends with three carriage returns before the line feed",
+		before: map[string]string{"f.txt": "a\nb\n"},
+		patch:  "*** Begin Patch\n*** Update File: f.txt\n@@\n a\n-b\n+B\r\r\r\n*** End Patch",
+	},
 }
 
 // encodeApplyPatchOracle writes the oracle file in its canonical form:
