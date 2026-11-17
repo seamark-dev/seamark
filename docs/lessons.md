@@ -1056,9 +1056,13 @@ The guard requests denial. Reviewed recordings verify native denial of
 Claude Code `Write` and `Edit` (Claude Code 2.1.319) and of Codex
 `apply_patch` (codex-cli 0.169.0) in the root and child contexts, with
 one limit: the client lets the write run after its 10 s hook timeout.
-Seamark cannot read the Codex trust record, so a Codex path still reads
-`active-unverified`. Native denial of `MultiEdit` and the post-edit
-reply remain unverified. The guard projects Codex Update content by the
+Reviewed recordings of Claude Code 2.1.325 and codex-cli 0.169.0 verify
+the post-edit reply on `PostToolUse` of the same tools in the root and
+child contexts, with one limit: the client drops the findings after
+its 15 s hook timeout, and the edit stays. Seamark cannot read the
+Codex trust record, so a Codex path still reads `active-unverified`.
+Native denial and the post-edit reply of `MultiEdit` remain pending.
+The guard projects Codex Update content by the
 rules of the codex-cli 0.169.0 applier. A hunk that does not match the
 current file, a hunk form outside the verified grammar, a file with a
 lone carriage return, a file that the patch names twice, and an added
