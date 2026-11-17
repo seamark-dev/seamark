@@ -275,7 +275,13 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 	// have by then.
 	var gone atomic.Bool
 
+	// watched closes when the watch returns. The last kill waits for it,
+	// so it reads gone only after the watch can no longer set it.
+	watched := make(chan struct{})
+
 	go func() {
+		defer close(watched)
+
 		select {
 		case <-ctx.Done():
 		case <-waited:
@@ -305,6 +311,7 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 
 	err := cmd.Wait()
 	close(waited)
+	<-watched
 
 	// The group is empty after a clean exit, and then the kill fails with
 	// nothing to report. A watch that found the group empty already
