@@ -164,6 +164,11 @@ const (
 // Tests can shorten this delay.
 var waitDelay = 5 * time.Second
 
+// groupKillInterval is the time between the repeated group kills after
+// a stop. The kills end when Wait returns, at the latest waitDelay after
+// the stop, so a stop sends at most about 100 kills.
+const groupKillInterval = 50 * time.Millisecond
+
 func (c *cliInvoker) Name() string { return c.name }
 
 // Output caps: a well-behaved agent reply is kilobytes; a runaway CLI
@@ -246,6 +251,11 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 // stop for up to waitDelay. A watch kills the group when ctx ends before
 // Wait returns. A descendant that closed its pipes never delays Wait, so
 // a last kill ends the group after every run, whatever its outcome.
+//
+// The watch repeats the kill every groupKillInterval until Wait
+// returns. On macOS one group kill can miss a process that a member
+// starts at that moment. That process stays in the group and holds
+// stdout, so the stop waits for it. The next kill reaches it.
 func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 	if !c.ownGroup {
 		return cmd.Run()
@@ -260,9 +270,22 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 	go func() {
 		select {
 		case <-ctx.Done():
+		case <-waited:
+			return
+		}
+
+		tick := time.NewTicker(groupKillInterval)
+		defer tick.Stop()
+
+		for {
 			// An error means that the group is gone already.
 			_ = killGroup(cmd)
-		case <-waited:
+
+			select {
+			case <-tick.C:
+			case <-waited:
+				return
+			}
 		}
 	}()
 

@@ -16,6 +16,11 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 - **A Claude Code Edit request with a wrongly typed field names only that
   field.** With Go 1.25.0 the error text named an internal Go type in the
   field path, for example `tool_input.claudeTextEdit.replace_all`.
+- **A stop of a distillation or extraction run in the console ends the
+  agent at once on macOS.** One kill of the agent process group could
+  miss a process that the agent started at that moment, and the stop
+  then waited for that process, up to five seconds. The stop now repeats
+  the kill until the run ends.
 
 ## v0.9.0 — 2026-11-17
 
