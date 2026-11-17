@@ -41,7 +41,7 @@ build from source. Shell completions are included.
 
 ## Build from source
 
-Install Go 1.25 or newer and a C compiler; the parser uses CGO. The commands
+Install Go 1.27 or newer and a C compiler; the parser uses CGO. The commands
 below build the current `main` branch:
 
 ```bash

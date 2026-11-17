@@ -126,7 +126,7 @@ Claude Code and Codex, the projection of Codex Update content, the
 and call resolution. The [changelog](../CHANGELOG.md) records the full release scope. Every release
 ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
-(`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
+(`SHA256SUMS` on every release). Source builds need Go ≥ 1.27 and a C
 compiler. Windows is untested and unsupported.
 
 Homebrew: `brew install seamark-dev/tap/seamark` installs pre-built

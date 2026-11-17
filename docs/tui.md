@@ -652,8 +652,8 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
 
 ## Versions and limits
 
-- Bubble Tea v1.3.10, Bubbles v1.0.0, Lip Gloss v1.1.0. They keep the
-  Go 1.25 minimum; Bubble Tea v2 needs Go 1.26.
+- Bubble Tea v1.3.10, Bubbles v1.0.0, Lip Gloss v1.1.0. Bubble Tea v2 is
+  not adopted yet.
 - Index builds cannot be cancelled; the console offers to exit after
   completion instead.
 - The review fetch through `gh` has no overall time limit and no output
