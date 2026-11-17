@@ -16,10 +16,10 @@ same client version.
 `make native-record CLIENT=codex NATIVE_RECORD_SCENARIO=timing` ran
 `scripts/native-record.sh` at commit `d7a24f9` of the release branch,
 with the Seamark binary of that commit (`v0.8.0-301-gd7a24f9`). The
-sanitizer `scripts/native-record-sanitize.py` at commit `334e43a` of the
-same branch, with the Codex ID pass, the time shift, and the commit ID
-and agent role masks, made this copy from the same raw recording (see
-"Sanitization").
+sanitizer `scripts/native-record-sanitize.py` at the commit "fix: mask the account's Codex model overrides in sanitized recordings" of the
+same branch, with the Codex ID pass, the time shift, and the commit ID,
+agent role, and model override masks, made this copy from the same raw
+recording (see "Sanitization").
 
 The script ran each prompt with `codex exec --json` on the model
 `gpt-5.6-luna` with low reasoning, in the `workspace-write` sandbox.
@@ -103,7 +103,10 @@ writes the HEAD commit of the scratch repository there, and a commit ID
 hashes the commit time and the local time offset. The agent role list
 of the spawn tool reads `<sanitized>` in the one tool output that
 prints that tool, because the list names the roles of the operator's
-own Codex configuration. Only `hook-context.jsonl` keeps the text of
+own Codex configuration. The model override list of the same tool reads
+`<sanitized>` in that output too, because it names the models and the
+reasoning efforts of the operator's account; the model of the run,
+`gpt-5.6-luna`, stays. Only `hook-context.jsonl` keeps the text of
 the four hook developer records of the patch reminders, as the script
 copied them from the rollouts.
 Each one joins its rollout record by its message ID and its time.
