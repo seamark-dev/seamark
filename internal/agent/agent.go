@@ -14,11 +14,13 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -164,6 +166,11 @@ const (
 // Tests can shorten this delay.
 var waitDelay = 5 * time.Second
 
+// groupKillInterval is the time between the repeated group kills after
+// a stop. The kills end when Wait returns, at the latest waitDelay after
+// the stop, so a stop sends at most about 100 kills.
+const groupKillInterval = 50 * time.Millisecond
+
 func (c *cliInvoker) Name() string { return c.name }
 
 // Output caps: a well-behaved agent reply is kilobytes; a runaway CLI
@@ -246,6 +253,12 @@ func (c *cliInvoker) Invoke(ctx context.Context, prompt string) (string, error) 
 // stop for up to waitDelay. A watch kills the group when ctx ends before
 // Wait returns. A descendant that closed its pipes never delays Wait, so
 // a last kill ends the group after every run, whatever its outcome.
+//
+// The watch repeats the kill every groupKillInterval until Wait
+// returns or the group has no member left. On macOS one group kill can
+// miss a process that a member starts at that moment. That process
+// stays in the group and holds stdout, so the stop waits for it. The
+// next kill reaches it.
 func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 	if !c.ownGroup {
 		return cmd.Run()
@@ -257,12 +270,36 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 
 	waited := make(chan struct{})
 
+	// gone records that a kill found no member left in the group. The
+	// last kill below then skips the ID, which an unrelated new group can
+	// have by then.
+	var gone atomic.Bool
+
 	go func() {
 		select {
 		case <-ctx.Done():
-			// An error means that the group is gone already.
-			_ = killGroup(cmd)
 		case <-waited:
+			return
+		}
+
+		tick := time.NewTicker(groupKillInterval)
+		defer tick.Stop()
+
+		for {
+			// os.ErrProcessDone means that the group has no member left.
+			// Its ID can then go to an unrelated new group, so the
+			// watch stops here instead of signaling that ID again.
+			if errors.Is(killGroup(cmd), os.ErrProcessDone) {
+				gone.Store(true)
+
+				return
+			}
+
+			select {
+			case <-tick.C:
+			case <-waited:
+				return
+			}
 		}
 	}()
 
@@ -270,8 +307,11 @@ func (c *cliInvoker) run(ctx context.Context, cmd *exec.Cmd) error {
 	close(waited)
 
 	// The group is empty after a clean exit, and then the kill fails with
-	// nothing to report.
-	_ = killGroup(cmd)
+	// nothing to report. A watch that found the group empty already
+	// skips it.
+	if !gone.Load() {
+		_ = killGroup(cmd)
+	}
 
 	return err
 }

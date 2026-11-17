@@ -334,7 +334,7 @@ Contributions are welcome. You can improve docs, contribute an
 [AI coding agent integration](docs/agent-integrations.md#adding-an-agent), or
 extend the [effect catalogue](docs/configuration.md#effect-catalogue).
 
-Source builds need Go 1.25 or newer and a C compiler:
+Source builds need Go 1.27 or newer and a C compiler:
 
 ```bash
 make verify   # one full gate: ordinary tests, race tests, lint, smoke

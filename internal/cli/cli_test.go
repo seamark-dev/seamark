@@ -147,13 +147,20 @@ func TestIndexRejectsReviewsWithFixesOnly(t *testing.T) {
 	assert.Contains(t, err.Error(), "none of the others can be")
 }
 
+// gitify makes root a git repository with one commit of every file.
+//
+// maintenance.auto=false stops the automatic maintenance after the
+// commit. The commit starts that maintenance as a detached process. In
+// git 2.56 that process still holds .git/objects/maintenance.lock after
+// the commit returns. A test that compares the whole tree then sees the
+// lock appear or go, mostly on a slow CI runner.
 func gitify(t *testing.T, root string) {
 	t.Helper()
 
 	for _, args := range [][]string{
 		{"init", "-b", "main"}, {"add", "-A"}, {"commit", "-m", "initial"},
 	} {
-		cmd := exec.Command("git", args...)
+		cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false"}, args...)...)
 		cmd.Dir = root
 		cmd.Env = append(os.Environ(),
 			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",

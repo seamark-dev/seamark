@@ -70,7 +70,14 @@ func claudeFileOp(tool string, payload []byte) (lessoncheck.FileOp, error) {
 			FilePath string `json:"file_path"`
 			// Content is the full content of a Write.
 			Content *string `json:"content"`
-			claudeTextEdit
+			// The replacement of an Edit. These fields repeat
+			// claudeTextEdit and are not an embedded struct, because
+			// Go 1.25.0 names an embedded struct in the field path of a
+			// JSON type error, and the error text must name the input
+			// field alone.
+			OldString  *string `json:"old_string"`
+			NewString  *string `json:"new_string"`
+			ReplaceAll *bool   `json:"replace_all"`
 			// Edits are the replacements of a MultiEdit, in order.
 			Edits []claudeTextEdit `json:"edits"`
 		} `json:"tool_input"`
@@ -95,7 +102,9 @@ func claudeFileOp(tool string, payload []byte) (lessoncheck.FileOp, error) {
 
 		fop.Kind, fop.Content = lessoncheck.OpWrite, input.Content
 	case claudeToolEdit:
-		edit, err := input.textEdit("the Edit request")
+		single := claudeTextEdit{OldString: input.OldString, NewString: input.NewString, ReplaceAll: input.ReplaceAll}
+
+		edit, err := single.textEdit("the Edit request")
 		if err != nil {
 			return lessoncheck.FileOp{}, err
 		}

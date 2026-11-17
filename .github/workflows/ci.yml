@@ -24,11 +24,6 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    env:
-      # Job-scoped log parent: the compact runner writes one private
-      # directory per invocation here, and the upload step below ships
-      # exactly that evidence.
-      TEST_LOG_DIR: ${{ runner.temp }}/seamark-test-logs
     steps:
       - uses: actions/checkout@v4
 
@@ -36,7 +31,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The compact runner writes one private log directory per
+      # invocation under TEST_LOG_DIR, and the upload step below ships
+      # exactly that evidence. The runner context exists only at step
+      # level, so the variable is set on the step, not on the job.
       - name: Tests
+        env:
+          TEST_LOG_DIR: ${{ runner.temp }}/seamark-test-logs
         run: make test
 
       # The end-to-end smoke covers what unit tests cannot: the built
@@ -64,8 +65,6 @@ jobs:
     name: race
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      TEST_LOG_DIR: ${{ runner.temp }}/seamark-test-logs
     steps:
       - uses: actions/checkout@v4
 
@@ -74,6 +73,8 @@ jobs:
           go-version-file: go.mod
 
       - name: Race detector
+        env:
+          TEST_LOG_DIR: ${{ runner.temp }}/seamark-test-logs
         run: make test-race
 
       - name: Upload test logs
@@ -96,7 +97,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # golangci-lint refuses a module whose go directive is newer than
+      # the Go that built it. v2.15.0 is built with Go 1.27, the version
+      # that go.mod names.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.12
+          version: v2.15.0

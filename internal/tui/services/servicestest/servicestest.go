@@ -56,10 +56,16 @@ const Page = `[{"id":11,"user":{"login":"rev","type":"User"},` +
 
 // Git runs git in root with a fixed identity. Global config must not
 // leak in, because it can rewrite remotes.
+//
+// maintenance.auto=false stops the automatic maintenance after a commit.
+// The commit starts that maintenance as a detached process. In git 2.56
+// that process still holds .git/objects/maintenance.lock after the commit
+// returns. A test that compares the whole tree then sees the lock appear
+// or go, mostly on a slow CI runner.
 func Git(t testing.TB, root string, args ...string) {
 	t.Helper()
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", append([]string{"-c", "maintenance.auto=false"}, args...)...)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
