@@ -281,6 +281,14 @@ func TestLessonCheckDecideGuardMatrix(t *testing.T) {
 			texts:   []string{patternHead + " cannot evaluate src/a.go: unprojectable-edit; the update hunks have a form without a verified projection"},
 		},
 		{
+			name:    "a Codex add without a content in a pattern scope denies",
+			op:      codexOp(FileOp{Kind: OpPatchAdd, Path: "src/new.go"}),
+			cause:   GuardCauseUnknown,
+			reasons: []Reason{ReasonUnprojectableEdit},
+			pins:    []pinOutcome{{todo.Identity, OutcomeUnknown, ReasonUnprojectableEdit}},
+			texts:   []string{patternHead + " cannot evaluate src/new.go: unprojectable-edit; the added lines have a form without a verified projection"},
+		},
+		{
 			name:  "a Codex update decides a forbid pin on paths alone",
 			op:    codexOp(FileOp{Kind: OpPatchUpdate, Path: "generated/a.txt", Hunks: true}),
 			cause: GuardCauseViolation,

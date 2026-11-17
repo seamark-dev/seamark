@@ -1055,8 +1055,9 @@ Seamark cannot read the Codex trust record, so a Codex path still reads
 reply remain unverified. The guard projects Codex Update content by the
 rules of the codex-cli 0.169.0 applier. A hunk that does not match the
 current file, a hunk form outside the verified grammar, a file with a
-lone carriage return, and a file that the patch names twice give
-`unknown`, so an armed guard denies them. A Codex patch header path with
+lone carriage return, a file that the patch names twice, and an added
+line that ends with two or more carriage returns give `unknown`, so an
+armed guard denies them. A Codex patch header path with
 a tab or a carriage return gets `incomplete-paths`, so an armed guard
 denies it and the post-edit check reports every pin as unknown:
 codex-cli 0.169.0 writes such a path without that character. Reviewed

@@ -64,7 +64,9 @@ type FileOp struct {
 	Path   string
 	MoveTo string // patch-move, and patch-update with a Move to line
 	// Content is the full content of a write, and for a patch-add the
-	// bytes that the applier writes. It is nil for every other kind.
+	// bytes that the applier writes. It is nil for every other kind. A
+	// patch-add with nil Content stays unprojectable, because the
+	// decoder found an added line whose written bytes are not known.
 	Content *string
 	Edits   []TextEdit // edit (one), multi-edit (many, in order)
 	// Hunks is true for a patch-update that carries hunks.

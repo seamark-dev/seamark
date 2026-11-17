@@ -107,11 +107,12 @@ Files:
   nothing about what `tool_input.command` carries in a live `PreToolUse`.
   The `content` part of the same file is also **not synthetic**: schema
   `apply-patch-content/1`, recorded from `codex-cli 0.169.0` on
-  2026-11-16 by `make agents-oracle-record ORACLE_VERSION=0.169.0`
-  (`native_codex_content_oracle_test.go`). It holds 96 cases. The first
+  2026-11-17 by `make agents-oracle-record ORACLE_VERSION=0.169.0`
+  (`native_codex_content_oracle_test.go`). It holds 99 cases. The first
   recording of cases 01 to 29, from `codex-cli 0.164.0` on 2026-11-03,
-  gave the same exit status, stdout, stderr, and after files for every
-  case. Each case holds the before files, the patch text, and what the installed applier did with them,
+  and the recording of cases 01 to 96, from `codex-cli 0.169.0` on
+  2026-11-16, gave the same exit status, stdout, stderr, and after files
+  for every case. Each case holds the before files, the patch text, and what the installed applier did with them,
   offline in a new scratch directory with a scratch `CODEX_HOME`: the
   exit status, stdout, stderr (the scratch directory written as
   `<scratch>`), and every file after the run, also after a refusal. The
@@ -129,7 +130,10 @@ Files:
   files, one file named twice, a move onto an existing CRLF file, line
   separators inside a line, every character of the normalization table
   with one unmapped neighbor per class, and change lines that end with
-  carriage returns, which the applier removes. The guard's Update projection follows
+  carriage returns, which the applier removes. Cases 97 to 99 show how
+  many: the applier removes two carriage returns at the end of an added
+  or a change line, and a third one stays. The decoder removes one, so
+  the guard keeps such an Add or Update unknown. The guard's Update projection follows
   these cases: `apply_patch_projection_test.go` projects every case
   offline and compares the result with the after files. What the cases
   prove: the bytes

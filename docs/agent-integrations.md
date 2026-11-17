@@ -211,7 +211,7 @@ implemented handlers, not verified native prevention:
 | Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offers no MultiEdit tool. The model's replies in the 2.1.319 recording say so, and the model-free check of `make agents-native-check CLIENT=claude` shows that 2.1.325 offers none, inline or deferred, and refuses a MultiEdit call. Post-edit reply: seen in the recording, still unverified in the report |
 | Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; reply seen in the next model request on Claude Code 2.1.319, still unverified in the report; main-context repeats reset at compaction, child reminders repeat |
 | Claude Code `NotebookEdit`, `Bash` | No lesson-check hook | No lesson-check hook | Uncovered writers in both contexts; a shell command can write files |
-| Codex `apply_patch` | Baseline or guard; Add, Delete, move, and Update content projection; an Update outside the verified rules reads unknown | `PostToolUse` verification; the handler reads a failed exit status, but no recording shows a hook after a failed patch | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply: seen in the thread, still unverified in the report. Child call and lane attribution: unsupported |
+| Codex `apply_patch` | Baseline or guard; Add, Delete, move, and Update content projection; an Add or Update outside the verified rules reads unknown | `PostToolUse` verification; the handler reads a failed exit status, but no recording shows a hook after a failed patch | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply: seen in the thread, still unverified in the report. Child call and lane attribution: unsupported |
 | Codex structured `Read` | Unsupported | No exploration hook | Setup prints the no-Read notice and installs nothing for exploration; use preparation |
 | Codex `shell` | No lesson-check hook | No lesson-check hook | Uncovered writer in both contexts |
 
@@ -236,6 +236,9 @@ requests denial instead of guessing the after-content:
   the applier refuses the patch;
 - a current file with a carriage return that no line feed follows;
 - a file that two sections of one patch name;
+- an Add section with a line that ends with two or more carriage
+  returns: the codex-cli 0.169.0 applier removes two of them and the
+  decoder one, so the decoded line is not the written line;
 - a move onto its own path, a source that is absent, not a regular
   file, or a symbolic link, and current content that is binary, not
   UTF-8, or too large;
@@ -839,15 +842,16 @@ cases come from codex-cli 0.154.0: they record which paths a patch
 names. The decoder is tested against them, and the native check reruns
 them on the installed version to catch parser drift. Its content cases
 come from codex-cli 0.169.0, the version of the native Codex
-recordings: they record the exact before and after bytes of 96 patch
+recordings: they record the exact before and after bytes of 99 patch
 shapes, and the native check replays them when the installed version
 is the recorded one. A recording of the first 29 cases on codex-cli
-0.164.0 gave identical results. The Update projection is tested
+0.164.0 gave identical results, and so did a recording of the first 96
+on 0.169.0. The Update projection is tested
 against every content case offline in `make test`: it gives the bytes
 that the applier wrote, or unknown where the applier refused the patch
-and for five listed cases that it keeps unknown on purpose: a lone
+and for eight listed cases that it keeps unknown on purpose: a lone
 carriage return in the file, one path in two sections, and change
-lines that end with a carriage return. The
+or added lines that end with more than one carriage return. The
 guard recording of 0.169.0 holds one live Update (case
 `update-permitted`) with the one-hunk shape of the content case
 `01_one_hunk`, and the replay projects it to the bytes that the live
@@ -953,10 +957,10 @@ Before release:
   user layer of the scratch home read `untrusted`. Seamark cannot read
   the trust record, so every Codex path keeps `trust-unknown`.
 - **Done:** Implement and test the content projection of a Codex
-  Update patch. The oracle holds 96 content cases from codex-cli
+  Update patch. The oracle holds 99 content cases from codex-cli
   0.169.0 in `internal/integration/testdata/codex/apply_patch_oracle.json`;
   the first 29 gave identical results on codex-cli 0.164.0. The
-  projection gives the applier bytes for every accepted case except five
+  projection gives the applier bytes for every accepted case except eight
   listed cases that it keeps unknown on purpose, and unknown for every
   refused update, offline in `make test`. On codex-cli 0.169.0
   the seeded differential of `make agents-native-check CLIENT=codex`
