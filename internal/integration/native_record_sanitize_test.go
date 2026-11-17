@@ -999,3 +999,23 @@ func TestNativeRecordSanitizeKeepsARoleListInAClaudeCopy(t *testing.T) {
 	hook := readJSON(t, filepath.Join(f.out, "hooks", "006-PostToolUse.json"))
 	assert.Equal(t, map[string]any{"stdout": declaration}, hook["tool_response"])
 }
+
+// TestNativeRecordSanitizeKeepsAModelOverrideListInAClaudeCopy proves
+// that the model override mask and its residual rule belong to the Codex
+// pass. A Claude Code copy keeps the text of a Codex model override list
+// as it is, so the Claude path gives the same bytes as before.
+func TestNativeRecordSanitizeKeepsAModelOverrideListInAClaudeCopy(t *testing.T) {
+	requireTools(t, "python3")
+
+	description := codexSpawnDescription(codexModelOverrides)
+	f := addDenyPayload(t, newSanitizeFixture(t), []any{}, map[string]any{
+		"session_id": sanitizeSession, "hook_event_name": "PostToolUse", "tool_name": "Bash",
+		"tool_response": map[string]any{"stdout": description},
+	})
+
+	got, err := f.sanitize(t, f.out)
+	require.NoError(t, err, got)
+
+	hook := readJSON(t, filepath.Join(f.out, "hooks", "006-PostToolUse.json"))
+	assert.Equal(t, map[string]any{"stdout": description}, hook["tool_response"])
+}

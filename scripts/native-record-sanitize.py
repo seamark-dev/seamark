@@ -80,11 +80,13 @@ rollout file name and the current_date tag. A rollout file name holds
 the local wall time of the thread start, so the pass writes that name
 in UTC. The additional_tools record lists the operator's tools, so its
 tool list becomes a marker. The spawn tool of Codex lists the agent
-roles, also the roles of the operator's own Codex configuration. A tool
-output that prints that tool holds the list, so a rollout keeps only a
-marker in its place. A Codex residual check refuses the copy when a real
-ID, a home path, a local time offset, an unshifted time, or an agent
-role entry remains.
+roles, also the roles of the operator's own Codex configuration. It
+also lists the model overrides of the account, with the reasoning
+efforts of each model. A tool output that prints that tool holds both
+lists, so a rollout keeps only a marker in place of each list. A Codex
+residual check refuses the copy when a real ID, a home path, a local
+time offset, an unshifted time, an agent role entry, or a model override
+remains.
 """
 
 import calendar
@@ -325,6 +327,12 @@ CODEX_TOKEN_KINDS = {"call": CALL, "ctc": CTC, "resp": RESP, "rs": RS, "msg": MS
 # holds one yet, so the pass has no kind for it.
 CODEX_RESIDUAL_TOKEN = re.compile(r"(?<![0-9A-Za-z_])(call|ctc|resp|rs|msg|fc)_[A-Za-z0-9]{16,}(?![A-Za-z0-9])")
 
+# A line break of a list in the spawn tool of Codex is a newline, or the
+# escape "\n" when the tool text stands inside a JSON text, for example
+# in a tool output that prints the tool list. LIST_BREAK matches both
+# forms.
+LIST_BREAK = r"(?:\n|\\+n)"
+
 # The agent roles of the spawn tool of codex-cli 0.169.0. The tool
 # declaration lists them after the comment line "// Available roles:".
 # Each role is a comment line "// <name>: {", the comment lines of its
@@ -333,18 +341,31 @@ CODEX_RESIDUAL_TOKEN = re.compile(r"(?<![0-9A-Za-z_])(call|ctc|resp|rs|msg|fc)_[
 # descriptions that the operator wrote. No decoder reads the list, so the
 # whole list becomes one marker. Thus the mask needs no list of the
 # built-in roles, and it also masks a role that replaces a built-in role.
-#
-# A line break of the list is a newline, or the escape "\n" when the
-# declaration stands inside a JSON text, for example in a tool output
-# that prints the tool list. ROLE_BREAK matches both forms.
-ROLE_BREAK = r"(?:\n|\\+n)"
-CODEX_ROLE_LIST = re.compile(r"(// Available roles:)((?:%s[ \t]*//(?:(?!%s).)*)+)" % (ROLE_BREAK, ROLE_BREAK))
+CODEX_ROLE_LIST = re.compile(r"(// Available roles:)((?:%s[ \t]*//(?:(?!%s).)*)+)" % (LIST_BREAK, LIST_BREAK))
 
 # A role entry that the mask did not replace: the first line of a role and
 # the comment line after it. The residual check refuses a copy that holds
 # one, also in a hook payload or an extra file, which the mask does not
 # change.
-CODEX_ROLE_ENTRY = re.compile(r"//[ \t]*[^\s:]+:[ \t]*\{%s[ \t]*//" % ROLE_BREAK)
+CODEX_ROLE_ENTRY = re.compile(r"//[ \t]*[^\s:]+:[ \t]*\{%s[ \t]*//" % LIST_BREAK)
+
+# The model overrides of the spawn tool of codex-cli 0.169.0. The tool
+# description lists them after the line "Available model overrides
+# (...):". Each override is one list item "- `<model>`: <text>", and the
+# text names the reasoning efforts and the service tiers of the model.
+# The list names the models and the reasoning efforts that the
+# operator's account can use, so it shows the account plan. No decoder
+# reads the list, so the whole list becomes one marker.
+MODEL_HEADER = r"Available model overrides[^:\\\n]*:"
+CODEX_MODEL_LIST = re.compile(r"(%s)((?:%s[ \t]*- (?:(?!%s).)*)+)" % (MODEL_HEADER, LIST_BREAK, LIST_BREAK))
+
+# A model override that the mask did not replace: a list item right after
+# the header, or a list item with a model name in back quotes and its
+# reasoning efforts. The residual check refuses a copy that holds one,
+# also in a hook payload or an extra file, which the mask does not
+# change.
+CODEX_MODEL_ENTRY = re.compile(
+    r"%s%s[ \t]*- |- `[^`\n\\]+`:(?:(?!%s).)*Reasoning efforts:" % (MODEL_HEADER, LIST_BREAK, LIST_BREAK))
 
 # Any UUID inside a text. The second walk of the Codex pass maps each one
 # that the first walk left as an item ID.
@@ -1197,9 +1218,9 @@ def codex_text_hits(text, ids, times):
 
     A real ID or file name of the map counts, and so does an ID shape
     that is not synthetic, because the pass maps every UUID and token
-    that it knows. A home path, an agent role entry of the spawn tool, an
-    ISO time with a local zone or without a zone, and a time outside the
-    shifted window count too.
+    that it knows. A home path, an agent role entry or a model override
+    of the spawn tool, an ISO time with a local zone or without a zone,
+    and a time outside the shifted window count too.
     """
     if ids.pattern is not None:
         for m in ids.pattern.finditer(text):
@@ -1219,6 +1240,9 @@ def codex_text_hits(text, ids, times):
 
     if CODEX_ROLE_ENTRY.search(text):
         yield "an unmasked agent role"
+
+    if CODEX_MODEL_ENTRY.search(text):
+        yield "an unmasked model override"
 
     yield from time_text_hits(text, times)
 
@@ -1429,11 +1453,12 @@ def codex_shape(r):
     The text replacements come later. The ID pass reads this form, so a
     value that a mask replaces takes no number.
     """
-    # A tool output or a model text can print the spawn tool, so the role
-    # list mask reads every string of the line (see CODEX_ROLE_LIST). The
+    # A tool output or a model text can print the spawn tool, so the
+    # masks of its role list and its model override list read every
+    # string of the line (see CODEX_ROLE_LIST and CODEX_MODEL_LIST). The
     # record type, the IDs, and the rest of the text stay. map_strings
     # returns a new value, so the masks below never change the input.
-    r = map_strings(r, mask_roles)
+    r = map_strings(r, mask_spawn_lists)
     p = r.get("payload")
 
     if not isinstance(p, dict):
@@ -1476,12 +1501,14 @@ def codex_shape(r):
     return r
 
 
-def mask_roles(text):
-    """Return a text with each agent role list of the Codex spawn tool replaced by the marker.
+def mask_spawn_lists(text):
+    """Return a text with each role list and model override list of the Codex spawn tool replaced by the marker.
 
-    The header line stays, so a reader sees where the list stood.
+    The header of each list stays, so a reader sees where the list stood.
     """
-    return CODEX_ROLE_LIST.sub(r"\1 " + MARKER, text)
+    text = CODEX_ROLE_LIST.sub(r"\1 " + MARKER, text)
+
+    return CODEX_MODEL_LIST.sub(r"\1 " + MARKER, text)
 
 
 def map_strings(v, fn):

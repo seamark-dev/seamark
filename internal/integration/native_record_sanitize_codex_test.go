@@ -730,6 +730,43 @@ func codexToolOutput(t *testing.T, text string) func(f *codexRecordFixture) {
 	}
 }
 
+// codexExtraToolOutput returns a change of the fixture that writes the
+// text into the tool output of the guard context extra file. The
+// sanitizer masks no extra file, so only its residual check can see the
+// text.
+func codexExtraToolOutput(t *testing.T, text string) func(f *codexRecordFixture) {
+	t.Helper()
+
+	return func(f *codexRecordFixture) {
+		quoted, err := json.Marshal(text)
+		require.NoError(t, err)
+
+		line := strings.Replace(f.extras["guard-context.jsonl"][0], `"output":"blocked"`, `"output":`+string(quoted), 1)
+		require.NotEqual(t, f.extras["guard-context.jsonl"][0], line, "the extra line holds the tool output")
+
+		f.extras["guard-context.jsonl"][0] = line
+	}
+}
+
+// codexHookToolResponse returns a change of the fixture that writes the
+// text as the tool response of the PostToolUse hook payload. The
+// sanitizer masks no hook payload, so only its residual check can see
+// the text.
+func codexHookToolResponse(t *testing.T, text string) func(f *codexRecordFixture) {
+	t.Helper()
+
+	return func(f *codexRecordFixture) {
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal([]byte(f.hooks[3].payload), &payload))
+
+		payload["tool_response"] = text
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+
+		f.hooks[3].payload = string(data)
+	}
+}
+
 // TestNativeRecordSanitizeMasksTheCodexAgentRoles proves the role list
 // mask. The spawn tool of Codex lists the roles of the operator's own
 // Codex configuration beside the built-in roles, and a tool output or a
@@ -796,22 +833,11 @@ func TestNativeRecordSanitizeRefusesAnUnmaskedCodexAgentRole(t *testing.T) {
 	}{
 		{"a tool output in an extra file", "guard-context.jsonl: holds an unmasked agent role",
 			func(t *testing.T, f *codexRecordFixture) {
-				quoted, err := json.Marshal(codexToolListText(t, codexSpawnDeclaration(codexRoles)))
-				require.NoError(t, err)
-
-				f.extras["guard-context.jsonl"][0] = strings.Replace(f.extras["guard-context.jsonl"][0],
-					`"output":"blocked"`, `"output":`+string(quoted), 1)
+				codexExtraToolOutput(t, codexToolListText(t, codexSpawnDeclaration(codexRoles)))(f)
 			}},
 		{"a tool response in a hook payload", "hooks/004-PostToolUse.json: holds an unmasked agent role",
 			func(t *testing.T, f *codexRecordFixture) {
-				var payload map[string]any
-				require.NoError(t, json.Unmarshal([]byte(f.hooks[3].payload), &payload))
-
-				payload["tool_response"] = codexSpawnDeclaration(codexRoles)
-				data, err := json.Marshal(payload)
-				require.NoError(t, err)
-
-				f.hooks[3].payload = string(data)
+				codexHookToolResponse(t, codexSpawnDeclaration(codexRoles))(f)
 			}},
 		{"a role entry without the header", "sessions/2026/11/10/rollout-<time>-<id>.jsonl: holds an unmasked agent role",
 			func(t *testing.T, f *codexRecordFixture) {
@@ -828,6 +854,129 @@ func TestNativeRecordSanitizeRefusesAnUnmaskedCodexAgentRole(t *testing.T) {
 			assert.Contains(t, got, tc.want)
 			assert.NotContains(t, got, codexOperatorRole, "the message holds no role name")
 			assert.NotContains(t, got, "house-rules", "the message holds no role description")
+		})
+	}
+}
+
+// The made-up model overrides of the account in the model override
+// tests. The list names the models and the reasoning efforts that the
+// account can use, so neither may ship.
+const (
+	codexOverrideModels = "orbit-q7"
+	codexOverrideEffort = "hyperdrive"
+)
+
+// codexModelOverrides is the model override list of a spawn tool
+// description of codex-cli 0.169.0, with a newline as the line break:
+// two models of the account.
+const codexModelOverrides = "\n- `" + codexOverrideModels + "-max`: Made-up frontier model. Reasoning efforts: low (default), " +
+	codexOverrideEffort + ". Service tiers: priority.\n- `" + codexOverrideModels + "-mini`: Made-up fast model. " +
+	"Reasoning efforts: low, medium (default). Service tiers: priority."
+
+// codexSpawnDescription returns the start of a spawn tool description of
+// codex-cli 0.169.0 with the given text after the model override header.
+func codexSpawnDescription(overrides string) string {
+	return "\n        \n        Available model overrides (optional; inherited parent model is preferred):" + overrides +
+		"\n        Spawn a sub-agent for a well-scoped task."
+}
+
+// TestNativeRecordSanitizeMasksTheCodexModelOverrides proves the model
+// override mask. The spawn tool of Codex lists the models and the
+// reasoning efforts of the account, and a tool output or a model text can
+// print the tool. The whole list becomes the marker, with either line
+// break form, also beside the role list in the same text. The header, the
+// rest of the text, the record type, and the IDs stay. The model that the
+// run used stays in the hooks, because a hook payload names it and the
+// list is not its source.
+func TestNativeRecordSanitizeMasksTheCodexModelOverrides(t *testing.T) {
+	requireTools(t, "python3")
+
+	tool := func(overrides, roles string) string {
+		return codexSpawnDescription(overrides) + "\n\nexec tool declaration:\n" + codexSpawnDeclaration(roles)
+	}
+
+	fixture := newCodexRecordFixture(t)
+	codexToolOutput(t, codexToolListText(t, tool(codexModelOverrides, codexRoles)))(fixture)
+	codexModelText(t, codexSpawnDescription(codexModelOverrides))(fixture)
+	f := fixture.write(t)
+
+	got, err := f.sanitize(t, f.out)
+	require.NoError(t, err, got)
+
+	rollout := codexLines(t, filepath.Join(f.out, codexRootCopy))
+
+	synthetic := map[string]string{}
+	for _, e := range codexExpected() {
+		synthetic[e.Real] = e.Synthetic
+	}
+
+	t.Run("a tool output keeps the record and both lists are masked", func(t *testing.T) {
+		assert.Equal(t, map[string]any{
+			"type": "custom_tool_call_output", "id": "ctco_" + synthetic[codexOutput], "call_id": synthetic[codexCall],
+			"output": []any{map[string]any{"type": "input_text",
+				"text": codexToolListText(t, tool(" <sanitized>", " <sanitized>"))}},
+		}, codexPayload(rollout[8]))
+	})
+
+	t.Run("a model text with newlines is masked too", func(t *testing.T) {
+		text := codexPayload(rollout[len(rollout)-1])["content"].([]any)[0].(map[string]any)["text"]
+		assert.Equal(t, codexSpawnDescription(" <sanitized>"), text)
+	})
+
+	t.Run("no file holds a model or an effort of the account", func(t *testing.T) {
+		for name, data := range outputFiles(t, f.out) {
+			assert.NotContains(t, data, codexOverrideModels, name)
+			assert.NotContains(t, data, codexOverrideEffort, name)
+		}
+	})
+
+	t.Run("the hooks keep the model of the run", func(t *testing.T) {
+		hook := readJSON(t, filepath.Join(f.out, "hooks", "001-SessionStart.json"))
+		assert.Equal(t, "gpt-5.6-luna", hook["model"])
+	})
+}
+
+// TestNativeRecordSanitizeRefusesAnUnmaskedCodexModelOverride proves the
+// residual rule of the model overrides. The mask changes only the
+// rollouts, and only a list after its header. An override anywhere else
+// refuses the copy: in an extra file, in a hook payload, or in a rollout
+// text without the header. A list item right after the header also
+// refuses the copy when its text names no reasoning effort. The message
+// names the file and the kind, never a model or an effort.
+func TestNativeRecordSanitizeRefusesAnUnmaskedCodexModelOverride(t *testing.T) {
+	requireTools(t, "python3")
+
+	for _, tc := range []struct {
+		name, want string
+		change     func(t *testing.T, f *codexRecordFixture)
+	}{
+		{"a tool output in an extra file", "guard-context.jsonl: holds an unmasked model override",
+			func(t *testing.T, f *codexRecordFixture) {
+				codexExtraToolOutput(t, codexToolListText(t, codexSpawnDescription(codexModelOverrides)))(f)
+			}},
+		{"a tool response in a hook payload", "hooks/004-PostToolUse.json: holds an unmasked model override",
+			func(t *testing.T, f *codexRecordFixture) {
+				codexHookToolResponse(t, codexSpawnDescription(codexModelOverrides))(f)
+			}},
+		{"an override without the header", "sessions/2026/11/10/rollout-<time>-<id>.jsonl: holds an unmasked model override",
+			func(t *testing.T, f *codexRecordFixture) {
+				codexModelText(t, "The models are:"+codexModelOverrides)(f)
+			}},
+		{"a list item after the header without efforts", "hooks/004-PostToolUse.json: holds an unmasked model override",
+			func(t *testing.T, f *codexRecordFixture) {
+				codexHookToolResponse(t, codexSpawnDescription("\n- `"+codexOverrideModels+"-max`: Made-up model."))(f)
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newCodexRecordFixture(t)
+			tc.change(t, fixture)
+			f := fixture.write(t)
+
+			got, err := f.sanitize(t, f.out)
+			require.Error(t, err, got)
+			assert.Contains(t, got, tc.want)
+			assert.NotContains(t, got, codexOverrideModels, "the message holds no model name")
+			assert.NotContains(t, got, codexOverrideEffort, "the message holds no reasoning effort")
 		})
 	}
 }
