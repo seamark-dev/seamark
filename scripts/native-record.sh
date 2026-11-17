@@ -22,7 +22,10 @@
 #   NATIVE_RECORD_REPO    scratch repository (default: <out>/repo); the
 #                         script reuses an existing one to keep Codex hook
 #                         trust
-#   NATIVE_RECORD_RUNS    0 skips the paid runs and only collects
+#   NATIVE_RECORD_RUNS    0 skips the paid runs and only collects. For a
+#                         new Codex repository, the call stops at the
+#                         trust step before that, so 0 only sets up the
+#                         repository for the operator's trust review
 #   NATIVE_RECORD_CLAUDE_MODEL   default haiku
 #   NATIVE_RECORD_CODEX_MODEL    default gpt-5.6-luna (low reasoning)
 #   NATIVE_RECORD_SCENARIO       timing (the default) runs the timing
@@ -31,7 +34,10 @@
 #                                below); guard runs the guard sentinel
 #                                prompts in a scratch repository with
 #                                enforce pins (see "The guard scenario"
-#                                below).
+#                                below); post-edit runs the slow
+#                                post-edit prompts in a scratch
+#                                repository with check pins (see "The
+#                                post-edit scenario" below).
 #
 # Every check prints ok, FAIL, or blocked. The exit status is 0 when
 # every check prints ok, 1 when one prints FAIL, and 3 when one prints
@@ -71,8 +77,8 @@ esac
 SCENARIO=${NATIVE_RECORD_SCENARIO:-timing}
 
 case "$SCENARIO" in
-    timing|guard) ;;
-    *) printf '%s\n' "$0: unknown scenario \"$SCENARIO\" (known: timing, guard)" >&2; exit 2 ;;
+    timing|guard|post-edit) ;;
+    *) printf '%s\n' "$0: unknown scenario \"$SCENARIO\" (known: timing, guard, post-edit)" >&2; exit 2 ;;
 esac
 
 SEAMARK_REPO=$(cd "$(dirname "$0")/.." && pwd -P)
@@ -218,6 +224,7 @@ record_mode() {
         set_up=
         [ ! -f "$INSTR/scenario-timing" ] || set_up=timing
         [ ! -f "$INSTR/scenario-guard" ] || set_up=guard
+        [ ! -f "$INSTR/scenario-post-edit" ] || set_up=post-edit
 
         if [ "$set_up" != "$SCENARIO" ]; then
             blocked "$REPO was set up for the ${set_up:-another} scenario, not $SCENARIO; use another NATIVE_RECORD_REPO"
@@ -225,15 +232,16 @@ record_mode() {
         fi
     else
         case "$SCENARIO" in
-            timing) timing_setup ;;
-            guard)  guard_setup ;;
+            timing)    timing_setup ;;
+            guard)     guard_setup ;;
+            post-edit) post_setup ;;
         esac
     fi
 
-    # Codex runs project hooks only after a trust review. A new timing or
-    # guard repository has no trusted hook yet, so a paid run there
-    # records no hook payload. The script stops before the paid runs
-    # instead.
+    # Codex runs project hooks only after a trust review. A new
+    # repository of any scenario has no trusted hook yet, so a paid run
+    # there records no hook payload. The script stops before the paid
+    # runs instead.
     if [ "$CLIENT" = codex ] && [ -z "$reuse" ]; then
         note "Codex runs project hooks only after you trust them; setup never grants trust:"
         note "  1. cd $REPO && $CODEX_TRUST   (accept the project trust prompt)"
@@ -263,6 +271,8 @@ record_mode() {
             timing:codex)  timing_begin; record_codex_timing ;;
             guard:claude)  guard_begin; record_claude_guard ;;
             guard:codex)   guard_begin; record_codex_guard ;;
+            post-edit:claude) post_begin; record_claude_post_edit ;;
+            post-edit:codex)  post_begin; record_codex_post_edit ;;
         esac
     fi
 
@@ -336,9 +346,11 @@ with open(os.path.join(out, "record.json"), "w") as f:
     json.dump(record, f, indent=1)
 PY
 
+    # The post-edit scenario runs its cases through the guard functions,
+    # so its copy holds the files of a guard copy.
     case "$SCENARIO" in
-        timing) timing_extras ;;
-        guard)  guard_extras ;;
+        timing)          timing_extras ;;
+        guard|post-edit) guard_extras ;;
     esac
 
     # The ID pass of a Claude Code recording writes its map from real to
@@ -651,11 +663,16 @@ codex_verdict() {
 }
 
 # limit_stop ends the record call after a Claude or Codex limit, before
-# the next run. The guard scenario first puts back the enforce setup, so
-# the reused repository keeps the hook document that the operator trusted.
-# The summary exits with status 1, because the limit line counts as FAIL.
+# the next run. The guard scenario first puts back the enforce setup, and
+# the post-edit scenario its check setup. So the reused repository keeps
+# the hook document that the operator trusted. The summary exits with
+# status 1, because the limit line counts as FAIL.
 limit_stop() {
-    [ "$SCENARIO" != guard ] || guard_restore
+    case "$SCENARIO" in
+        guard)     guard_restore ;;
+        post-edit) post_restore ;;
+    esac
+
     note "no later run starts; run the record call again after the limit resets"
     summary
 }
@@ -1163,23 +1180,7 @@ guard_vars() {
 # reviews the trust of that copy.
 guard_setup() {
     guard_vars
-    new_repo "$REPO"
-    mkdir -p "$REPO/sentinel" "$REPO/notes" "$REPO/free" "$REPO/.seamark" "$OBS"
-
-    for f in edit update delete move; do
-        printf 'alpha\n' > "$REPO/sentinel/$f.txt"
-    done
-
-    for f in unknown failure update; do
-        printf 'alpha\n' > "$REPO/notes/$f.txt"
-    done
-
-    printf 'alpha\ngamma\n' > "$REPO/notes/multi.txt"
-    printf 'one\ntwo\nthree\n' > "$REPO/free/oracle.txt"
-    git -C "$REPO" add sentinel notes free
-    git -C "$REPO" commit -q -m 'guard fixture'
-
-    guard_lessons
+    guard_files
     cp "$INSTR/lessons-enforce.yaml" "$REPO/.seamark/lessons.yaml"
     ok "fixture files under sentinel/, notes/, and free/; one enforce pin on sentinel/ and one on notes/"
 
@@ -1199,7 +1200,7 @@ guard_setup() {
 
     cp "$SCRIPTS/native-record-observer.py" "$INSTR/observer.py"
     guard_prewrite_script
-    guard_instrument
+    guard_instrument PreToolUse "sh $INSTR/pre-write.sh" 10
     [ "$CLIENT" != codex ] || guard_last
     ok "instrumentation entries added beside the lesson hook entries"
 
@@ -1219,16 +1220,46 @@ guard_setup() {
     fi
 }
 
-# guard_instrument adds the observer entries and the indirection entry
-# after the lesson hook entries of the hook document.
+# guard_files creates the scratch repository with the fixture files of
+# the guard scenario, and writes the lessons.yaml variants. The guard and
+# the post-edit scenarios share them, so both copies name the same paths.
+guard_files() {
+    new_repo "$REPO"
+    mkdir -p "$REPO/sentinel" "$REPO/notes" "$REPO/free" "$REPO/.seamark" "$OBS"
+
+    for f in edit update delete move; do
+        printf 'alpha\n' > "$REPO/sentinel/$f.txt"
+    done
+
+    for f in unknown failure update; do
+        printf 'alpha\n' > "$REPO/notes/$f.txt"
+    done
+
+    printf 'alpha\ngamma\n' > "$REPO/notes/multi.txt"
+    printf 'one\ntwo\nthree\n' > "$REPO/free/oracle.txt"
+    git -C "$REPO" add sentinel notes free
+    git -C "$REPO" commit -q -m 'guard fixture'
+
+    guard_lessons
+}
+
+# guard_instrument <event> <command> <timeout> adds the observer entries
+# and one indirection entry after the lesson hook entries of the hook
+# document. The indirection entry runs <command> on <event>. The guard
+# scenario passes its pre-write entry, and the post-edit scenario its
+# post-edit entry.
 guard_instrument() {
     # The observer runs on PreToolUse too, because the guard reads that
-    # event. The indirection entry gets the matcher and the timeout of
-    # the guard spec, so the slow mode meets the timeout of the guard.
-    python3 -I - "$CLIENT" "python3 -I $INSTR/observer.py $OBS $CLIENT" "sh $INSTR/pre-write.sh" "$GUARD_MATCHER" "$GUARD_DOC" <<'PY'
+    # event. The indirection entry gets the edit matcher that the guard
+    # and the post-edit specs share. The caller gives it the timeout of
+    # the owned entry that it stands for, so the slow modes meet the
+    # timeout of that owned entry.
+    python3 -I - "$CLIENT" "python3 -I $INSTR/observer.py $OBS $CLIENT" "$GUARD_MATCHER" "$GUARD_DOC" "$1" "$2" "$3" <<'PY'
 import json, os, sys
 
-client, observer, prewrite, matcher, path = sys.argv[1:6]
+# The loop below sets its own timeout per event, so the names of the
+# indirection entry differ from the loop names.
+client, observer, matcher, path, entry_event, entry_command, entry_timeout = sys.argv[1:8]
 tools = {"PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied"}
 
 if client == "claude":
@@ -1253,8 +1284,8 @@ for e in events:
         entry["matcher"] = "*"
     hooks.setdefault(e, []).append(entry)
 
-hooks.setdefault("PreToolUse", []).append(
-    {"matcher": matcher, "hooks": [{"type": "command", "command": prewrite, "timeout": 10}]})
+hooks.setdefault(entry_event, []).append(
+    {"matcher": matcher, "hooks": [{"type": "command", "command": entry_command, "timeout": int(entry_timeout)}]})
 
 os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path, "w") as f:
@@ -1263,22 +1294,30 @@ PY
 }
 
 # guard_last moves the owned guard entry of the Codex hook document into
-# a new PreToolUse group after all other groups. The group keeps the
-# matcher and the other fields of the group that init wrote. Only the
-# position changes, so the guard runs with the same command, matcher,
-# and timeout. The no-guard form then removes the last group, and no
-# other entry changes its trust key.
+# a new PreToolUse group after all other groups (see owned_last). The
+# no-guard form then removes the last group, and no other entry changes
+# its trust key.
 guard_last() {
-    python3 -I - "$GUARD_DOC" "$GUARD_MARKER" <<'PY'
+    owned_last "$GUARD_DOC" PreToolUse "$GUARD_MARKER"
+}
+
+# owned_last <doc> <event> <marker> moves each owned entry of <event>
+# into a new group after all other groups of <event>. An owned entry is a
+# handler whose command ends with <marker>. The new group keeps the
+# matcher and the other fields of the group that init wrote. Only the
+# position changes, so the owned entry runs with the same command,
+# matcher, and timeout.
+owned_last() {
+    python3 -I - "$1" "$2" "$3" <<'PY'
 import json, sys
 
-path, marker = sys.argv[1:3]
+path, event, marker = sys.argv[1:4]
 
 with open(path, encoding="utf-8") as f:
     doc = json.load(f)
 
 kept, moved = [], []
-for entry in doc["hooks"]["PreToolUse"]:
+for entry in doc["hooks"][event]:
     hooks = entry.get("hooks", [])
     owned = [h for h in hooks if h.get("command", "").endswith(" " + marker)]
     others = [h for h in hooks if not h.get("command", "").endswith(" " + marker)]
@@ -1289,19 +1328,16 @@ for entry in doc["hooks"]["PreToolUse"]:
     else:
         kept.append(entry)
 
-doc["hooks"]["PreToolUse"] = kept + moved
+doc["hooks"][event] = kept + moved
 with open(path, "w", encoding="utf-8") as f:
     json.dump(doc, f, indent=2)
 PY
 }
 
 # guard_keys checks the trust keys of the Codex hook forms against the
-# enforce form that setup kept, and that the operator reviews. The enforce
-# form must hold one owned guard entry, alone in the last PreToolUse
-# group. The no-guard form must hold every other entry at the same key
-# (event, group, handler) with the same content, because Codex hashes
-# the content of each entry and compares it per key. It prints the
-# problems on one line, and returns 1 when a problem exists.
+# enforce form that setup kept, and that the operator reviews (see
+# owned_keys). It prints the problems on one line, and returns 1 when a
+# problem exists.
 #
 # The enforce, check-pins, and broken-config phases run with the enforce
 # form itself. The wrapper, slow, and slow-deny phases run with the
@@ -1309,44 +1345,58 @@ PY
 # reads it, and no Codex turn runs with it.
 guard_keys() {
     guard_doc no-guard "$INSTR/hooks-no-guard.json"
-    python3 -I - "$INSTR/hooks-enforce.json" "$INSTR/hooks-no-guard.json" "$GUARD_MARKER" <<'PY'
+    owned_keys "$INSTR/hooks-enforce.json" "$INSTR/hooks-no-guard.json" PreToolUse "$GUARD_MARKER" enforce guard
+}
+
+# owned_keys <kept> <form> <event> <marker> <kept-name> <entry-name>
+# checks the trust keys of the hook document <form> against the kept
+# copy <kept>, which the operator reviews. The kept copy must hold one
+# owned entry of <event>, alone in the last group of <event>. <form> must
+# hold every other entry at the same key (event, group, handler) with the
+# same content, because Codex hashes the content of each entry and
+# compares it per key. The two names only word the problems, for example
+# "the enforce form holds 2 owned guard entries". It prints the problems
+# on one line, and returns 1 when a problem exists.
+owned_keys() {
+    python3 -I - "$1" "$2" "$3" "$4" "$5" "$6" <<'PY'
 import json, sys
 
-enforce_path, form_path, marker = sys.argv[1:4]
+kept_path, form_path, event, marker, kept_name, entry_name = sys.argv[1:7]
 
 
 def entries(path):
-    """Return the entries of a hook document by trust key, and its PreToolUse group count."""
+    """Return the entries of a hook document by trust key, and the group count of the event."""
     with open(path, encoding="utf-8") as f:
         doc = json.load(f)
     out = {}
-    for event, groups in doc.get("hooks", {}).items():
+    for name, groups in doc.get("hooks", {}).items():
         for g, entry in enumerate(groups):
             fields = {k: v for k, v in entry.items() if k != "hooks"}
             for h, hook in enumerate(entry.get("hooks", [])):
-                out["%s:%d:%d" % (event, g, h)] = (fields, hook)
-    return out, len(doc.get("hooks", {}).get("PreToolUse", []))
+                out["%s:%d:%d" % (name, g, h)] = (fields, hook)
+    return out, len(doc.get("hooks", {}).get(event, []))
 
 
-enforce, groups = entries(enforce_path)
+kept, groups = entries(kept_path)
 form, _ = entries(form_path)
 problems = []
 
-owned = [k for k, (_, hook) in enforce.items() if hook.get("command", "").endswith(" " + marker)]
-last = "PreToolUse:%d:0" % (groups - 1)
+owned = [k for k, (_, hook) in kept.items()
+         if k.startswith(event + ":") and hook.get("command", "").endswith(" " + marker)]
+last = "%s:%d:0" % (event, groups - 1)
 if len(owned) != 1:
-    problems.append("the enforce form holds %d owned guard entries, not one" % len(owned))
-elif owned[0] != last or "PreToolUse:%d:1" % (groups - 1) in enforce:
-    problems.append("the owned guard entry is at %s, not alone at %s" % (owned[0], last))
+    problems.append("the %s form holds %d owned %s entries, not one" % (kept_name, len(owned), entry_name))
+elif owned[0] != last or "%s:%d:1" % (event, groups - 1) in kept:
+    problems.append("the owned %s entry is at %s, not alone at %s" % (entry_name, owned[0], last))
 
 for key in sorted(form):
-    if key not in enforce:
-        problems.append("%s is not in the enforce form" % key)
-    elif form[key] != enforce[key]:
-        problems.append("%s holds other content than in the enforce form" % key)
+    if key not in kept:
+        problems.append("%s is not in the %s form" % (key, kept_name))
+    elif form[key] != kept[key]:
+        problems.append("%s holds other content than in the %s form" % (key, kept_name))
 
-for key in sorted(set(enforce) - set(form) - set(owned)):
-    problems.append("%s of the enforce form is missing" % key)
+for key in sorted(set(kept) - set(form) - set(owned)):
+    problems.append("%s of the %s form is missing" % (key, kept_name))
 
 print("; ".join(problems))
 sys.exit(1 if problems else 0)
@@ -1426,12 +1476,29 @@ EOF
 # writes the hook document of the client, or <file> when it is given, so
 # guard_keys can read a form that no client reads.
 guard_doc() {
-    python3 -I - "$INSTR/hooks-enforce.json" "${2:-$GUARD_DOC}" "$GUARD_MARKER" "$1" <<'PY'
+    case "$1" in
+        enforce)        doc_form=kept ;;
+        no-guard)       doc_form=drop ;;
+        inline-wrapper) doc_form=wrap ;;
+        *) printf '%s\n' "guard_doc: unknown form \"$1\"" >&2; return 2 ;;
+    esac
+
+    owned_doc "$INSTR/hooks-enforce.json" "${2:-$GUARD_DOC}" PreToolUse "$GUARD_MARKER" "$doc_form"
+}
+
+# owned_doc <kept> <file> <event> <marker> <form> writes one form of a
+# hook document into <file>, from the kept copy <kept>: kept (the copy
+# itself), drop (without the owned entries of <event>), or wrap (each
+# owned command of <event> with "|| true" after it). An owned entry is a
+# handler whose command ends with <marker>. A group that loses its last
+# handler goes too.
+owned_doc() {
+    python3 -I - "$1" "$2" "$3" "$4" "$5" <<'PY'
 import json, shutil, sys
 
-saved, path, marker, form = sys.argv[1:5]
+saved, path, event, marker, form = sys.argv[1:6]
 
-if form == "enforce":
+if form == "kept":
     shutil.copyfile(saved, path)
     sys.exit(0)
 
@@ -1439,19 +1506,19 @@ with open(saved, encoding="utf-8") as f:
     doc = json.load(f)
 
 entries = []
-for entry in doc.get("hooks", {}).get("PreToolUse", []):
+for entry in doc.get("hooks", {}).get(event, []):
     hooks = []
     for h in entry.get("hooks", []):
         command = h.get("command", "")
         if command.endswith(" " + marker):
-            if form == "no-guard":
+            if form == "drop":
                 continue
             h = dict(h, command=command + " || true")
         hooks.append(h)
     if hooks:
         entries.append(dict(entry, hooks=hooks))
 
-doc["hooks"]["PreToolUse"] = entries
+doc["hooks"][event] = entries
 with open(path, "w", encoding="utf-8") as f:
     json.dump(doc, f, indent=2)
 PY
@@ -1586,9 +1653,7 @@ guard_lines() {
 }
 
 # guard_begin keeps one guard recording to the runs of one call of the
-# script. It moves the hook payloads of an earlier call aside, notes the
-# length of the lesson-check audit stream, and starts empty case and
-# capability lists.
+# script (see cases_begin).
 #
 # For Codex it first checks the trust keys of the hook forms. A
 # repository that an older version of this script set up keeps the owned
@@ -1608,6 +1673,14 @@ guard_begin() {
         fi
     fi
 
+    cases_begin
+}
+
+# cases_begin keeps one guard or post-edit recording to the runs of one
+# call of the script. It moves the hook payloads of an earlier call
+# aside, notes the length of the lesson-check audit stream, and starts
+# empty case and capability lists.
+cases_begin() {
     if [ -n "$(find "$OBS" -name '*.json' 2>/dev/null | head -1)" ]; then
         mv "$OBS" "$INSTR/observed-before-$(date +%s)"
         mkdir -p "$OBS"
@@ -1620,18 +1693,24 @@ guard_begin() {
     GUARD_PHASE=
 }
 
-# guard_run <phase> <case> <prompt> runs one case. It sets up the phase,
-# resets the fixture, adds the fixture files of the case, notes the state,
-# runs one paid client session, notes the state again, and appends the
-# case line to guard-cases.jsonl. The start time of the run assigns each
-# later hook payload to it.
+# guard_run <phase> <case> <prompt> runs one case of the guard or the
+# post-edit scenario. It sets up the phase of the scenario, resets the
+# fixture, adds the fixture files of the case, notes the state, runs one
+# paid client session, notes the state again, and appends the case line
+# to guard-cases.jsonl. The start time of the run assigns each later hook
+# payload to it.
 guard_run() {
-    guard_phase "$1"
+    case "$SCENARIO" in
+        post-edit) post_phase "$1" ;;
+        *)         guard_phase "$1" ;;
+    esac
+
     guard_reset
     guard_fixture "$2"
     guard_state "$OUT/state-before.json"
     audit_from=$(guard_lines "$REPO/.seamark/lesson-check-audit.jsonl")
     log_from=$(guard_lines "$INSTR/pre-write.log")
+    post_from=$(guard_lines "$INSTR/post-edit.log")
 
     gcase=$2
     RUN=$(( $(wc -l < "$OUT/runs.txt") + 1 ))
@@ -1646,12 +1725,14 @@ guard_run() {
 
     guard_state "$OUT/state-after.json"
     python3 -I - "$OUT" "$RUN" "$gcase" "$GUARD_PHASE" "${AUDIT_LINES0:-0}" "$audit_from" \
-        "$(guard_lines "$REPO/.seamark/lesson-check-audit.jsonl")" "$INSTR/pre-write.log" "$log_from" <<'PY'
+        "$(guard_lines "$REPO/.seamark/lesson-check-audit.jsonl")" "$INSTR/pre-write.log" "$log_from" \
+        "$SCENARIO" "$INSTR/post-edit.log" "$post_from" <<'PY'
 import json, os, re, sys
 
 out, run, case, phase = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 base, audit_from, audit_to = int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[7])
 log, log_from = sys.argv[8], int(sys.argv[9])
+scenario, post_log, post_from = sys.argv[10], sys.argv[11], int(sys.argv[12])
 
 
 def load(name):
@@ -1659,10 +1740,15 @@ def load(name):
         return json.load(f)
 
 
-lines = []
-if os.path.isfile(log):
-    with open(log, encoding="utf-8") as f:
-        lines = [line.strip() for line in f][log_from:]
+def log_lines(path, start):
+    """Return the lines of a log after the first start lines, or none when the log is absent."""
+    if not os.path.isfile(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        return [line.strip() for line in f][start:]
+
+
+lines = log_lines(log, log_from)
 
 # The reply is a corroboration only. A single word stays, for example
 # done, blocked, absent, or a check id. Other text does not.
@@ -1676,6 +1762,11 @@ record = {
     "pre_write": lines,
     "reply": reply if re.fullmatch(r"[a-z0-9_-]{1,40}", reply) else "",
 }
+
+# Only a post-edit case line holds the lines of the post-edit indirection
+# entry, so a guard case line keeps the form of the reviewed guard copies.
+if scenario == "post-edit":
+    record["post_edit"] = log_lines(post_log, post_from)
 
 with open(os.path.join(out, "guard-cases.jsonl"), "a", encoding="utf-8") as w:
     w.write(json.dumps(record) + "\n")
@@ -2002,11 +2093,12 @@ $GUARD_STOP"
     guard_restore
 }
 
-# guard_extras adds the evidence of the guard scenario to record.json:
-# the case list, the capability reports, the lesson-check audit records
-# of this call, the transcript records that hold a guard deny or a
-# post-edit reply, and the guard and post-edit hook results of the
-# Claude Code debug logs. The sanitizer replaces the text of attachments
+# guard_extras adds the evidence of the guard or the post-edit scenario
+# to record.json: the case list, the capability reports, the lesson-check
+# audit records of this call, the transcript records that hold a guard
+# deny or a post-edit reply, and the results of the owned lesson-check
+# commands and of both indirection entries in the Claude Code debug logs.
+# The sanitizer replaces the text of attachments
 # and developer messages with a marker, so only this copy keeps the text
 # that the model got. Assistant and reasoning records stay out, because
 # the sanitizer removes thinking text.
@@ -2021,7 +2113,7 @@ import glob, json, os, re, sys
 record_path, audit, start, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 needles = ("blocked by policy", "seamark post-edit lesson checks after this")
 markers = (("lessons --guard --hook", "guard"), ("lessons --baseline --hook", "baseline"),
-           ("lessons --verify --hook", "verify"), ("pre-write.sh", "pre-write"))
+           ("lessons --verify --hook", "verify"), ("pre-write.sh", "pre-write"), ("post-edit.sh", "post-edit"))
 finished = re.compile(r"Hooks: ([A-Za-z]+)(?::([^ ]*))? \[(.*?)\] finished with status (\d+) \((\d+)ms\)")
 stopped = re.compile(r"time ?out|timed out|cancel|abort|kill", re.IGNORECASE)
 
@@ -2199,6 +2291,329 @@ record.setdefault("extras", {})["guard-identities.jsonl"] = destination
 with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(record, f, indent=1)
 PY
+}
+
+# The post-edit scenario (NATIVE_RECORD_SCENARIO=post-edit). It records
+# what the client does with a slow post-edit hook: whether it waits for a
+# hook that ends inside the 15-second post-edit timeout, whether the
+# reply of that hook reaches the model, and whether it stops a hook that
+# runs past that timeout. It also records the plain post-edit reply of
+# the owned verify entry for a Claude Code Edit in the root and the child
+# context, and whether Codex runs the post-edit hook after a patch that
+# fails during its execution. Each paid run is one case.
+#
+# The scenario runs its cases through the guard functions (guard_run,
+# guard_claude, guard_codex, guard_extras, and guard_identities). So its
+# copy holds the files of a guard copy, and each case line adds the lines
+# of the post-edit indirection entry (post_edit). The fixture files are
+# those of the guard scenario. Both pins have mode check, and
+# `seamark init --lesson-checks check` installs the baseline and the
+# post-edit hooks, so no case can deny a write. The reviewer copies the
+# reviewed sanitized copy into
+# internal/integration/testdata/<client>/post-edit. There the tests
+# TestNativeRecordClaudePostEditRecording and
+# TestNativeRecordCodexPostEditRecording decode it.
+#
+# Each case runs in one phase:
+#
+#   check         the setup of init --lesson-checks check; the
+#                 indirection entry is off
+#   slow-post     no owned verify entry on PostToolUse; the indirection
+#                 entry waits inside the post-edit timeout and then runs
+#                 the verify command
+#   post-timeout  no owned verify entry on PostToolUse; the indirection
+#                 entry waits past the post-edit timeout and then runs
+#                 the verify command
+#
+# The indirection entry is the command sh <instrumentation>/post-edit.sh
+# on PostToolUse. Its text holds no lesson-check marker, so neither setup
+# nor inspection reads it as an owned entry. The slow phases remove the
+# owned verify entry of PostToolUse. So only the indirection entry runs
+# the verify command, and one post-edit record and one reply belong to
+# each call. The Claude Code PostToolUseFailure entry stays, because no
+# slow case fails.
+#
+# For Codex, setup puts the owned verify entry alone in the last
+# PostToolUse group, as the guard scenario does with the owned guard. Its
+# removal then moves no other entry, and the one review of the check
+# form covers both forms (see post_keys).
+
+# POST_TIMEOUT is the timeout of the post-edit indirection entry. It
+# equals the timeout that init writes for the owned verify entry, so the
+# slow modes meet the timeout of that entry.
+POST_TIMEOUT=15
+
+# POST_IN_BUDGET_SECONDS is the wait of the slow-post mode. It is below
+# POST_TIMEOUT, so a client that waits for its hook runs the verify
+# command to the end. The verify command then has 3 seconds.
+POST_IN_BUDGET_SECONDS=12
+
+# POST_SLOW_SECONDS is the wait of the post-timeout mode. It is above
+# POST_TIMEOUT, so a client that stops a hook at its timeout stops the
+# entry before it runs the verify command.
+POST_SLOW_SECONDS=20
+
+# post_vars sets the client parts of the post-edit scenario: the parts of
+# guard_vars, and the marker of the owned verify entry. The values follow
+# the post-edit hook specs that init writes.
+post_vars() {
+    guard_vars
+
+    if [ "$CLIENT" = claude ]; then
+        POST_MARKER="lessons --verify --hook"
+    else
+        POST_MARKER="lessons --verify --hook --client codex"
+    fi
+}
+
+# post_setup creates the scratch repository of the post-edit scenario.
+# It commits the fixture files of the guard scenario, and uses the check
+# variant of its lessons.yaml. `seamark init --lesson-checks check`
+# installs the baseline and the post-edit hooks of the round binary
+# there. Setup then adds the observer entries and the post-edit
+# indirection entry, and keeps a copy of the hook document for the
+# phases. For Codex, it moves the owned verify entry to the last
+# PostToolUse group before it keeps the copy, because the operator
+# reviews the trust of that copy.
+post_setup() {
+    post_vars
+    guard_files
+    cp "$INSTR/lessons-check.yaml" "$REPO/.seamark/lessons.yaml"
+    ok "fixture files under sentinel/, notes/, and free/; one check pin on sentinel/ and one on notes/"
+
+    if ! "$BIN" -C "$REPO" init --client "$CLIENT" --lesson-checks check > "$OUT/init.txt" 2>&1; then
+        fail "init --lesson-checks check refused: $(tail -1 "$OUT/init.txt")"
+        summary
+    fi
+
+    ok "init --client $CLIENT --lesson-checks check installed the baseline and the post-edit hooks"
+
+    # `seamark status` reads the index for the capability reports, and
+    # guard_identities reads its repository root.
+    "$BIN" -C "$REPO" index > "$OUT/index.txt" 2>&1
+    ok "index built for the capability reports of seamark status"
+
+    cp "$SCRIPTS/native-record-observer.py" "$INSTR/observer.py"
+    post_edit_script
+    guard_instrument PostToolUse "sh $INSTR/post-edit.sh" "$POST_TIMEOUT"
+    [ "$CLIENT" != codex ] || owned_last "$GUARD_DOC" PostToolUse "$POST_MARKER"
+    ok "instrumentation entries added beside the lesson hook entries"
+
+    cp "$GUARD_DOC" "$INSTR/hooks-check.json"
+    : > "$INSTR/scenario-post-edit"
+
+    # A failure here means that the lesson hook entries have a layout that
+    # owned_last does not expect. One trust review would then not cover
+    # both forms, so setup stops before the operator reviews anything.
+    if [ "$CLIENT" = codex ]; then
+        if reason=$(post_keys); then
+            ok "every Codex hook form keeps the trust keys and the content of the check form"
+        else
+            fail "a Codex hook form moves or changes a trusted entry: $reason"
+            summary
+        fi
+    fi
+}
+
+# post_edit_script writes the post-edit indirection entry. The file
+# post-edit-mode selects what it does: off exits 0, slow-post waits
+# POST_IN_BUDGET_SECONDS and then runs the verify command, and
+# post-timeout waits POST_SLOW_SECONDS and then runs the verify command.
+# The verify command reads the hook payload on stdin and writes its reply
+# on stdout. Both pass through, and the entry exits with the status of
+# the command. A slow mode appends one line before the wait and one line
+# with the exit status after the command. A run that the client stops
+# during the wait appends only the first line. No line holds a time,
+# because the sanitizer refuses epoch digits in a string.
+post_edit_script() {
+    cat > "$INSTR/post-edit.sh" <<EOF
+#!/bin/sh
+# Test instrumentation of the post-edit scenario (scripts/native-record.sh).
+mode=\$(cat '$INSTR/post-edit-mode' 2>/dev/null || echo off)
+case "\$mode" in
+    slow-post)    wait=$POST_IN_BUDGET_SECONDS ;;
+    post-timeout) wait=$POST_SLOW_SECONDS ;;
+    *)            exit 0 ;;
+esac
+echo "\$mode start" >> '$INSTR/post-edit.log'
+sleep "\$wait"
+'$BIN' $POST_MARKER
+status=\$?
+echo "\$mode \$status" >> '$INSTR/post-edit.log'
+exit \$status
+EOF
+    printf 'off\n' > "$INSTR/post-edit-mode"
+}
+
+# post_doc <form> [<file>] writes one form of the hook document from the
+# copy that setup kept: check (the copy itself) or no-verify (without the
+# owned verify entry of PostToolUse). It writes the hook document of the
+# client, or <file> when it is given, so post_keys can read a form that
+# no client reads.
+post_doc() {
+    case "$1" in
+        check)     doc_form=kept ;;
+        no-verify) doc_form=drop ;;
+        *) printf '%s\n' "post_doc: unknown form \"$1\"" >&2; return 2 ;;
+    esac
+
+    owned_doc "$INSTR/hooks-check.json" "${2:-$GUARD_DOC}" PostToolUse "$POST_MARKER" "$doc_form"
+}
+
+# post_keys checks the trust keys of the Codex hook forms against the
+# check form that setup kept, and that the operator reviews (see
+# owned_keys). The check phase runs with the check form itself, and the
+# slow-post and post-timeout phases run with the no-verify form. It
+# prints the problems on one line, and returns 1 when a problem exists.
+post_keys() {
+    post_doc no-verify "$INSTR/hooks-no-verify.json"
+    owned_keys "$INSTR/hooks-check.json" "$INSTR/hooks-no-verify.json" PostToolUse "$POST_MARKER" check verify
+}
+
+# post_restore puts back the check setup: the check lessons.yaml, the
+# hook document that setup kept, and the indirection entry off.
+post_restore() {
+    cp "$INSTR/lessons-check.yaml" "$REPO/.seamark/lessons.yaml"
+    post_doc check
+    printf 'off\n' > "$INSTR/post-edit-mode"
+}
+
+# post_phase <phase> sets up one phase of the post-edit scenario (see the
+# list above) and appends its capability report. A case in the current
+# phase changes nothing. An unknown phase stops the call, because a case
+# in the wrong form gives false evidence.
+post_phase() {
+    [ "$1" != "${GUARD_PHASE:-}" ] || return 0
+
+    case "$1" in
+        check|slow-post|post-timeout) ;;
+        *) printf '%s\n' "post_phase: unknown phase \"$1\"" >&2; return 2 ;;
+    esac
+
+    GUARD_PHASE=$1
+    post_restore
+
+    if [ "$1" != check ]; then
+        post_doc no-verify
+        printf '%s\n' "$1" > "$INSTR/post-edit-mode"
+    fi
+
+    guard_capability "$1"
+}
+
+# post_begin keeps one post-edit recording to the runs of one call of the
+# script (see cases_begin). For Codex it first checks the trust keys of
+# the hook forms, as guard_begin does. So no paid turn starts in a
+# repository whose no-verify form moves or changes a trusted entry.
+post_begin() {
+    post_vars
+
+    if [ "$CLIENT" = codex ]; then
+        if reason=$(post_keys); then
+            ok "every Codex hook form keeps the trust keys and the content of the check form"
+        else
+            blocked "a Codex hook form moves or changes a trusted entry: $reason"
+            note "set up a new repository with this script (another NATIVE_RECORD_REPO), and review its trust"
+            summary
+        fi
+    fi
+
+    cases_begin
+}
+
+# The prompt parts of the post-edit cases. The model must not retry a
+# call or go around it, so the first attempt is the evidence. The reply
+# names the check id of the post-edit message. It is a corroboration
+# only: the reviewer reads the reach of the reply from the transcripts.
+POST_REPORT='Make each tool call once. Do not retry a call, also when it fails, and do not try another tool or another way.
+Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.'
+
+# The parent cannot see the tool results of the child, so it relays the
+# line of the child. The replay reads the line of the child from its
+# SubagentStop payload, because the parent can reword it.
+POST_RELAY='Do not use any tool yourself. Then reply with the one line that the subagent replied.'
+
+# record_claude_post_edit runs the seven Claude Code post-edit cases, each
+# in a new session. The two check cases come first, because they run
+# with the hook document of setup. Each child prompt sets
+# run_in_background to false. The parent then waits for the child inside
+# the Agent call, so the slow hook of the child call ends before the
+# session can end. The reporter and the editor subagents report the check
+# id of the post-edit message after their one call. No case asks for
+# MultiEdit, because Claude Code 2.1.325 has no MultiEdit tool.
+record_claude_post_edit() {
+    model=${NATIVE_RECORD_CLAUDE_MODEL:-haiku}
+    report='Do not retry the call, also when it fails, and do not try another way. Then reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came.'
+    agents='{"reporter":{"description":"Creates the one file it is given, then reports the post-edit message.","prompt":"Use the Write tool exactly once to create the file that you are given with the content that you are given. '"$report"'","model":"'"$model"'","tools":["Write"]},'
+    agents=$agents'"editor":{"description":"Reads the one file it is given, makes the one edit it is given, then reports the post-edit message.","prompt":"Use the Read tool once on the file that you are given. Then use the Edit tool exactly once to make the edit that you are given. '"$report"'","model":"'"$model"'","tools":["Read","Edit"]}}'
+
+    guard_run check post-edit-edit "$GUARD_STEPS
+1. Use the Read tool to read the file sentinel/edit.txt.
+2. Use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$POST_REPORT"
+
+    guard_run check post-edit-subagent-edit "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to false, and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$POST_RELAY"
+
+    guard_run slow-post slow-post-write "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/slow-post.txt with the single line: slow
+$POST_REPORT"
+
+    guard_run slow-post slow-post-edit "$GUARD_STEPS
+1. Use the Read tool to read the file sentinel/edit.txt.
+2. Use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$POST_REPORT"
+
+    guard_run slow-post slow-post-subagent-write "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"reporter\" and run_in_background set to false, and ask it to create the new file sentinel/slow-post-child.txt with the single line: child
+$POST_RELAY"
+
+    guard_run slow-post slow-post-subagent-edit "$GUARD_STEPS
+1. Use the Agent tool with subagent_type \"editor\" and run_in_background set to false, and ask it to read sentinel/edit.txt and then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.
+$POST_RELAY"
+
+    guard_run post-timeout post-timeout-write "$GUARD_STEPS
+1. Use the Write tool once to create the new file sentinel/post-timeout.txt with the single line: late
+$POST_REPORT"
+
+    post_restore
+}
+
+# record_codex_post_edit runs the four Codex post-edit cases, each in a
+# new thread. The failed patch comes first, because it runs with the hook
+# document of setup. Its Add targets a new file in the read-only
+# directory that guard_fixture makes. So the patch can pass the pre-write
+# hook and fail during its execution. A patch that Codex refuses in its
+# own patch check never reaches a hook, so it cannot show this path.
+record_codex_post_edit() {
+    model=${NATIVE_RECORD_CODEX_MODEL:-gpt-5.6-luna}
+
+    guard_run check execution-failure "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/locked/new.txt with the single line: locked
+The directory sentinel/locked already exists. Do not read it and do not create it.
+$POST_REPORT"
+
+    guard_run slow-post slow-post-add "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/slow-post.txt with the single line: slow
+$POST_REPORT"
+
+    # The prompt names the agent tools and the worker agent_type for the
+    # reason in the comment at the guard case subagent-violation. The
+    # default wait of 30 seconds can end before the slow hook of the
+    # worker call and two model steps, so the prompt asks for a longer
+    # wait.
+    guard_run slow-post slow-post-subagent-add "$GUARD_STEPS
+1. Use multi_agent_v1__spawn_agent with agent_type worker to start one worker agent. In its message, ask it to use apply_patch once to add the new file sentinel/slow-post-child.txt with the single line: child, not to retry the call or try another way, and to reply with one line: the check id that a seamark post-edit message named after the call, or the single word none when no such message came.
+2. Wait for the agent with multi_agent_v1__wait_agent, then close it with multi_agent_v1__close_agent.
+Set timeout_ms to 120000 in the wait, because a hook of the worker call is slow.
+Do not use apply_patch yourself. Then reply with the one line that the worker replied."
+
+    guard_run post-timeout post-timeout-add "$GUARD_STEPS
+1. Use apply_patch once to add the new file sentinel/post-timeout.txt with the single line: late
+$POST_REPORT"
+
+    post_restore
 }
 
 case "$MODE" in

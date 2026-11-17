@@ -768,7 +768,8 @@ func TestGuardScenarioScriptMatchesTheTable(t *testing.T) {
 
 // TestGuardScenarioSlowDenyWaitsInsideTheTimeout proves that the wait of
 // the slow-deny mode stays below the timeout of the indirection entry,
-// and that the slow wait stays above it.
+// and that the slow wait stays above it. The trust tests run the same
+// guard_instrument call as guard_setup.
 func TestGuardScenarioSlowDenyWaitsInsideTheTimeout(t *testing.T) {
 	script := nativeRecordScript(t)
 
@@ -779,10 +780,12 @@ func TestGuardScenarioSlowDenyWaitsInsideTheTimeout(t *testing.T) {
 		return n
 	}
 
-	timeout := regexp.MustCompile(`"command": prewrite, "timeout": (\d+)\}`).FindStringSubmatch(script)
-	require.Len(t, timeout, 2, "the script gives the indirection entry a timeout")
+	call := regexp.MustCompile(`(?m)^    (guard_instrument PreToolUse "sh \$INSTR/pre-write\.sh" (\d+))$`).
+		FindStringSubmatch(scriptFunction(t, script, "guard_setup"))
+	require.Len(t, call, 3, "guard_setup gives the indirection entry a timeout")
+	assert.Equal(t, guardInstrument, call[1]+"\n", "the trust tests run the call of guard_setup")
 
-	hook, err := strconv.Atoi(timeout[1])
+	hook, err := strconv.Atoi(call[2])
 	require.NoError(t, err)
 
 	assert.Equal(t, 7, value("GUARD_IN_BUDGET_SECONDS="))

@@ -863,8 +863,8 @@ tool wrote.
 | `make agents-native-check CLIENT=claude` | the client CLI on PATH; no model, no credentials | the generated configuration, the hook commands it wrote, the offline diagnostics, and no credential in a generated file; the replay of the reviewed Claude Code recordings; the tools that the installed client offers to a scripted loopback Messages API: no `MultiEdit` tool in the tools field or in the deferred tool list, nothing loaded by `ToolSearch select:MultiEdit`, and the error `No such tool available: MultiEdit` for a `MultiEdit` call |
 | `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json` and of the path-control cases into `internal/integration/testdata/codex/apply_patch_path_control_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
 | `make agents-native-smoke CLIENT=codex` | the client CLI and operator authentication; costs tokens | one distillation group read through the client preset with no failed group and a proposed pin, the pin's client provenance in the ledger, the command disclosed by `--dry-run`, trigger extraction in dry-run only, and the workspace unchanged afterwards |
-| `make native-replay CLIENT=<client>` | Go and the repository's build prerequisites; no client CLI, no model, no credentials | the replay of the reviewed timing and guard recordings in `internal/integration/testdata/<client>/timing` and `.../guard`, and the offline tests of the recording script for that client; a replay without a reviewed recording skips as pending, and a skip gives no evidence |
-| `make native-record CLIENT=<client>` | the client CLI and operator authentication; costs tokens | the prompts of one scenario (`NATIVE_RECORD_SCENARIO=timing`, the default, or `guard`) in a scratch repository, with one cost line per run; it writes a sanitized copy for review and never writes into testdata; it refuses a binary or a tree with uncommitted changes unless `SEAMARK_ALLOW_DIRTY=1` |
+| `make native-replay CLIENT=<client>` | Go and the repository's build prerequisites; no client CLI, no model, no credentials | the replay of the reviewed timing, guard, and post-edit recordings in `internal/integration/testdata/<client>/timing`, `.../guard`, and `.../post-edit`, and the offline tests of the recording script for that client; a replay without a reviewed recording skips as pending, and a skip gives no evidence |
+| `make native-record CLIENT=<client>` | the client CLI and operator authentication; costs tokens | the prompts of one scenario (`NATIVE_RECORD_SCENARIO=timing`, the default, `guard`, or `post-edit`) in a scratch repository, with one cost line per run; it writes a sanitized copy for review and never writes into testdata; it refuses a binary or a tree with uncommitted changes unless `SEAMARK_ALLOW_DIRTY=1`; with `NATIVE_RECORD_RUNS=0` it runs no paid turn |
 
 The Go checks use ordinary test results and label missing prerequisites
 as `blocked` in their failure messages. The shell script prints `ok`,
@@ -888,7 +888,8 @@ its message text, and checks that neither names `MultiEdit`. It checks
 that `ToolSearch select:MultiEdit` loads nothing, and that a scripted
 `MultiEdit` call gets the error `No such tool available: MultiEdit`.
 An offline test in `make test` runs the same verdict against fake
-clients. The other Go native tests are Codex-only.
+clients. The Claude Code post-edit replay skips as pending until a
+reviewed post-edit copy exists. The other Go native tests are Codex-only.
 
 The credential canary belongs to the offline check only; the smoke
 leaves the operator's environment as it is. The smoke's distillation
@@ -937,7 +938,10 @@ Before release:
   Claude Code 2.1.319 validates the 10-second pre-edit timeout for
   `Write` and `Edit` in both contexts, and codex-cli 0.169.0 for
   `apply_patch` in both contexts, each with a fail-open limit at 10
-  seconds.
+  seconds. The post-edit scenario (below) holds the cases for the
+  15-second post-edit timeout, for the Claude Code `Edit` post-edit
+  reply, and for a Codex hook after a failed patch. It has no reviewed
+  copy yet.
 - **Done:** Verify Codex trust without granting it in setup.
   `make agents-native-check CLIENT=codex` runs the setup of
   `seamark init --client codex --lesson-checks enforce` in a scratch
@@ -1010,12 +1014,34 @@ NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=claude
 NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=codex
 NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=claude
 NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=codex
+NATIVE_RECORD_SCENARIO=post-edit make native-record CLIENT=claude
+NATIVE_RECORD_SCENARIO=post-edit make native-record CLIENT=codex
 ```
+
+The post-edit scenario installs `seamark init --lesson-checks check`
+with check pins, so no case can deny a write. An indirection entry on
+`PostToolUse` has the 15-second timeout of the owned post-edit entry. In
+the slow phases the owned entry is removed, and the indirection entry
+runs the post-edit command after a wait of 12 seconds (inside the
+timeout) or 20 seconds (past it). It logs a line before the wait and the
+exit status after the command. Claude Code runs seven cases: the plain
+post-edit reply of an `Edit` in the root and the child context, the
+in-budget slow reply of `Write` and `Edit` in both contexts, and one
+root `Write` past the timeout. Codex runs four turns: a patch that fails
+during its execution (an Add into a read-only directory), the in-budget
+slow reply in the root and a worker, and one root patch past the
+timeout. Each Claude Code child case uses the foreground launch shape.
+For Codex, setup moves the owned post-edit entry alone into the last
+`PostToolUse` group, so one trust review of the setup covers every case.
+`NATIVE_RECORD_RUNS=0` sets up the scratch repository without a paid
+turn: a new Codex repository stops at the trust step, and a new Claude
+Code repository collects an empty copy.
 
 A sanitized recording needs review before evidence declarations change.
 The reviewer copies a reviewed recording into
-`internal/integration/testdata/<client>/timing` or `.../guard`, where
-`make native-replay CLIENT=<client>` replays it offline, with no model.
+`internal/integration/testdata/<client>/timing`, `.../guard`, or
+`.../post-edit`, where `make native-replay CLIENT=<client>` replays it
+offline, with no model.
 Do not substitute an in-process handler fixture for a native result. Keep
 raw conversations and native identifiers out of public reports.
 
@@ -1034,10 +1060,10 @@ Then run the existing release gates:
    credential-shaped; the checks grep for the canary they set, not for
    every possible secret.
 5. `make native-replay CLIENT=claude` and `make native-replay CLIENT=codex`
-   replay the reviewed timing and guard recordings. A replay without a
-   reviewed recording skips as pending and gives no evidence. A reviewed
-   recording moves an aspect from pending to verified only for the client
-   version, tool and context that it shows.
+   replay the reviewed timing, guard, and post-edit recordings. A replay
+   without a reviewed recording skips as pending and gives no evidence. A
+   reviewed recording moves an aspect from pending to verified only for
+   the client version, tool and context that it shows.
 6. Update the per-agent table above, `docs/STATUS.md`, the README's
    setup section, and `CHANGELOG.md`. `TestUserDocsCoverEveryCommand`
    and `TestOnboardingGuidesNameRealCommands` check the command

@@ -37,6 +37,7 @@ var codexAgentPrompts = map[string]codexAgentPrompt{
 	"subagent-violation":     {"record_codex_guard", `guard_run enforce subagent-violation "$GUARD_STEPS`},
 	"subagent-check-only":    {"record_codex_guard", `guard_run check-pins subagent-check-only "$GUARD_STEPS`},
 	"slow-deny-subagent-add": {"record_codex_guard", `guard_run slow-deny slow-deny-subagent-add "$GUARD_STEPS`},
+	"slow-post-subagent-add": {"record_codex_post_edit", `guard_run slow-post slow-post-subagent-add "$GUARD_STEPS`},
 }
 
 // scriptPrompt returns the prompt that starts at the opener line of body, up
@@ -122,6 +123,12 @@ var claudeChildPrompts = []claudeChildPrompt{
 	{"subagent-read", "record_claude_timing", `timing_claude subagent-read new "$steps`, launchBackground},
 	{guardSlowDenyChildForeground, "record_claude_guard",
 		`guard_run slow-deny ` + guardSlowDenyChildForeground + ` "$GUARD_STEPS`, launchForeground},
+	{"post-edit-subagent-edit", "record_claude_post_edit", `guard_run check post-edit-subagent-edit "$GUARD_STEPS`,
+		launchForeground},
+	{"slow-post-subagent-write", "record_claude_post_edit", `guard_run slow-post slow-post-subagent-write "$GUARD_STEPS`,
+		launchForeground},
+	{"slow-post-subagent-edit", "record_claude_post_edit", `guard_run slow-post slow-post-subagent-edit "$GUARD_STEPS`,
+		launchForeground},
 }
 
 // TestNativeRecordClaudeChildPromptsSetTheLaunchShape proves that each
@@ -129,7 +136,7 @@ var claudeChildPrompts = []claudeChildPrompt{
 // case, and that every Agent step of the Claude Code functions sets it.
 // The search stays inside the Claude Code functions, because the Codex
 // functions use the same case names. The shapes of the guard extension
-// table agree with the prompts.
+// table and of the post-edit table agree with the prompts.
 func TestNativeRecordClaudeChildPromptsSetTheLaunchShape(t *testing.T) {
 	script := nativeRecordScript(t)
 	field := map[string]string{launchForeground: "false", launchBackground: "true"}
@@ -144,7 +151,7 @@ func TestNativeRecordClaudeChildPromptsSetTheLaunchShape(t *testing.T) {
 	steps := 0
 	setsShape := regexp.MustCompile(`^1\. Use the Agent tool with subagent_type \\"[a-z]+\\" and run_in_background set to (true|false), `)
 
-	for _, function := range []string{"record_claude_guard", "record_claude_timing"} {
+	for _, function := range []string{"record_claude_guard", "record_claude_timing", "record_claude_post_edit"} {
 		for _, line := range strings.Split(scriptFunction(t, script, function), "\n") {
 			if strings.Contains(line, "Use the Agent tool") {
 				steps++
@@ -155,14 +162,24 @@ func TestNativeRecordClaudeChildPromptsSetTheLaunchShape(t *testing.T) {
 
 	assert.Equal(t, len(claudeChildPrompts), steps, "the table holds every Claude Code Agent step")
 
+	shapes := map[string]string{}
+
 	for _, x := range claudeGuardExtensions {
-		if x.shape == "" {
+		shapes[x.name] = x.shape
+	}
+
+	for _, x := range claudePostEditCases {
+		shapes[x.name] = x.shape
+	}
+
+	for name, shape := range shapes {
+		if shape == "" {
 			continue
 		}
 
-		i := slices.IndexFunc(claudeChildPrompts, func(c claudeChildPrompt) bool { return c.name == x.name })
-		if assert.GreaterOrEqual(t, i, 0, "the prompt table has the case %s", x.name) {
-			assert.Equal(t, claudeChildPrompts[i].shape, x.shape, "the table and the prompt of %s set one shape", x.name)
+		i := slices.IndexFunc(claudeChildPrompts, func(c claudeChildPrompt) bool { return c.name == name })
+		if assert.GreaterOrEqual(t, i, 0, "the prompt table has the case %s", name) {
+			assert.Equal(t, claudeChildPrompts[i].shape, shape, "the table and the prompt of %s set one shape", name)
 		}
 	}
 }

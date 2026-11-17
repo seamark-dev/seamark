@@ -203,7 +203,8 @@ func TestNativeRecordCodexVerdictFailsAndPasses(t *testing.T) {
 // runner of the script judges its turn with codex_verdict. A stand-in
 // codex prints the recorded limit stream, writes nothing to stderr, and
 // exits 1. Each runner then stops the call before the next turn. The
-// guard runner first restores the enforce setup, which a stub records.
+// guard scenario first restores the enforce setup, and the post-edit
+// scenario its check setup. A stub records each restore.
 func TestNativeRecordCodexRunnersStopAtLimit(t *testing.T) {
 	cases := []struct {
 		name, scenario, call string
@@ -211,6 +212,7 @@ func TestNativeRecordCodexRunnersStopAtLimit(t *testing.T) {
 	}{
 		{"timing", "timing", "timing_codex add-case new 'add a file'", []string{"timing_codex"}},
 		{"guard", "guard", "gcase=add-violation\nguard_codex", []string{"guard_codex"}},
+		{"post-edit", "post-edit", "gcase=slow-post-subagent-add\nguard_codex", []string{"guard_codex"}},
 	}
 
 	for _, tc := range cases {
@@ -232,6 +234,7 @@ func TestNativeRecordCodexRunnersStopAtLimit(t *testing.T) {
 			program := "PATH='" + bin + "':$PATH\nOUT='" + out + "'\nREPO='" + repo + "'\nBIN='" + filepath.Join(bin, "seamark") + "'\n" +
 				"SCENARIO=" + tc.scenario + "\nRUN=1\nmodel=m\nSESSION=\n" +
 				"timing_start() { RUN=1; }\nguard_restore() { echo 'guard setup restored'; }\n" +
+				"post_restore() { echo 'post-edit setup restored'; }\n" +
 				tc.call + "\necho 'next turn starts'\n"
 
 			got, code := recordScript(t, program, append([]string{"summary", "codex_failure", "codex_verdict", "limit_stop"}, tc.functions...)...)
@@ -241,6 +244,7 @@ func TestNativeRecordCodexRunnersStopAtLimit(t *testing.T) {
 			assert.Contains(t, got, "result: FAIL")
 			assert.NotContains(t, got, "next turn starts")
 			assert.Equal(t, tc.scenario == "guard", strings.Contains(got, "guard setup restored"), got)
+			assert.Equal(t, tc.scenario == "post-edit", strings.Contains(got, "post-edit setup restored"), got)
 		})
 	}
 }
