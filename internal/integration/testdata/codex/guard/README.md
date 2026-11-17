@@ -18,9 +18,10 @@ same client version.
 `make native-record CLIENT=codex NATIVE_RECORD_SCENARIO=guard` ran
 `scripts/native-record.sh` at commit `d7a24f9` of the release branch,
 with the Seamark binary of that commit (`v0.8.0-301-gd7a24f9`). The
-sanitizer `scripts/native-record-sanitize.py` of a later commit of the
-same branch, with the Codex ID pass and the time shift, made this copy
-from the same raw recording (see "Sanitization").
+sanitizer `scripts/native-record-sanitize.py` at commit `334e43a` of the
+same branch, with the Codex ID pass, the time shift, and the commit ID
+and agent role masks, made this copy from the same raw recording (see
+"Sanitization").
 
 The script made a scratch Git repository with an enforce pin on
 `sentinel/` (rule `frozen-sentinel`, a path check) and one on `notes/`
@@ -190,9 +191,15 @@ base instructions, the text of every developer message, the encrypted
 reasoning, the rate limits, and the world state of the rollouts with
 the marker `<sanitized>`, and kept the section tags. The `tools` of
 each `additional_tools` record also read `<sanitized>`, because that
-record lists the tools of the operator's environment. The sanitizer
-kept the tool outputs, so the rollouts still hold the 9 deny outputs as
-`custom_tool_call_output` records. The 4 post-edit records are
+record lists the tools of the operator's environment. The
+`commit_hash` of each `session_meta` reads `<sanitized>` too: Codex
+writes the HEAD commit of the scratch repository there, and a commit ID
+hashes the commit time and the local time offset. The agent role list
+of the spawn tool reads `<sanitized>` in the 3 tool outputs that print
+that tool, because the list names the roles of the operator's own Codex
+configuration. The sanitizer kept the other tool outputs, so the
+rollouts still hold the 9 deny outputs as `custom_tool_call_output`
+records. The 4 post-edit records are
 developer messages, so only `guard-context.jsonl` keeps their text, as
 the script copied them from the rollouts. That file also holds a copy
 of the 9 deny outputs.
