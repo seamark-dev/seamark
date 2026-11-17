@@ -266,15 +266,6 @@ var lessonHookClients = map[string]lessonHookClient{
 // one, so every report names the stage with one tool.
 const explorationTool = claudeReadTool
 
-// postEditEvidence is the native evidence that the post-edit reply
-// reaches the model. It takes no client, tool, or context, so it cannot
-// name the client version of a reviewed recording. The level stays
-// unverified for every path, also for the replies that the reviewed
-// Claude Code guard recording shows.
-func postEditEvidence() VerificationEvidence {
-	return VerificationEvidence{Level: VerificationUnverified}
-}
-
 // explorationEvidence is the native evidence of the exploration path.
 // It takes no client, so it stays unverified, also for the replies that
 // the reviewed Claude Code timing recording shows.
@@ -422,7 +413,7 @@ func (r *pathReader) paths() []lessoncheck.InstalledPath {
 
 	for _, tool := range specs[1].Tools() {
 		for _, context := range lessonContexts {
-			p := r.path(tool, lessoncheck.StagePostEdit, context, postEditEvidence())
+			p := r.path(tool, lessoncheck.StagePostEdit, context, PostEditEvidence(r.client.id, tool, context))
 			r.postEdit(&p, postEntries, specs[1:], partial)
 			out = append(out, p)
 		}

@@ -90,8 +90,11 @@ func (codexCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completion
 // that context to the thread. The guard recording of codex-cli 0.169.0
 // shows the PostToolUse context in the thread too: a hook developer
 // record after the patch and before the next model step, in the root
-// and in a worker. The post-edit path still reads active-unverified,
-// because its evidence (postEditEvidence) names no client version.
+// and in a worker. The post-edit recording of the same version shows it
+// also after a hook that waits 12 s. PostEditEvidence verifies both
+// apply_patch paths from that recording. They still read
+// active-unverified, because Seamark cannot read the Codex trust
+// record.
 //
 // The text in the reply holds at most codexMaxFindingsBytes. A text
 // that fits keeps every byte, and a longer text loses its last lines.

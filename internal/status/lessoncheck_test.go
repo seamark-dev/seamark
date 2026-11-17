@@ -120,11 +120,13 @@ func TestStatusLessonChecksBlockAndJSON(t *testing.T) {
 		s, text, doc := statusText(t, st, root)
 		require.NotNil(t, s.LessonChecks)
 
-		// The reviewed Claude Code recording verifies the Edit and Write
-		// paths, so they read active with the timeout limit of the client.
+		// The reviewed Claude Code recordings verify the Edit and Write
+		// paths of both stages, so they read active with the timeout limit
+		// of each stage.
 		block := "lesson checks  claude  enforce · pre-write Edit, Write active (limit: the client lets the write run " +
 			"after its 10 s hook timeout); MultiEdit active-unverified · " +
-			"post-edit active-unverified · exploration active-unverified\n" +
+			"post-edit Edit, Write active (limit: the client drops the post-edit findings after its 15 s hook timeout; " +
+			"the edit stays); MultiEdit active-unverified · exploration active-unverified\n" +
 			"               codex   off · exploration inactive (no structured Read path)\n" +
 			"               pins    1 enforce (requested-inactive on codex), 0 check, 4 advisory · config valid\n"
 		assert.Contains(t, text, block)

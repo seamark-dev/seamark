@@ -87,8 +87,9 @@ func (claudeCompletions) DecodeCompletion(payload []byte) (lessoncheck.Completio
 // interrupted tool, PostToolUse otherwise. The Claude Code hooks
 // reference documents this form. The guard recording of Claude Code
 // 2.1.319 shows the text in the next model request after both events.
-// The post-edit path still reads active-unverified, because its
-// evidence (postEditEvidence) names no client version.
+// The post-edit recording of Claude Code 2.1.325 shows it after
+// PostToolUse, also after a hook that waits 12 s. PostEditEvidence
+// verifies the Write and Edit paths from that recording.
 func (claudeCompletions) EncodeFindings(text string, outcome lessoncheck.ToolOutcome) (HookReply, error) {
 	event := claudeEventPostTool
 	if outcome == lessoncheck.ToolFailed || outcome == lessoncheck.ToolInterrupted {

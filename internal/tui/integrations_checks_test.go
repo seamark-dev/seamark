@@ -60,7 +60,11 @@ func TestTUILessonChecksSetupView(t *testing.T) {
 			"pre-write Edit in root: active (limit: the client lets the write run after its 10 s hook timeout)",
 			"pre-write Write in child: active (limit: the client lets the write run after its 10 s hook timeout)",
 			"pre-write MultiEdit in child: active-unverified (native-deny-unverified, native-timeout-unverified)",
-			"post-edit Write in root: active-unverified",
+			// The reviewed post-edit recording verifies Write and Edit, and
+			// names the post-edit timeout limit of the client.
+			"post-edit Write in root: active (limit: the client drops the post-edit findings after its 15 s hook timeout; " +
+				"the edit stays)",
+			"post-edit MultiEdit in child: active-unverified",
 			"Binary test · this seamark binary",
 			"Uncovered NotebookEdit in root, NotebookEdit in child, Bash in root, Bash in child: no lesson-check hook",
 			"Remove " + arrow + " seamark init --client claude --lesson-checks off --lesson-exploration off",
