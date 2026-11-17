@@ -79,9 +79,12 @@ A Codex recording also moves the time and the date directory of each
 rollout file name and the current_date tag. A rollout file name holds
 the local wall time of the thread start, so the pass writes that name
 in UTC. The additional_tools record lists the operator's tools, so its
-tool list becomes a marker. A Codex residual check refuses the copy
-when a real ID, a home path, a local time offset, or an unshifted time
-remains.
+tool list becomes a marker. The spawn tool of Codex lists the agent
+roles, also the roles of the operator's own Codex configuration. A tool
+output that prints that tool holds the list, so a rollout keeps only a
+marker in its place. A Codex residual check refuses the copy when a real
+ID, a home path, a local time offset, an unshifted time, or an agent
+role entry remains.
 """
 
 import calendar
@@ -321,6 +324,27 @@ CODEX_TOKEN_KINDS = {"call": CALL, "ctc": CTC, "resp": RESP, "rs": RS, "msg": MS
 # The residual check also refuses a function call ID (fc_). No recording
 # holds one yet, so the pass has no kind for it.
 CODEX_RESIDUAL_TOKEN = re.compile(r"(?<![0-9A-Za-z_])(call|ctc|resp|rs|msg|fc)_[A-Za-z0-9]{16,}(?![A-Za-z0-9])")
+
+# The agent roles of the spawn tool of codex-cli 0.169.0. The tool
+# declaration lists them after the comment line "// Available roles:".
+# Each role is a comment line "// <name>: {", the comment lines of its
+# description, and "// }". The list holds the built-in roles and the
+# roles of the operator's own Codex configuration, with the names and
+# descriptions that the operator wrote. No decoder reads the list, so the
+# whole list becomes one marker. Thus the mask needs no list of the
+# built-in roles, and it also masks a role that replaces a built-in role.
+#
+# A line break of the list is a newline, or the escape "\n" when the
+# declaration stands inside a JSON text, for example in a tool output
+# that prints the tool list. ROLE_BREAK matches both forms.
+ROLE_BREAK = r"(?:\n|\\+n)"
+CODEX_ROLE_LIST = re.compile(r"(// Available roles:)((?:%s[ \t]*//(?:(?!%s).)*)+)" % (ROLE_BREAK, ROLE_BREAK))
+
+# A role entry that the mask did not replace: the first line of a role and
+# the comment line after it. The residual check refuses a copy that holds
+# one, also in a hook payload or an extra file, which the mask does not
+# change.
+CODEX_ROLE_ENTRY = re.compile(r"//[ \t]*[^\s:]+:[ \t]*\{%s[ \t]*//" % ROLE_BREAK)
 
 # Any UUID inside a text. The second walk of the Codex pass maps each one
 # that the first walk left as an item ID.
@@ -1173,8 +1197,9 @@ def codex_text_hits(text, ids, times):
 
     A real ID or file name of the map counts, and so does an ID shape
     that is not synthetic, because the pass maps every UUID and token
-    that it knows. A home path, an ISO time with a local zone or without
-    a zone, and a time outside the shifted window count too.
+    that it knows. A home path, an agent role entry of the spawn tool, an
+    ISO time with a local zone or without a zone, and a time outside the
+    shifted window count too.
     """
     if ids.pattern is not None:
         for m in ids.pattern.finditer(text):
@@ -1191,6 +1216,9 @@ def codex_text_hits(text, ids, times):
 
     if HOME_ROOT in text:
         yield "a home path"
+
+    if CODEX_ROLE_ENTRY.search(text):
+        yield "an unmasked agent role"
 
     yield from time_text_hits(text, times)
 
@@ -1401,7 +1429,11 @@ def codex_shape(r):
     The text replacements come later. The ID pass reads this form, so a
     value that a mask replaces takes no number.
     """
-    r = json.loads(json.dumps(r))
+    # A tool output or a model text can print the spawn tool, so the role
+    # list mask reads every string of the line (see CODEX_ROLE_LIST). The
+    # record type, the IDs, and the rest of the text stay. map_strings
+    # returns a new value, so the masks below never change the input.
+    r = map_strings(r, mask_roles)
     p = r.get("payload")
 
     if not isinstance(p, dict):
@@ -1442,6 +1474,14 @@ def codex_shape(r):
         p["tools"] = MARKER
 
     return r
+
+
+def mask_roles(text):
+    """Return a text with each agent role list of the Codex spawn tool replaced by the marker.
+
+    The header line stays, so a reader sees where the list stood.
+    """
+    return CODEX_ROLE_LIST.sub(r"\1 " + MARKER, text)
 
 
 def map_strings(v, fn):

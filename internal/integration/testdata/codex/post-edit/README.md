@@ -19,10 +19,11 @@ and `../guard` come from the same client version.
 `scripts/native-record.sh` and the sanitizer
 `scripts/native-record-sanitize.py` at commit `facb617` of the release
 branch, with the Seamark binary of that commit (`v0.8.0-353-gfacb617`).
-The sanitizer of a later commit of the same branch made this copy from
-the same raw recording. It also masks the commit ID in each
-`session_meta` (see "Sanitization"). The copy differs from the output
-of the sanitizer of `facb617` only in those 5 values.
+The sanitizer at commit `334e43a` of the same branch made this copy
+from the same raw recording. It also masks the commit ID in each
+`session_meta` and the agent role list of the spawn tool (see
+"Sanitization"). The copy differs from the output of the sanitizer of
+`facb617` only in those 6 values.
 
 The script ran each prompt in a new thread with `codex exec --json` on
 the model `gpt-5.6-luna` with low reasoning, in the `workspace-write`
@@ -210,10 +211,13 @@ each `additional_tools` record also read `<sanitized>`, because that
 record lists the tools of the operator's environment. The
 `commit_hash` of each `session_meta` reads `<sanitized>` too: Codex
 writes the HEAD commit of the scratch repository there, and a commit ID
-hashes the commit time and the local time offset. The sanitizer
-kept the tool outputs. The 2 post-edit records are developer messages,
-so only `guard-context.jsonl` keeps their text, as the script copied
-them from the rollouts.
+hashes the commit time and the local time offset. The agent role list
+of the spawn tool reads `<sanitized>` in the one tool output that
+prints that tool, because the list names the roles of the operator's
+own Codex configuration. The sanitizer kept the other tool outputs.
+The 2 post-edit records are developer messages, so only
+`guard-context.jsonl` keeps their text, as the script copied them from
+the rollouts.
 
 An ID pass replaced each ID that Codex or its API generated: the
 thread, turn, window, item, exec, call, custom tool call, response,
