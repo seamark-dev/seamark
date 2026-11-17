@@ -6,7 +6,26 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
-## Unreleased
+## v0.9.0 — 2026-11-17
+
+The lesson checks release. `lessons --prepare` and MCP `change_set` list
+the guidance and checks of the pins that apply before a change; this
+preparation is receiver-unknown. A pin can carry an executable check
+(`forbid-path-change/1` or `no-added-pattern/1`), which
+`lessons --verify`, `check --lessons`, and the new baseline, pre-write
+guard and post-edit hooks for Claude Code and Codex run. The guard
+projects Codex Update content by the rules of the codex-cli 0.169.0
+applier. Reviewed recordings verify the guard deny of Claude Code
+`Write` and `Edit` (2.1.319) and of Codex `apply_patch` (codex-cli
+0.169.0), and the post-edit reply of the same tools (Claude Code 2.1.325
+and codex-cli 0.169.0), with the limits that the entries below name.
+`MultiEdit` stays pending, and every Codex path keeps `trust-unknown`.
+`lessons --delivery` reads what each pin version delivered. An index now
+reads stale after an edit made during indexing, and `status` and the MCP
+answers name the root of an index that records another repository.
+Fewer false call edges reach `check` effects, `why <file>` shows an
+outline with callers, and `orient` opens with a health header. Setup,
+doctor, `check`, and the MCP tools get many fixes.
 
 - **Faster, quieter test runs.** `make test` and `make test-race` accept
   `TEST_PKGS`, `TEST_RUN`, `TEST_FLAGS` and `TEST_TIMEOUT`, use Go's own
@@ -30,11 +49,12 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
   timed call. Only test files change, so the benchmark fingerprints are
   unchanged.
 
-v0.9.0 is the planned first release with lesson-check hook handlers,
-not a published release. Shipping is blocked on the
-[mandatory native verification and release fixes](docs/agent-integrations.md#release-checklist).
-Fixtures do not establish native enforcement, prevention or earlier
-model-boundary delivery.
+v0.9.0 is the first release with lesson-check hook handlers. The
+prerequisites of the
+[release checklist](docs/agent-integrations.md#release-checklist) are
+complete, and the `MultiEdit` paths stay pending. Fixtures do not
+establish native enforcement, prevention or earlier model-boundary
+delivery.
 
 - **Earlier preparation and exploration.** `lessons --prepare` and MCP
   `change_set` return versioned guidance and check listings. Optional
@@ -781,7 +801,7 @@ after that backup do not return, and `.seamark/lessons.yaml` goes back
 from git with it. See
 [Going back to an older seamark](docs/configuration.md#going-back-to-an-older-seamark).
 
-See [current capability states](docs/STATUS.md#unreleased--lesson-checks-and-lesson-delivery)
+See [current capability states](docs/STATUS.md#lesson-checks-and-lesson-delivery)
 and the [lesson guide](docs/lessons.md) for limits and commands.
 
 ## v0.8.0 — 2026-10-18

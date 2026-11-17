@@ -1,7 +1,6 @@
 # Production status
 
-The current release is **v0.8.0**, released on 2026-10-18. This page
-also marks implemented but **Unreleased** capabilities explicitly.
+This page describes **v0.9.0**, released on 2026-11-17.
 See [Distribution](#distribution) for installation and release details.
 
 The current state of Seamark — what each capability profile can
@@ -54,26 +53,26 @@ Review mining, fix mining, lessons, distillation, pins.
 | Once-per-context hook delivery (`hook_delivery` in `lessons.yaml`) | working; opt-in, digest-only local state, fails open; needs one `seamark init` re-run for the `PostCompact` hook |
 | Lessons benchmark (`make lessons-bench`, paired headless sessions, frozen claim registry) | working; accepted synthetic and pinned OpenTelemetry-Go cohorts; operator-run and spends provider tokens; protocol and evidence in [bench/README.md](../bench/README.md) |
 
-## Unreleased — lesson checks and lesson delivery
+## Lesson checks and lesson delivery
 
-v0.9.0 is the planned first release with lesson-check handlers. It has
-not shipped. The release is **blocked** on reviewed native-client
-verification and the remaining tested fixes in the
-[release checklist](agent-integrations.md#release-checklist).
-Fixture coverage does not close those prerequisites. Current behavior
-below remains distinct from required-before-release work.
+v0.9.0 is the first release with lesson-check handlers. The
+prerequisites of the
+[release checklist](agent-integrations.md#release-checklist) are
+complete, and the `MultiEdit` paths stay pending, because Claude Code
+offers no MultiEdit tool. Fixture coverage alone verifies no native
+path.
 
 | Capability | Current state and native limits |
 | --- | --- |
-| Preparation (`lessons --prepare`, MCP `change_set`) | **Unreleased**; versioned guidance/check listing, no model call, no repeat-state change; receiver-unknown, not proof of before-construction delivery |
-| Claude `Read` exploration | **Unreleased**; opt-in setup, independent repeat state; a Claude Code 2.1.319 recording shows the reply in the next model request, but the report keeps the path unverified because its evidence names no client version; Codex structured Read unsupported |
-| Executable lesson configuration | **Unreleased**; advisory/check/enforce modes and two versioned predicates; mode/check and definition editors, validation and explicit working-tree verification implemented; arbitrary prose is not checkable |
-| Verification (`lessons --verify`, `check --lessons`, the `lesson_checks` argument of the MCP `check` tool) | **Unreleased**; shared bounded snapshot and result, CLI/TUI/MCP fixture coverage; default internal audit/lock exclusions apply and `not covered` names them |
-| Baseline, guard and post-edit hooks | **Unreleased**; Claude Edit/Write/MultiEdit and Codex apply_patch handlers, separate root/child paths; Claude Code 2.1.319 recordings verify the Write and Edit deny and in-budget slow deny in root and child, so those paths read `active` with the limit "the client lets the write run after its 10 s hook timeout"; codex-cli 0.169.0 recordings verify the apply_patch deny and in-budget slow deny in root and child with the same limit, but every Codex path keeps `trust-unknown` and reads `active-unverified`, because Seamark cannot read the Codex trust record; MultiEdit stays pending in both stages, because Claude Code offers no MultiEdit tool (on 2.1.319 by the model's replies in the recording, on 2.1.325 by a model-free check); the post-edit reply on PostToolUse is verified by Claude Code 2.1.325 recordings for Write and Edit in root and child, so those post-edit paths read `active` with the limit "the client drops the post-edit findings after its 15 s hook timeout; the edit stays", and by codex-cli 0.169.0 recordings for apply_patch in root and child with the same limit, still `active-unverified (trust-unknown)`; codex-cli 0.169.0 sends no PostToolUse after a patch that fails during its execution, so no post-edit check runs for that patch and its baseline stays pending until the sweep; a Codex patch header path with a tab or a carriage return is an incomplete path set (the guard denies it, the baseline handler stores no baseline, and the post-edit check reports every executable pin as unknown), because codex-cli 0.169.0 writes the path without that character; installed does not mean active or verified |
-| Codex Update projection | **Unreleased**; the guard projects the bytes of a Codex Update by the rules of the codex-cli 0.169.0 applier; the oracle holds 99 content cases from codex-cli 0.169.0 (2026-11-17; the first 96 identical to the recording of 2026-11-16), the first 29 identical to the earlier recording on codex-cli 0.164.0 (2026-11-03); `make test` projects every case offline and gets the applier bytes, or unknown for a refused update and for eight listed cases kept unknown on purpose; `make agents-native-check CLIENT=codex` replays the cases on 0.169.0 only and runs a seeded differential of 500 patches against the installed applier (no difference on 0.169.0); the live Update of the guard recording projects to its recorded bytes; a hunk form outside the verified grammar (including a change line that ends with two or more carriage returns in the patch), a hunk that does not match, a file with a lone carriage return, and a file that two sections name give unknown, so an armed guard requests denial; a Codex Add line that ends with two or more carriage returns also gives unknown, because the codex-cli 0.169.0 applier removes two of them and the decoder one |
-| Setup and capability report | **Unreleased**; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust, and `make agents-native-check CLIENT=codex` checks this on codex-cli 0.169.0; Claude and Codex setup refuse a certain second lesson-check handler and warn about an uncertain one; doctor, status and TUI summaries name an unreadable hook document |
-| Delivery report (`lessons --delivery`, `delivery/1`) | **Unreleased**; read-only delivery records of each pin version from the audit logs, separate check and guard counts, selection budgets; every observation window reads incomplete; fields without a source keep fixed values in the `delivery/1` format; `prevented` counts only a written deny on a verified native path (today Claude Code Write and Edit, and Codex apply_patch) with no later execution record |
-| TUI Pins checks | **Unreleased**; linked-pin mode/check editing, manual scope edit of a linked pin (console only, one save in both stores; a computed scope then reads as a suggestion), `M` definitions, `V` verification; native evidence unchanged |
+| Preparation (`lessons --prepare`, MCP `change_set`) | new in v0.9.0; versioned guidance/check listing, no model call, no repeat-state change; receiver-unknown, not proof of before-construction delivery |
+| Claude `Read` exploration | new in v0.9.0; opt-in setup, independent repeat state; a Claude Code 2.1.319 recording shows the reply in the next model request, but the report keeps the path unverified because its evidence names no client version; Codex structured Read unsupported |
+| Executable lesson configuration | new in v0.9.0; advisory/check/enforce modes and two versioned predicates; mode/check and definition editors, validation and explicit working-tree verification implemented; arbitrary prose is not checkable |
+| Verification (`lessons --verify`, `check --lessons`, the `lesson_checks` argument of the MCP `check` tool) | new in v0.9.0; shared bounded snapshot and result, CLI/TUI/MCP fixture coverage; default internal audit/lock exclusions apply and `not covered` names them |
+| Baseline, guard and post-edit hooks | new in v0.9.0; Claude Edit/Write/MultiEdit and Codex apply_patch handlers, separate root/child paths; Claude Code 2.1.319 recordings verify the Write and Edit deny and in-budget slow deny in root and child, so those paths read `active` with the limit "the client lets the write run after its 10 s hook timeout"; codex-cli 0.169.0 recordings verify the apply_patch deny and in-budget slow deny in root and child with the same limit, but every Codex path keeps `trust-unknown` and reads `active-unverified`, because Seamark cannot read the Codex trust record; MultiEdit stays pending in both stages, because Claude Code offers no MultiEdit tool (on 2.1.319 by the model's replies in the recording, on 2.1.325 by a model-free check); the post-edit reply on PostToolUse is verified by Claude Code 2.1.325 recordings for Write and Edit in root and child, so those post-edit paths read `active` with the limit "the client drops the post-edit findings after its 15 s hook timeout; the edit stays", and by codex-cli 0.169.0 recordings for apply_patch in root and child with the same limit, still `active-unverified (trust-unknown)`; codex-cli 0.169.0 sends no PostToolUse after a patch that fails during its execution, so no post-edit check runs for that patch and its baseline stays pending until the sweep; a Codex patch header path with a tab or a carriage return is an incomplete path set (the guard denies it, the baseline handler stores no baseline, and the post-edit check reports every executable pin as unknown), because codex-cli 0.169.0 writes the path without that character; installed does not mean active or verified |
+| Codex Update projection | new in v0.9.0; the guard projects the bytes of a Codex Update by the rules of the codex-cli 0.169.0 applier; the oracle holds 99 content cases from codex-cli 0.169.0 (2026-11-17; the first 96 identical to the recording of 2026-11-16), the first 29 identical to the earlier recording on codex-cli 0.164.0 (2026-11-03); `make test` projects every case offline and gets the applier bytes, or unknown for a refused update and for eight listed cases kept unknown on purpose; `make agents-native-check CLIENT=codex` replays the cases on 0.169.0 only and runs a seeded differential of 500 patches against the installed applier (no difference on 0.169.0); the live Update of the guard recording projects to its recorded bytes; a hunk form outside the verified grammar (including a change line that ends with two or more carriage returns in the patch), a hunk that does not match, a file with a lone carriage return, and a file that two sections name give unknown, so an armed guard requests denial; a Codex Add line that ends with two or more carriage returns also gives unknown, because the codex-cli 0.169.0 applier removes two of them and the decoder one |
+| Setup and capability report | new in v0.9.0; per-tool/stage/context paths, static binary checks, unknown-state warning/install and known-bad enforce refusal; setup never grants Codex trust, and `make agents-native-check CLIENT=codex` checks this on codex-cli 0.169.0; Claude and Codex setup refuse a certain second lesson-check handler and warn about an uncertain one; doctor, status and TUI summaries name an unreadable hook document |
+| Delivery report (`lessons --delivery`, `delivery/1`) | new in v0.9.0; read-only delivery records of each pin version from the audit logs, separate check and guard counts, selection budgets; every observation window reads incomplete; fields without a source keep fixed values in the `delivery/1` format; `prevented` counts only a written deny on a verified native path (today Claude Code Write and Edit, and Codex apply_patch) with no later execution record |
+| TUI Pins checks | new in v0.9.0; linked-pin mode/check editing, manual scope edit of a linked pin (console only, one save in both stores; a computed scope then reads as a suggestion), `M` definitions, `V` verification; native evidence unchanged |
 
 Claude Code 2.1.319 validates the 10 s pre-edit timeout for Write and
 Edit in root and child, and codex-cli 0.169.0 for apply_patch in root
@@ -118,11 +117,13 @@ agents inside real isolation regardless.
 
 ## Distribution
 
-Current release: [v0.8.0](https://github.com/seamark-dev/seamark/releases/tag/v0.8.0)
-(2026-10-18). It adds the experimental workspace console `seamark tui`,
-runs the pin writes and checks of `seamark lessons` on the engines of the
-console, and counts tracked files deleted in the working tree apart from
-parse errors. The [changelog](../CHANGELOG.md) records the full release scope. Every release
+Current release: [v0.9.0](https://github.com/seamark-dev/seamark/releases/tag/v0.9.0)
+(2026-11-17). It adds lesson preparation before a change, executable
+lesson checks with baseline, pre-write guard and post-edit hooks for
+Claude Code and Codex, the projection of Codex Update content, the
+`lessons --delivery` reading, reviewed native recordings of Claude Code
+2.1.319 and 2.1.325 and codex-cli 0.169.0, and fixes to index freshness
+and call resolution. The [changelog](../CHANGELOG.md) records the full release scope. Every release
 ships native archives for macOS and Linux (amd64/arm64),
 each smoke-tested end to end before publishing, with SHA-256 checksums
 (`SHA256SUMS` on every release). Source builds need Go ≥ 1.25 and a C
@@ -140,12 +141,12 @@ SBOMs, and an npm install are the next distribution milestone.
 The current focus is lessons and proposals, MCP tools, and agent skills.
 The workspace console stays experimental; the plain commands stay the
 stable interface. Unified hook management across AI coding agents is
-planned beyond v0.8.0, building on the shared integration framework. Policy refinement remains
+planned beyond v0.9.0, building on the shared integration framework. Policy refinement remains
 future work; editor integrations remain experimental.
 
 ## Verification
 
-- Unreleased lesson checks and delivery: `make lesson-check` and
+- Lesson checks and delivery: `make lesson-check` and
   `make lesson-check-race` run offline with fake invokers; `make tui-test`
   and `make tui-race` cover Pins/service integration. These test targets
   supply no native compatibility or prevention evidence. The reviewed

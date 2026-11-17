@@ -175,15 +175,15 @@ including a byte-identical workspace and no lesson firing or gate record
 inside the run. Trigger extraction was dry-run only, and trusted-hook
 isolation was not tested.
 
-## Lesson checks and exploration (Unreleased)
+## Lesson checks and exploration
 
-v0.9.0 is the planned first release with lesson-check hook handlers. It
-has not shipped. The features below have fixture coverage. Reviewed
-native recordings of Claude Code 2.1.319 and codex-cli 0.169.0 cover
-part of them, as the tables below name; the rest still needs the
-native evidence of the [release checklist](#release-checklist).
-Installing an `enforce` configuration is not a claim of verified
-enforcement.
+v0.9.0 is the first release with lesson-check hook handlers. The
+features below have fixture coverage. Reviewed native recordings of
+Claude Code 2.1.319 and 2.1.325 and codex-cli 0.169.0 cover part of
+them, as the tables below name; a path without reviewed native evidence
+keeps a pending or unverified state (see the
+[release checklist](#release-checklist)). Installing an `enforce`
+configuration is not a claim of verified enforcement.
 
 Choose each client's lesson hooks explicitly:
 
@@ -305,7 +305,7 @@ timeout is **15 seconds**. The handlers budget 5 seconds for the guard
 and 10 seconds for post-edit evaluation inside those limits. The hook
 timeouts remain candidates until native validation covers each supported
 tool and context. A slow-tool result cannot verify another path. Failed
-validation reopens the defaults before release. Claude Code 2.1.319
+validation reopens the defaults. Claude Code 2.1.319
 validates the pre-edit timeout for `Write` and `Edit` in the root and
 child contexts: it waits for a pre-edit hook that ends after about 7
 seconds and honors its deny. A root `Write` case also shows that it
@@ -958,18 +958,20 @@ MCP approval behavior, and trusted-hook isolation need separate checks.
 
 ### Release checklist
 
-**v0.9.0 is blocked until the prerequisites below are complete and
-reviewed.** Fixture success and confirmed version numbering are not
-native compatibility evidence. Do not publish the release while any
-required path or follow-up remains unresolved.
+**The prerequisites below are complete for v0.9.0, and the `MultiEdit`
+paths stay pending.** Each item names what it does not cover. Fixture
+success and confirmed version numbering are not native compatibility
+evidence, so a path without reviewed native evidence keeps its pending
+or unsupported state.
 
-Before release:
+Release prerequisites:
 
-- Collect and review native timing and guard recordings for each
-  supported client, tool, stage and root/child context. Record versions,
-  receiving identity, reply visibility, denied execution and slow-hook
-  behavior. Preserve pending or unsupported states for unproven paths;
-  never generalize a successful path to the rest. Claude Code: the
+- **Done**, with `MultiEdit` pending: Collect and review native timing
+  and guard recordings for each supported client, tool, stage and
+  root/child context. Record versions, receiving identity, reply
+  visibility, denied execution and slow-hook behavior. Preserve pending
+  or unsupported states for unproven paths; never generalize a
+  successful path to the rest. Claude Code: the
   timing and guard recordings of 2.1.319 are reviewed and committed in
   `internal/integration/testdata/claude/timing` and `.../guard`;
   `MultiEdit` has no recorded call, because the client offers no
@@ -984,13 +986,14 @@ Before release:
   and codex-cli 0.169.0 are reviewed and committed in
   `internal/integration/testdata/claude/post-edit` and
   `internal/integration/testdata/codex/post-edit`.
-- Validate the candidate 10-second pre-edit timeout per tool/context,
-  including slow cases. Change the default if validation fails.
-  Claude Code 2.1.319 validates the 10-second pre-edit timeout for
-  `Write` and `Edit` in both contexts, and codex-cli 0.169.0 for
-  `apply_patch` in both contexts, each with a fail-open limit at 10
-  seconds. `MultiEdit` stays a candidate in both stages: no recording
-  can validate it while Claude Code offers no MultiEdit tool.
+- **Done**, with `MultiEdit` pending: Validate the candidate 10-second
+  pre-edit timeout per tool/context, including slow cases. Change the
+  default if validation fails. Claude Code 2.1.319 validates the
+  10-second pre-edit timeout for `Write` and `Edit` in both contexts,
+  and codex-cli 0.169.0 for `apply_patch` in both contexts, each with a
+  fail-open limit at 10 seconds, so the default stays 10 seconds.
+  `MultiEdit` stays a candidate in both stages: no recording can
+  validate it while Claude Code offers no MultiEdit tool.
 - **Done** for `PostToolUse`: Validate the 15-second post-edit timeout
   per tool/context, including slow cases. Claude Code 2.1.325 waits for
   a post-edit hook of `Write` and `Edit` that ends after about 12

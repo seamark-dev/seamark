@@ -303,7 +303,7 @@ printed even when the verdict blocks (a deny is exactly when they
 matter). `--json` stays verdict-shaped; `--enforce` makes blocking
 verdicts exit 2.
 
-### Executable lesson checks are a separate result (Unreleased)
+### Executable lesson checks are a separate result
 
 `seamark check --lessons` adds working-tree verification of executable
 pins after the existing policy check. MCP `check` opts in with
@@ -339,9 +339,8 @@ Reviewed recordings of Claude Code 2.1.325 and codex-cli 0.169.0 verify
 the post-edit reply on `PostToolUse` of the same tools, with the limit
 that the client drops the post-edit findings after its 15 s hook
 timeout; the edit stays. Native denial and the post-edit reply of
-`MultiEdit` remain pending;
-v0.9.0 cannot ship without
-[reviewed native evidence and the required fixes](agent-integrations.md#release-checklist).
+`MultiEdit` remain pending; see the
+[release checklist](agent-integrations.md#release-checklist).
 
 What Guard can and cannot defend against is stated plainly in
 [Threat model](threat-model.md): it is a defense-in-depth
