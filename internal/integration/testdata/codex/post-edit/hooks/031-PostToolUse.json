@@ -1,0 +1,15 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000005",
+  "turn_id": "20000000-0000-4000-8000-000000000005",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/17/rollout-2026-11-17T21-01-20-10000000-0000-4000-8000-000000000005.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: sentinel/post-timeout.txt\n+late\n*** End Patch"
+  },
+  "tool_response": "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA sentinel/post-timeout.txt\n",
+  "tool_use_id": "exec-50000000-0000-4000-8000-000000000008"
+}

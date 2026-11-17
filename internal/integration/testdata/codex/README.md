@@ -16,7 +16,10 @@ as an absolute path inside the workspace.
 
 The native recordings in `timing/` and `guard/` are **not synthetic**
 (codex-cli 0.169.0, 2026-11-16; the README in each directory gives the
-provenance). They show the same field sets of `PreToolUse` and
+provenance). Neither is the post-edit recording in `post-edit/`
+(codex-cli 0.169.0, 2026-11-17), which shows the slow post-edit hook,
+its stop at the 15 s hook timeout, and no PostToolUse after a patch
+that fails during its execution. They show the same field sets of `PreToolUse` and
 `PostToolUse` for `apply_patch` and `Bash`, of `SubagentStart`, and of
 the `apply_patch` event inside a worker. Natively, `tool_use_id` reads
 `exec-<UUID>`: the ID of the item that the call made, not the `call_id`

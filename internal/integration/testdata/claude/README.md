@@ -6,11 +6,12 @@ Seamark's existing Claude hook already reads (`session_id`, `tool_name`,
 `tool_input.file_path`, `tool_use_id`). Local CLI at capture time:
 Claude Code 2.1.270. Values are **synthetic**: paths, session ids, and
 transcript paths are placeholders. No fixture is a raw capture from a
-live session. Three directories are the exceptions, and the README of
+live session. Four directories are the exceptions, and the README of
 each names its provenance: `native/` holds sanitized native payloads of
-Claude Code 2.1.300, and `timing/` and `guard/` hold the sanitized
-native timing and guard recordings of Claude Code 2.1.319, which the
-replay tests read.
+Claude Code 2.1.300, `timing/` and `guard/` hold the sanitized native
+timing and guard recordings of Claude Code 2.1.319, and `post-edit/`
+holds the sanitized native post-edit recording of Claude Code 2.1.325.
+The replay tests read the last three.
 
 Files:
 

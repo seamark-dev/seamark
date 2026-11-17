@@ -1,0 +1,19 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000004",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000004.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000004",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/workspace/native/sentinel/edit.txt",
+    "old_string": "alpha",
+    "new_string": "beta",
+    "replace_all": false
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000008"
+}
