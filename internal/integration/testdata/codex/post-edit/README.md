@@ -19,9 +19,10 @@ and `../guard` come from the same client version.
 `scripts/native-record.sh` and the sanitizer
 `scripts/native-record-sanitize.py` at commit `facb617` of the release
 branch, with the Seamark binary of that commit (`v0.8.0-353-gfacb617`).
-The sanitizer of a later commit of the same branch, with the time shift
-for Claude Code recordings, gives the same bytes from the same raw
-recording.
+The sanitizer of a later commit of the same branch made this copy from
+the same raw recording. It also masks the commit ID in each
+`session_meta` (see "Sanitization"). The copy differs from the output
+of the sanitizer of `facb617` only in those 5 values.
 
 The script ran each prompt in a new thread with `codex exec --json` on
 the model `gpt-5.6-luna` with low reasoning, in the `workspace-write`
@@ -206,7 +207,10 @@ base instructions, the text of every developer message, the encrypted
 reasoning, the rate limits, and the world state of the rollouts with
 the marker `<sanitized>`, and kept the section tags. The `tools` of
 each `additional_tools` record also read `<sanitized>`, because that
-record lists the tools of the operator's environment. The sanitizer
+record lists the tools of the operator's environment. The
+`commit_hash` of each `session_meta` reads `<sanitized>` too: Codex
+writes the HEAD commit of the scratch repository there, and a commit ID
+hashes the commit time and the local time offset. The sanitizer
 kept the tool outputs. The 2 post-edit records are developer messages,
 so only `guard-context.jsonl` keeps their text, as the script copied
 them from the rollouts.
@@ -238,7 +242,8 @@ placeholders and the synthetic IDs.
 
 Privacy check before the copy landed: a scan of every file found no
 home path, user name, scratch directory name, e-mail address,
-credential text, local time offset, real ID, or time between 08:00 and
+credential text, local time offset, real ID, commit ID of the scratch
+repository (in full or cut to 7 hex digits), or time between 08:00 and
 21:00 UTC.
 
 ## Files
