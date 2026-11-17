@@ -10,6 +10,7 @@ package integration
 // ones.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -672,4 +673,161 @@ func TestNativeRecordSanitizeRefusesACommitIDOfTheScratchRepository(t *testing.T
 		require.Error(t, err, got)
 		assert.Contains(t, got, "git cannot read the commit IDs of the scratch repository")
 	})
+}
+
+// The made-up agent role of the operator's own Codex configuration in the
+// role tests. The name and the description of such a role are the
+// operator's own text, so they must not ship.
+const (
+	codexOperatorRole     = "reviewer-q7"
+	codexOperatorRoleText = "Reviews a change with the house-rules skill."
+)
+
+// codexRoles is the role list of a spawn tool declaration of codex-cli
+// 0.169.0, with a newline as the line break: the operator role and the
+// built-in worker role.
+const codexRoles = "\n  // " + codexOperatorRole + ": {\n  // " + codexOperatorRoleText + "\n  // }" +
+	"\n  // worker: {\n  // Use for execution and production work.\n  // }"
+
+// codexSpawnDeclaration returns a spawn tool declaration of codex-cli
+// 0.169.0 with the given text after the role list header.
+func codexSpawnDeclaration(roles string) string {
+	return "declare const tools: { multi_agent_v1__spawn_agent(args: {\n" +
+		"  // Agent type override for the new agent.\n" +
+		"  // Available roles:" + roles + "\n" +
+		"  agent_type?: string;\n}): Promise<{ agent_id: string; }>; };"
+}
+
+// codexToolListText returns the text that a script prints for a tool
+// list with the spawn tool. The text is JSON, so each line break of the
+// declaration becomes the escape \n. It keeps < and > as they are, as the
+// script prints them.
+func codexToolListText(t *testing.T, declaration string) string {
+	t.Helper()
+
+	var b bytes.Buffer
+
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	require.NoError(t, enc.Encode([]map[string]string{{"name": "multi_agent_v1__spawn_agent", "description": declaration}}))
+
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// codexToolOutput returns a change of the fixture that writes the text
+// into the custom tool call output of the root rollout.
+func codexToolOutput(t *testing.T, text string) func(f *codexRecordFixture) {
+	t.Helper()
+
+	return func(f *codexRecordFixture) {
+		quoted, err := json.Marshal(text)
+		require.NoError(t, err)
+
+		line := strings.Replace(f.rollout[8], `"text":"ok"`, `"text":`+string(quoted), 1)
+		require.NotEqual(t, f.rollout[8], line, "the fixture line holds the tool output")
+
+		f.rollout[8] = line
+	}
+}
+
+// TestNativeRecordSanitizeMasksTheCodexAgentRoles proves the role list
+// mask. The spawn tool of Codex lists the roles of the operator's own
+// Codex configuration beside the built-in roles, and a tool output or a
+// model text can print the tool. The whole list becomes the marker, with
+// either line break form. The header, the rest of the text, the record
+// type, and the IDs stay. The replay reads no role, so the role that a
+// hook names for the worker stays as recorded.
+func TestNativeRecordSanitizeMasksTheCodexAgentRoles(t *testing.T) {
+	requireTools(t, "python3")
+
+	fixture := newCodexRecordFixture(t)
+	codexToolOutput(t, codexToolListText(t, codexSpawnDeclaration(codexRoles)))(fixture)
+	codexModelText(t, codexSpawnDeclaration(codexRoles))(fixture)
+	f := fixture.write(t)
+
+	got, err := f.sanitize(t, f.out)
+	require.NoError(t, err, got)
+
+	masked := codexSpawnDeclaration(" <sanitized>")
+	rollout := codexLines(t, filepath.Join(f.out, codexRootCopy))
+
+	synthetic := map[string]string{}
+	for _, e := range codexExpected() {
+		synthetic[e.Real] = e.Synthetic
+	}
+
+	t.Run("a tool output keeps the record and only the role list is masked", func(t *testing.T) {
+		assert.Equal(t, map[string]any{
+			"type": "custom_tool_call_output", "id": "ctco_" + synthetic[codexOutput], "call_id": synthetic[codexCall],
+			"output": []any{map[string]any{"type": "input_text", "text": codexToolListText(t, masked)}},
+		}, codexPayload(rollout[8]))
+	})
+
+	t.Run("a model text with newlines is masked too", func(t *testing.T) {
+		text := codexPayload(rollout[len(rollout)-1])["content"].([]any)[0].(map[string]any)["text"]
+		assert.Equal(t, masked, text)
+	})
+
+	t.Run("no file holds the operator role", func(t *testing.T) {
+		for name, data := range outputFiles(t, f.out) {
+			assert.NotContains(t, data, codexOperatorRole, name)
+			assert.NotContains(t, data, "house-rules", name)
+		}
+	})
+
+	t.Run("the hooks keep the role of the worker", func(t *testing.T) {
+		hook := readJSON(t, filepath.Join(f.out, "hooks", "005-SubagentStart.json"))
+		assert.Equal(t, "worker", hook["agent_type"])
+	})
+}
+
+// TestNativeRecordSanitizeRefusesAnUnmaskedCodexAgentRole proves the
+// residual rule of the agent roles. The mask changes only the rollouts,
+// and only a list after its header. A role entry anywhere else refuses
+// the copy: in an extra file, in a hook payload, or in a rollout text
+// without the header. The message names the file and the kind, never the
+// role.
+func TestNativeRecordSanitizeRefusesAnUnmaskedCodexAgentRole(t *testing.T) {
+	requireTools(t, "python3")
+
+	for _, tc := range []struct {
+		name, want string
+		change     func(t *testing.T, f *codexRecordFixture)
+	}{
+		{"a tool output in an extra file", "guard-context.jsonl: holds an unmasked agent role",
+			func(t *testing.T, f *codexRecordFixture) {
+				quoted, err := json.Marshal(codexToolListText(t, codexSpawnDeclaration(codexRoles)))
+				require.NoError(t, err)
+
+				f.extras["guard-context.jsonl"][0] = strings.Replace(f.extras["guard-context.jsonl"][0],
+					`"output":"blocked"`, `"output":`+string(quoted), 1)
+			}},
+		{"a tool response in a hook payload", "hooks/004-PostToolUse.json: holds an unmasked agent role",
+			func(t *testing.T, f *codexRecordFixture) {
+				var payload map[string]any
+				require.NoError(t, json.Unmarshal([]byte(f.hooks[3].payload), &payload))
+
+				payload["tool_response"] = codexSpawnDeclaration(codexRoles)
+				data, err := json.Marshal(payload)
+				require.NoError(t, err)
+
+				f.hooks[3].payload = string(data)
+			}},
+		{"a role entry without the header", "sessions/2026/11/10/rollout-<time>-<id>.jsonl: holds an unmasked agent role",
+			func(t *testing.T, f *codexRecordFixture) {
+				codexModelText(t, "The roles are:"+codexRoles)(f)
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newCodexRecordFixture(t)
+			tc.change(t, fixture)
+			f := fixture.write(t)
+
+			got, err := f.sanitize(t, f.out)
+			require.Error(t, err, got)
+			assert.Contains(t, got, tc.want)
+			assert.NotContains(t, got, codexOperatorRole, "the message holds no role name")
+			assert.NotContains(t, got, "house-rules", "the message holds no role description")
+		})
+	}
 }

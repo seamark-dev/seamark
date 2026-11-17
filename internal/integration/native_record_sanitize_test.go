@@ -979,3 +979,23 @@ func TestNativeRecordSanitizeRefusesAClaudeCommitID(t *testing.T) {
 	assert.Contains(t, got, "hooks/006-PostToolUse.json: holds a commit ID of the scratch repository")
 	assert.NotContains(t, got, head[:7], "the message holds no part of the commit ID")
 }
+
+// TestNativeRecordSanitizeKeepsARoleListInAClaudeCopy proves that the
+// agent role mask and its residual rule belong to the Codex pass. A
+// Claude Code copy keeps the text of a Codex role list as it is, so the
+// Claude path gives the same bytes as before.
+func TestNativeRecordSanitizeKeepsARoleListInAClaudeCopy(t *testing.T) {
+	requireTools(t, "python3")
+
+	declaration := codexSpawnDeclaration(codexRoles)
+	f := addDenyPayload(t, newSanitizeFixture(t), []any{}, map[string]any{
+		"session_id": sanitizeSession, "hook_event_name": "PostToolUse", "tool_name": "Bash",
+		"tool_response": map[string]any{"stdout": declaration},
+	})
+
+	got, err := f.sanitize(t, f.out)
+	require.NoError(t, err, got)
+
+	hook := readJSON(t, filepath.Join(f.out, "hooks", "006-PostToolUse.json"))
+	assert.Equal(t, map[string]any{"stdout": declaration}, hook["tool_response"])
+}
