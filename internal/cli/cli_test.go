@@ -88,6 +88,36 @@ func TestVersionCommand(t *testing.T) {
 	assert.Contains(t, out, "seamark")
 }
 
+// TestIndexKeepsAnUntrackedDatabaseInTheWorkspaceCurrent covers --db
+// with an untracked file inside the workspace. The fingerprint hashed the
+// file that every run writes, so every run rebuilt and said that the
+// workspace changed during indexing, and status and why called the index
+// stale. The second run skips now, no run names a change, and status and
+// why read the fingerprint that the run stored.
+func TestIndexKeepsAnUntrackedDatabaseInTheWorkspaceCurrent(t *testing.T) {
+	root := writeFixture(t)
+	gitify(t, root)
+
+	db := filepath.Join(root, "custom.db")
+
+	_, stderr, err := runErr(t, "-C", root, "--db", db, "index")
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "the workspace changed during indexing")
+
+	out, stderr, err := runErr(t, "-C", root, "--db", db, "index")
+	require.NoError(t, err)
+	assert.Contains(t, out, "index already up to date")
+	assert.NotContains(t, stderr, "the workspace changed during indexing")
+
+	status, err := run(t, "-C", root, "--db", db, "status")
+	require.NoError(t, err)
+	assert.Contains(t, status, "workspace      current", status)
+
+	_, stderr, err = runErr(t, "-C", root, "--db", db, "why", "helper")
+	require.NoError(t, err)
+	assert.NotContains(t, stderr, "the workspace changed since the last index")
+}
+
 func TestIndexThenWhy(t *testing.T) {
 	root := writeFixture(t)
 
@@ -352,6 +382,59 @@ func TestOrientCommand(t *testing.T) {
 	assert.Contains(t, out, "most-called")
 }
 
+// Every `seamark ...` route that the CLI orient footer offers runs in
+// the state where orient prints. A route that fails there misleads the
+// user, so the test runs each one with fixture values.
+func TestOrientFooterRoutesRun(t *testing.T) {
+	root := writeFixture(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", "b.go"),
+		[]byte("package pkg\n\n// Helper does the work.\nfunc Helper() {}\n"), 0o644))
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	out, err := run(t, "-C", root, "orient")
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	last := lines[len(lines)-1]
+	require.True(t, strings.HasPrefix(last, "next: "), "orient ends with its footer: %q", last)
+
+	var routes []string
+
+	for _, m := range regexp.MustCompile("`(seamark [^`]+)`").FindAllStringSubmatch(last, -1) {
+		routes = append(routes, m[1])
+	}
+
+	require.NotEmpty(t, routes, "the CLI footer offers at least one seamark route")
+
+	for _, route := range routes {
+		var variants []string
+
+		switch {
+		case strings.Contains(route, "<symbol|file>"):
+			variants = []string{
+				strings.ReplaceAll(route, "<symbol|file>", "Helper"),
+				strings.ReplaceAll(route, "<symbol|file>", "pkg/b.go"),
+			}
+		case strings.Contains(route, "<dir>"):
+			variants = []string{strings.ReplaceAll(route, "<dir>", "pkg")}
+		default:
+			variants = []string{route}
+		}
+
+		for _, v := range variants {
+			args := append([]string{"-C", root}, strings.Fields(strings.TrimPrefix(v, "seamark "))...)
+
+			_, err := run(t, args...)
+			assert.NoError(t, err, "the footer route %q runs", v)
+		}
+	}
+
+	assert.NotContains(t, last, "`change_set` before", "the CLI footer labels change_set as MCP")
+}
+
 func TestStatusReportsHealth(t *testing.T) {
 	root := writeFixture(t)
 	gitify(t, root)
@@ -403,7 +486,7 @@ func TestIndexAndStatusNameUnstagedDeletions(t *testing.T) {
 
 	out, err = run(t, "-C", root, "status")
 	require.NoError(t, err)
-	assert.Contains(t, out, "parsed         1 of 2 seen files (0 skipped by config)\n"+
+	assert.Contains(t, out, "parsed         1 of 2 seen files (0 skipped by config, 1 with no language extractor)\n"+
 		"deleted        1 tracked file in the working tree (deletion not staged)\n")
 	assert.NotContains(t, out, "PARSE ERRORS")
 
@@ -412,13 +495,15 @@ func TestIndexAndStatusNameUnstagedDeletions(t *testing.T) {
 
 	var s struct {
 		Coverage struct {
-			FilesDeleted int `json:"files_deleted"`
-			ParseErrors  int `json:"parse_errors"`
+			FilesDeleted     int `json:"files_deleted"`
+			ParseErrors      int `json:"parse_errors"`
+			FilesUnsupported int `json:"files_unsupported"`
 		} `json:"coverage"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &s))
 	assert.Equal(t, 1, s.Coverage.FilesDeleted)
 	assert.Zero(t, s.Coverage.ParseErrors)
+	assert.Equal(t, 1, s.Coverage.FilesUnsupported, "go.mod has no language extractor; the deleted b.go is not counted")
 
 	// A clean tree has no note.
 	clean := writeFixture(t)
@@ -499,6 +584,53 @@ func TestCheckNotesWholeFileDeletion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "note:")
 	assert.Contains(t, out, "mystery.go", "the deleted path must surface in the uncertainty note")
+}
+
+// TestCheckNotesAChangedValueInTextAndJSON proves that a change to a
+// const that a function passes to exec.CommandContext reads as unknown
+// reach in the text and in the JSON of check. The index records no edge
+// from the function to the const, so the change reaches no effect.
+func TestCheckNotesAChangedValueInTextAndJSON(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/fix\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte(`package main
+
+import (
+	"context"
+	"os/exec"
+	"time"
+)
+
+const timeout = 15 * time.Second
+
+func main() {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	_ = exec.CommandContext(ctx, "git", "status").Run()
+}
+`), 0o644))
+
+	_, err := run(t, "-C", root, "index")
+	require.NoError(t, err)
+
+	diff := "--- a/a.go\n+++ b/a.go\n@@ -9 +9 @@\n" +
+		"-const timeout = 15 * time.Second\n+const timeout = 30 * time.Second\n"
+	note := "1 changed value or type has no effects of its own (timeout) — " +
+		"seamark does not track readers of a value, so its effect reach is unknown, not clean"
+
+	out, _, err := runIn(t, diff, "-C", root, "check")
+	require.NoError(t, err)
+	assert.Contains(t, out, "note: "+note)
+
+	out, _, err = runIn(t, diff, "-C", root, "check", "--json")
+	require.NoError(t, err)
+
+	var d gate.Decision
+	require.NoError(t, json.Unmarshal([]byte(out), &d))
+	assert.Equal(t, gate.VerdictAllow, d.Verdict)
+	assert.Empty(t, d.Effects)
+	assert.Equal(t, []string{note}, d.Notes)
 }
 
 func TestIndexBackfillsCoverageSummary(t *testing.T) {
@@ -652,7 +784,7 @@ func TestLessonsHookOncePerContextResetsAfterCompaction(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, strings.TrimSpace(second), "the same context receives no duplicate lesson")
 
-	_, _, err = runIn(t, `{"session_id":"session-one"}`,
+	_, _, err = runIn(t, `{"session_id":"session-one","hook_event_name":"PostCompact"}`,
 		"-C", root, "lessons", "--hook-reset")
 	require.NoError(t, err)
 
@@ -699,12 +831,13 @@ func TestLessonsHookOncePerContextNeverHidesAdviceFromASubagent(t *testing.T) {
 	assert.Contains(t, hook(child), "RUF001", "a subagent gets repeated delivery")
 
 	// A reset that fires inside the subagent does not reach the parent.
-	_, _, err = runIn(t, `{"session_id":"session-one","agent_id":"agent-7"}`,
+	_, _, err = runIn(t, `{"session_id":"session-one","agent_id":"agent-7","hook_event_name":"PostCompact"}`,
 		"-C", root, "lessons", "--hook-reset")
 	require.NoError(t, err)
 	assert.Empty(t, hook(parent))
 
-	_, _, err = runIn(t, `{"session_id":"session-one"}`, "-C", root, "lessons", "--hook-reset")
+	_, _, err = runIn(t, `{"session_id":"session-one","hook_event_name":"PostCompact"}`,
+		"-C", root, "lessons", "--hook-reset")
 	require.NoError(t, err)
 	assert.Contains(t, hook(parent), "RUF001")
 }
@@ -732,8 +865,8 @@ func TestLessonsHookClientCodexAdvisesOnAWholePatch(t *testing.T) {
 		} `json:"hookSpecificOutput"`
 	}
 
-	// The Codex adapter reads no receiver yet, so the advice repeats under
-	// once-per-context.
+	// The Codex adapter names the receiver, but no reset of a Codex
+	// context is verified, so the advice repeats under once-per-context.
 	for range 2 {
 		out, _, err := runIn(t, string(payload), "-C", root, "lessons", "--hook", "--client", "codex")
 		require.NoError(t, err)
@@ -755,7 +888,8 @@ func TestLessonsHookClientCodexAdvisesOnAWholePatch(t *testing.T) {
 	assert.Equal(t, "codex", firings[0].Client)
 	assert.Equal(t, "apply_patch", firings[0].Tool)
 	assert.Equal(t, []string{"api/handler.go", "db/handler.go"}, firings[0].Files)
-	assert.Empty(t, firings[0].ContextSHA)
+	assert.Len(t, firings[0].ContextSHA, 64, "the record names the lane that the event reported")
+	assert.Equal(t, firings[0].ContextSHA, firings[1].ContextSHA, "both edits come from one lane")
 
 	stats, err := run(t, "-C", root, "lessons", "--stats")
 	require.NoError(t, err)
@@ -843,10 +977,13 @@ func TestLessonsHookClientSelectorRules(t *testing.T) {
 	assert.Contains(t, stderr, `unknown hook client "nope" (known: claude, codex)`)
 
 	// The selector belongs to hook mode. Inference has its own setting.
+	// The text grows with each hook mode, so the test asserts only the
+	// parts that every form keeps.
 	_, err = run(t, "-C", root, "lessons", "--list", "--client", "codex")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--client applies to --hook and --hook-reset only")
-	assert.Contains(t, err.Error(), "agent.cli")
+	assert.True(t, strings.HasPrefix(err.Error(), "--client applies to --hook, --hook-reset, "), err.Error())
+	assert.True(t, strings.HasSuffix(err.Error(),
+		" only; the agent that --distill runs is agent.cli in .seamark/config.yaml"), err.Error())
 }
 
 func TestLessonsHookAlwaysRemainsTheDefault(t *testing.T) {
@@ -974,6 +1111,12 @@ func TestLessonsList(t *testing.T) {
 	assert.Contains(t, out, "E702", "lessons inside the region stay")
 	assert.NotContains(t, out, "RUF001", "lessons outside the region are filtered")
 	assert.Contains(t, out, "1 total")
+
+	// An empty region offers review mining with the condition it needs.
+	out, err = run(t, "-C", root, "lessons", "--region", "nowhere")
+	require.NoError(t, err)
+	assert.Contains(t, out, "no review lessons under nowhere — widen the region, or run "+
+		"`seamark index --reviews` (needs gh authenticated and a github.com remote)")
 }
 
 func TestLessonsDistillDryRun(t *testing.T) {
@@ -1609,6 +1752,35 @@ func TestPlanAnnotationsReportsDirectTriggerDelivery(t *testing.T) {
 		notes[p.ID][0])
 }
 
+// TestPlanAnnotationsKeepsTheHandRouteOfAPendingRow covers the distill
+// plan, which holds pending rows. Such a row has no linked pin to lose, so
+// it keeps the hand words.
+func TestPlanAnnotationsKeepsTheHandRouteOfAPendingRow(t *testing.T) {
+	root := writeFixture(t)
+
+	st, err := store.Open(store.DefaultPath(root))
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{{
+		ID: 1, Path: "api/gone.go", Body: "b", Source: model.SourceFixConventional,
+	}}))
+
+	p := model.Proposal{
+		ID: 1, Rule: "keep-boundary-synchronized", Region: "api", TriggerPaths: []string{"api/gone.go"},
+		Members: []int64{1}, Status: model.ProposalProposed, Note: "Keep the boundary synchronized.",
+	}
+
+	notes, flagged, err := planAnnotations(st, &reviews.Config{}, root, []model.Proposal{p})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"p1"}, flagged)
+	assert.Contains(t, notes[p.ID], "trigger api/gone.go — directly cited by the evidence but not deliverable: "+
+		"the region set is full or the path is absent from the working tree; "+
+		"review the trigger or edit regions in .seamark/lessons.yaml by hand")
+}
+
 // TestRetargetKeepsStoredTriggerScope pins the unified recompute: a pin
 // already targeting a confirmed trigger shows no drift, while a broad
 // evidence-scoped pin is retargeted to that precise edit surface.
@@ -1677,55 +1849,70 @@ func TestRetargetKeepsStoredTriggerScope(t *testing.T) {
 
 // TestLedgerShowsBlockedTrigger pins finding visibility: a stored
 // trigger that vanished from the working tree produces no drift and no
-// note advisory — the ledger must still say so.
+// note advisory — the ledger must still say so. A hand edit of the
+// regions unlinks the pin of an applied row, so only a pending row keeps
+// the hand words.
 func TestLedgerShowsBlockedTrigger(t *testing.T) {
-	root := writeFixture(t)
-
-	for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
-		p := filepath.Join(root, filepath.FromSlash(rel))
-
-		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
-		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	cases := []struct {
+		name   string
+		status string
+		route  string
+	}{
+		{"applied", model.ProposalApplied, "review the trigger or edit its regions in seamark tui, Lessons › Pins, with i"},
+		{"pending", model.ProposalProposed, "review the trigger or edit regions in .seamark/lessons.yaml by hand"},
 	}
 
-	_, err := run(t, "-C", root, "index")
-	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeFixture(t)
 
-	st, err := store.Open(store.DefaultPath(root))
-	require.NoError(t, err)
+			for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
+				p := filepath.Join(root, filepath.FromSlash(rel))
 
-	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
-		return tx.InsertCoChange(model.CoChange{
-			FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
-			Together: 38, Total: 400, Lift: 6.6,
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+				require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+			}
+
+			_, err := run(t, "-C", root, "index")
+			require.NoError(t, err)
+
+			st, err := store.Open(store.DefaultPath(root))
+			require.NoError(t, err)
+
+			require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+				return tx.InsertCoChange(model.CoChange{
+					FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
+					Together: 38, Total: 400, Lift: 6.6,
+				})
+			}))
+
+			require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+				{ID: 1, Path: "web/src/api/schema.ts", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+				{ID: 2, Path: "cmd/a.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+				{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+			}))
+
+			require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
+				Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
+				Regions:      []string{"web/src/api", "cmd", "internal"},
+				TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
+				Note: "n", Members: []int64{1, 2, 3},
+				Agent: "claude/v4", Status: tc.status,
+			}))
+			require.NoError(t, st.Close())
+
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+				"pin:\n  - rule: capped-pin\n    region: web/src/api\n"+
+					"    regions: [web/src/api, cmd, internal]\n    note: n\n"), 0o644))
+
+			out, err := run(t, "-C", root, "lessons", "--proposals")
+			require.NoError(t, err)
+
+			assert.Contains(t, out, "trigger api/schemas.py — confirmed by co-change (38 shared commits) but not deliverable: "+
+				"the region set is full or the path is absent from the working tree; "+tc.route+"\n")
+			assert.NotContains(t, out, "regions now:", "no verified trigger leaves evidence coverage unchanged")
 		})
-	}))
-
-	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
-		{ID: 1, Path: "web/src/api/schema.ts", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-		{ID: 2, Path: "cmd/a.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-		{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-	}))
-
-	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
-		Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
-		Regions:      []string{"web/src/api", "cmd", "internal"},
-		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
-		Note: "n", Members: []int64{1, 2, 3},
-		Agent: "claude/v4", Status: model.ProposalApplied,
-	}))
-	require.NoError(t, st.Close())
-
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
-		"pin:\n  - rule: capped-pin\n    region: web/src/api\n"+
-			"    regions: [web/src/api, cmd, internal]\n    note: n\n"), 0o644))
-
-	out, err := run(t, "-C", root, "lessons", "--proposals")
-	require.NoError(t, err)
-
-	assert.Contains(t, out, "confirmed by co-change (38 shared commits) but not deliverable")
-	assert.Contains(t, out, "absent from the working tree")
-	assert.NotContains(t, out, "regions now:", "no verified trigger leaves evidence coverage unchanged")
+	}
 }
 
 // TestLedgerNamesPrunedPinsInsteadOfAdvising pins the p45 lesson from
@@ -2416,6 +2603,26 @@ func TestUserDocsCoverEveryCommand(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestDocsSayWhatMCounts keeps the docs explaining M in "N/M commits".
+// The editors page must quote the real LSP diagnostic text.
+func TestDocsSayWhatMCounts(t *testing.T) {
+	read := func(path string) string {
+		data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(path)))
+		require.NoError(t, err)
+
+		return strings.Join(strings.Fields(string(data)), " ")
+	}
+
+	history := read("docs/repository-history.md")
+	assert.Contains(t, history, "counts in the mined window")
+	assert.Contains(t, history, "not the commit count of either file")
+	assert.Contains(t, history, "more than 30 other changed files")
+
+	editors := read("docs/editors.md")
+	assert.Contains(t, editors, "usually changed together, not in this change:")
+	assert.NotContains(t, editors, "38 of 58", "a diagnostic needs lift 2.0, which 38/58 cannot reach")
 }
 
 // TestSkillsNameOnlyRealCommands mirrors TestUserDocsCoverEveryCommand

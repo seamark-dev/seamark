@@ -1,9 +1,9 @@
 package integration
 
 // The setup coordinator. It turns one SetupRequest into one complete
-// SetupPlan before anything is written, then applies the plan with
+// SetupPlan before it writes anything. It then applies the plan with
 // stale-input checks. The native merge semantics (JSON, TOML) stay in
-// the client adapters; this file owns only what every client shares:
+// the client adapters. This file owns only what every client shares:
 // selection, input guards, one write per document, skill destinations,
 // ordered application, and accurate results.
 //
@@ -29,6 +29,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/hooks"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -53,29 +54,20 @@ func isCleanRel(rel string) bool {
 		rel != "." && rel != ".." && !strings.HasPrefix(rel, "../")
 }
 
-// readOnlyReason is the reason the engine never replaces a file without
-// the owner write bit.
-func readOnlyReason(mode fs.FileMode) string {
-	return fmt.Sprintf("the file is read-only (%s); seamark does not replace it", mode)
-}
-
-// deniedReason is the reason the engine never replaces a file that this
-// user may not write. The mode can show the owner write bit, so the text
-// does not quote it.
-const deniedReason = "this user cannot write the file; seamark does not replace it"
-
 // WriteRefusal returns the reason the engine refuses to replace the file
 // that guard observed, or an empty string. An editor that reads a file
 // itself uses it to show the refusal before it plans a write. The engine
-// and the editors share these texts, so they cannot drift apart.
+// and the editors share these texts, so a refusal reads the same in both.
 func WriteRefusal(guard FileGuard) string {
 	switch {
 	case guard.Linked != "":
 		return approve.LinkReason(guard.Linked)
 	case guard.Exists && guard.Mode&0o200 == 0:
-		return readOnlyReason(guard.Mode)
+		return fmt.Sprintf("the file is read-only (%s); seamark does not replace it", guard.Mode)
 	case guard.Exists && guard.Denied:
-		return deniedReason
+		// The mode can show the owner write bit, so the text does not
+		// quote it.
+		return "this user cannot write the file; seamark does not replace it"
 	}
 
 	return ""
@@ -110,8 +102,9 @@ func ReadGuarded(root, rel string) (FileGuard, []byte, error) {
 // a client all read the document here, so they cannot disagree about
 // it. The reader refuses a link, and a missing file is an empty
 // document. The guard of a file that does not parse records the file,
-// so the plan can tell a parse error from a read error. A parse error
-// does not name the file, so the caller names it.
+// so ownedReadError can tell a parse error from a read error. The
+// reader does not add the file name to a parse error, so the parser of
+// the client must add it.
 func readOwnedDocument(root, rel string, parse func([]byte) (map[string]any, error)) (FileGuard, map[string]any, error) {
 	guard, data, err := ReadGuarded(root, rel)
 	if err != nil {
@@ -125,6 +118,34 @@ func readOwnedDocument(root, rel string, parse func([]byte) (map[string]any, err
 	document, err := parse(data)
 
 	return guard, document, err
+}
+
+// exactParser returns a parser for readOwnedDocument that keeps every
+// number and command text as written (hooks.ParseDocumentExact). A file
+// that holds the user's own settings or a reviewed hook text needs that.
+// readOwnedDocument adds no file name, so a parse error names rel here.
+func exactParser(rel string) func([]byte) (map[string]any, error) {
+	return func(data []byte) (map[string]any, error) {
+		document, err := hooks.ParseDocumentExact(data)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", rel, err)
+		}
+
+		return document, nil
+	}
+}
+
+// ownedReadError turns an error of readOwnedDocument into the error of
+// a plan. A guard that records the file means that the file exists and
+// does not parse. The user must then fix or move the file, and the error
+// says so. Every other error stays as the reader wrote it, because it
+// already names the document.
+func ownedReadError(guard FileGuard, err error) error {
+	if guard.Exists {
+		return fmt.Errorf("%w (fix or move it, then re-run)", err)
+	}
+
+	return err
 }
 
 // ReadInput reads a file that setup only reads, or at most extends. The
@@ -151,8 +172,9 @@ func ReadInput(root, rel string) (FileGuard, []byte, error) {
 
 	if err != nil {
 		// The reason names the document once, by its repository path. An
-		// error of the file system names the absolute path, so only its
-		// cause is kept, and the cause stays wrapped for errors.Is.
+		// error of the file system names the absolute path, so the reader
+		// keeps only its cause. The cause stays wrapped, so errors.Is still
+		// finds it.
 		var pathErr *fs.PathError
 		if errors.As(err, &pathErr) {
 			err = pathErr.Err
@@ -178,6 +200,20 @@ func readReason(rel string, err error) string {
 	}
 
 	return strings.TrimPrefix(err.Error(), rel+": ")
+}
+
+// uncheckedSourceFinding warns that setup cannot read or parse rel, a
+// hook source that setup does not own. what names the hooks that setup
+// did not look for in rel, for example "inline seamark hooks". Setup
+// continues, because the file is only an input. Both clients use this
+// one text, so the warnings read alike.
+func uncheckedSourceFinding(rel, what string, err error) Finding {
+	return Finding{
+		Level:  FindingWarning,
+		Path:   rel,
+		Reason: "not checked for " + what + ": " + render.Sanitize(readReason(rel, err)),
+		Action: "fix the file, then run the command again",
+	}
 }
 
 // StatGuarded observes a create-only file by its existence alone. An
@@ -215,26 +251,30 @@ func StatGuarded(root, rel string) (FileGuard, error) {
 	return guard, nil
 }
 
-// observe reads the guarded path again, by the rule of the guard's kind.
-func observe(root string, g FileGuard) (FileGuard, error) {
+// observeContent reads a guarded file by the rule of its guard kind and
+// returns the observed guard with the content. Apply observes a file
+// through this reader too, so preview and apply judge staleness by one
+// rule. For a create-only file, it observes the existence alone. Setup
+// never looks inside a file that it must not replace, so the content is
+// empty here.
+func observeContent(root string, g FileGuard) (FileGuard, []byte, error) {
 	switch g.Kind {
 	case GuardInput:
-		now, _, err := ReadInput(root, g.Path)
-
-		return now, err
+		return ReadInput(root, g.Path)
 	case GuardPresence:
-		return StatGuarded(root, g.Path)
-	default:
-		now, _, err := ReadGuarded(root, g.Path)
+		now, err := StatGuarded(root, g.Path)
 
-		return now, err
+		return now, nil, err
+	default:
+		return ReadGuarded(root, g.Path)
 	}
 }
 
 // verifyGuard observes the guarded file again and compares. A changed
-// file, a new link, and a changed file type all make the plan stale.
+// file, a new link, and a changed file type all make the plan stale. A
+// guard check compares the guard alone, so it drops the content.
 func verifyGuard(root string, g FileGuard) error {
-	now, err := observe(root, g)
+	now, _, err := observeContent(root, g)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrStalePlan, err)
 	}
@@ -247,14 +287,14 @@ func verifyGuard(root string, g FileGuard) error {
 }
 
 // PlanSetup builds the complete plan for one request and writes
-// nothing. Every selected client and every common document is planned
-// and validated here, so a malformed selected file stops the run before
-// the first write. A client that is not in the request is never read: a
-// broken configuration of an unselected client cannot block the run.
+// nothing. It plans and validates every selected client and every
+// common document, so a malformed selected file stops the run before
+// the first write. It never reads a client that is not in the request,
+// so a broken configuration of an unselected client cannot block the run.
 //
-// An intent the client does not support is removed and reported as an
-// informational finding. A missing optional capability is not a broken
-// installation.
+// It removes an intent that the client does not support and reports it
+// as an informational finding. A missing optional capability is not a
+// broken installation.
 func PlanSetup(reg *Registry, req SetupRequest) (*SetupPlan, error) {
 	if reg == nil {
 		return nil, errors.New("setup: no client registry")
@@ -283,6 +323,18 @@ func PlanSetup(reg *Registry, req SetupRequest) (*SetupPlan, error) {
 		// resolveIntents already proved the ID is registered.
 		client, _ := reg.Lookup(intent.ClientID)
 
+		// lessonCheckIntent runs before supportedIntent. An enforce request
+		// for a client without a guard must fail, but supportedIntent would
+		// only skip it with the hooks.
+		var lessonFindings []Finding
+
+		intent, lessonFindings, err = lessonCheckIntent(client, intent)
+		if err != nil {
+			return nil, err
+		}
+
+		b.plan.Findings = append(b.plan.Findings, lessonFindings...)
+
 		effective, findings := supportedIntent(client, intent)
 		b.plan.Findings = append(b.plan.Findings, findings...)
 
@@ -294,8 +346,9 @@ func PlanSetup(reg *Registry, req SetupRequest) (*SetupPlan, error) {
 			continue
 		}
 
-		// The error is returned as the adapter wrote it. It already names
-		// the document, and init has always shown it without a client name.
+		// PlanSetup returns the error as the adapter wrote it. The error
+		// already names the document, and init always showed it without a
+		// client name.
 		clientPlan, err := client.Setup.Plan(req.Root, req.Binary, effective)
 		if err != nil {
 			return nil, err
@@ -326,7 +379,7 @@ func PlanSetup(reg *Registry, req SetupRequest) (*SetupPlan, error) {
 
 // resolveIntents validates the requested clients and returns their
 // intents in registry order. An unknown ID fails before any planning.
-// The same client twice is accepted when both entries agree; two
+// It accepts the same client twice when both entries agree. Two
 // different intents for one client have no defined meaning, so they
 // fail.
 func resolveIntents(reg *Registry, requested []ClientSetup) ([]ClientSetup, error) {
@@ -337,6 +390,10 @@ func resolveIntents(reg *Registry, requested []ClientSetup) ([]ClientSetup, erro
 		if m := intent.GateMode; m != "" && m != hooks.ModeWarn && m != hooks.ModeEnforce {
 			return nil, fmt.Errorf("setup: client %q: gate mode must be %s or %s, got %q",
 				intent.ClientID, hooks.ModeWarn, hooks.ModeEnforce, m)
+		}
+
+		if err := validLessonIntent(intent); err != nil {
+			return nil, err
 		}
 
 		if seen, dup := byID[intent.ClientID]; dup && seen != intent {
@@ -370,10 +427,7 @@ func supportedIntent(c Client, intent ClientSetup) (ClientSetup, []Finding) {
 		if *requested && !supported {
 			*requested = false
 
-			findings = append(findings, Finding{
-				Level:  FindingInfo,
-				Reason: fmt.Sprintf("%s: %s not supported by this integration; skipped", c.Name, what),
-			})
+			findings = append(findings, skippedFinding(c, what))
 		}
 	}
 
@@ -383,12 +437,26 @@ func supportedIntent(c Client, intent ClientSetup) (ClientSetup, []Finding) {
 	skip(&intent.ApproveTools, c.SetupOps.ApproveTools, "tool grants are")
 
 	// The gate mode belongs to the hooks. Without them it has no meaning,
-	// and an adapter must not see a mode it cannot install.
+	// and an adapter must not see a mode it cannot install. The
+	// lesson-check intents go into the same hook document, so the same
+	// rule applies to them.
 	if !intent.Hooks {
 		intent.GateMode = ""
+		intent.LessonChecks, intent.LessonExploration = "", ""
 	}
 
 	return intent, findings
+}
+
+// skippedFinding tells that a client cannot do a requested part of
+// setup, so setup skips that part. what names the part and its verb,
+// for example "skills are". Every skip uses this one text, so the
+// narration reads the same for each part.
+func skippedFinding(c Client, what string) Finding {
+	return Finding{
+		Level:  FindingInfo,
+		Reason: fmt.Sprintf("%s: %s not supported by this integration; skipped", c.Name, what),
+	}
 }
 
 // SkillTargets converts destinations into installer targets. The
@@ -415,9 +483,10 @@ func (b *planBuilder) addCommon(doc Document) error {
 		return fmt.Errorf("setup: common document %q has no compose function", doc.Path)
 	}
 
-	// A common document is never a client's configuration. A starter file
-	// is guarded by its existence alone, and any other common document may
-	// be read through a link; the coordinator still refuses to write one.
+	// A common document is never a client's configuration. The guard of a
+	// starter file records its existence alone. The read of any other
+	// common document may follow a link, but the coordinator still refuses
+	// to write through one.
 	var (
 		guard    FileGuard
 		existing []byte
@@ -482,20 +551,26 @@ func (b *planBuilder) addClient(consumer string, part ClientPlan) error {
 		b.plan.GateHooks = append(b.plan.GateHooks, hook)
 	}
 
+	for _, source := range part.UncheckedGateSources {
+		if !slices.Contains(b.plan.UncheckedGateSources, source) {
+			b.plan.UncheckedGateSources = append(b.plan.UncheckedGateSources, source)
+		}
+	}
+
 	b.plan.Findings = append(b.plan.Findings, part.Findings...)
 
 	return nil
 }
 
 // addGuard records one observed input. Two planners that read the same
-// file must have seen the same state; otherwise the file changed while
+// file must have seen the same state. Otherwise the file changed while
 // the plan was made, and no single plan describes it.
 func (b *planBuilder) addGuard(guard FileGuard) error {
 	if !isCleanRel(guard.Path) {
 		return fmt.Errorf("setup: guard path %q is not a clean repository-relative path", guard.Path)
 	}
 
-	if i := b.guardIndex(guard.Path); i >= 0 {
+	if i := guardIndex(b.plan.Reads, guard.Path); i >= 0 {
 		if b.plan.Reads[i] != guard {
 			return fmt.Errorf("%w: %s changed while the plan was made; run the command again", ErrStalePlan, guard.Path)
 		}
@@ -512,7 +587,7 @@ func (b *planBuilder) addGuard(guard FileGuard) error {
 // cannot be checked again before apply, so it is a broken adapter, not
 // a runtime state.
 func (b *planBuilder) addWrite(consumer string, write FileWrite) error {
-	i := b.guardIndex(write.Path)
+	i := guardIndex(b.plan.Reads, write.Path)
 	if i < 0 {
 		return fmt.Errorf("setup: write to %q has no read guard", write.Path)
 	}
@@ -522,9 +597,9 @@ func (b *planBuilder) addWrite(consumer string, write FileWrite) error {
 		return approve.LinkRefusal(write.Path, guard.Linked)
 	}
 
-	write.Consumers = withConsumer(write.Consumers, consumer)
+	write.Consumers = withConsumers(write.Consumers, consumer)
 
-	if i := slices.IndexFunc(b.plan.Writes, func(w FileWrite) bool { return w.Path == write.Path }); i >= 0 {
+	if i := writeIndex(b.plan.Writes, write.Path); i >= 0 {
 		prior := &b.plan.Writes[i]
 
 		if !bytes.Equal(prior.After, write.After) {
@@ -534,9 +609,7 @@ func (b *planBuilder) addWrite(consumer string, write FileWrite) error {
 
 		// The first planner's narrator stays. Both planners composed the
 		// same bytes, so either one describes the write.
-		for _, c := range write.Consumers {
-			prior.Consumers = withConsumer(prior.Consumers, c)
-		}
+		prior.Consumers = withConsumers(prior.Consumers, write.Consumers...)
 
 		return nil
 	}
@@ -552,20 +625,18 @@ func (b *planBuilder) addWrite(consumer string, write FileWrite) error {
 // addKeep records one unchanged document, unless another planner
 // already writes it.
 func (b *planBuilder) addKeep(consumer string, keep FileKeep) error {
-	if b.guardIndex(keep.Path) < 0 {
+	if guardIndex(b.plan.Reads, keep.Path) < 0 {
 		return fmt.Errorf("setup: kept document %q has no read guard", keep.Path)
 	}
 
-	if slices.ContainsFunc(b.plan.Writes, func(w FileWrite) bool { return w.Path == keep.Path }) {
+	if writeIndex(b.plan.Writes, keep.Path) >= 0 {
 		return nil
 	}
 
-	keep.Consumers = withConsumer(keep.Consumers, consumer)
+	keep.Consumers = withConsumers(keep.Consumers, consumer)
 
 	if i := slices.IndexFunc(b.plan.Kept, func(k FileKeep) bool { return k.Path == keep.Path }); i >= 0 {
-		for _, c := range keep.Consumers {
-			b.plan.Kept[i].Consumers = withConsumer(b.plan.Kept[i].Consumers, c)
-		}
+		b.plan.Kept[i].Consumers = withConsumers(b.plan.Kept[i].Consumers, keep.Consumers...)
 
 		return nil
 	}
@@ -575,18 +646,28 @@ func (b *planBuilder) addKeep(consumer string, keep FileKeep) error {
 	return nil
 }
 
-func (b *planBuilder) guardIndex(rel string) int {
-	return slices.IndexFunc(b.plan.Reads, func(g FileGuard) bool { return g.Path == rel })
+// guardIndex returns the index of the guard for rel, or -1. The plan
+// holds at most one guard per path, so the first match is the only one.
+func guardIndex(reads []FileGuard, rel string) int {
+	return slices.IndexFunc(reads, func(g FileGuard) bool { return g.Path == rel })
 }
 
-// withConsumer appends a consumer once. An empty consumer is a common
-// document, which belongs to no client.
-func withConsumer(consumers []string, consumer string) []string {
-	if consumer == "" || slices.Contains(consumers, consumer) {
-		return consumers
+// writeIndex returns the index of the write for rel, or -1. The plan
+// holds at most one write per path, so the first match is the only one.
+func writeIndex(writes []FileWrite, rel string) int {
+	return slices.IndexFunc(writes, func(w FileWrite) bool { return w.Path == rel })
+}
+
+// withConsumers appends each consumer once, in the given order. An empty
+// consumer is a common document, which belongs to no client.
+func withConsumers(consumers []string, add ...string) []string {
+	for _, consumer := range add {
+		if consumer != "" && !slices.Contains(consumers, consumer) {
+			consumers = append(consumers, consumer)
+		}
 	}
 
-	return append(consumers, consumer)
+	return consumers
 }
 
 // OpStatus is the outcome of one document operation.
@@ -652,10 +733,11 @@ type OpResult struct {
 	Err error
 }
 
-// SetupResult reports every operation of one run, so a partial failure
-// says exactly what landed and what did not. Ops holds the documents in
-// document order. Skills holds the skill directories in plan order; they
-// are applied after the documents and report through the same type.
+// SetupResult reports every operation of one run, so after a partial
+// failure the caller knows exactly what was written and what was not.
+// Ops holds the documents in document order. Skills holds the skill
+// directories in plan order. ApplySetup applies them after the
+// documents, and they report through the same type.
 type SetupResult struct {
 	Ops    []OpResult
 	Skills []OpResult
@@ -676,14 +758,14 @@ type ApplyOptions struct {
 }
 
 // ApplySetup executes a plan. Before the first write it checks every
-// guard, the skill directories included; a difference returns
+// guard, the skill directories included. A difference returns
 // ErrStalePlan with nothing written. It checks the inputs once more
 // right before each write.
 //
 // A failed write stops the run. The result then names the failed
-// operation and marks every later write as not attempted. Nothing is
-// rolled back: an earlier write stays, and a repeated run converges,
-// because the next plan starts from the files as they are.
+// operation and marks every later write as not attempted. ApplySetup
+// rolls nothing back. An earlier write stays, and a repeated run
+// converges, because the next plan starts from the files as they are.
 func ApplySetup(plan *SetupPlan, opts ApplyOptions) (SetupResult, error) {
 	result := SetupResult{Ops: plannedOps(plan), Skills: plannedSkillOps(plan)}
 
@@ -693,9 +775,9 @@ func ApplySetup(plan *SetupPlan, opts ApplyOptions) (SetupResult, error) {
 		}
 	}
 
-	// stop ends the run after a failure. Every write that did not run is
-	// reported too, so the caller can say what did not land, not only what
-	// failed.
+	// stop ends the run after a failure. It also reports every write that
+	// did not run, so the caller can say what was not written, not only
+	// what failed.
 	stop := func(err error) (SetupResult, error) {
 		for _, ops := range [][]OpResult{result.Ops, result.Skills} {
 			for i := range ops {
@@ -789,9 +871,9 @@ func plannedOps(plan *SetupPlan) []OpResult {
 	return ops
 }
 
-// plannedSkillOps lists the skill directories in plan order. A current
-// or foreign directory is kept; a foreign one is never touched, because
-// it is the user's directory, not seamark's.
+// plannedSkillOps lists the skill directories in plan order. It keeps a
+// current or a foreign directory. Setup never touches a foreign one,
+// because the directory belongs to the user, not to seamark.
 func plannedSkillOps(plan *SetupPlan) []OpResult {
 	ops := make([]OpResult, 0, len(plan.Skills))
 
@@ -839,9 +921,9 @@ func verifyPlan(plan *SetupPlan) error {
 }
 
 // guardSkill records the guard for one plan entry. Only an entry that
-// setup writes gets a content digest. A current or foreign directory is
-// kept whatever it holds, so its classification is its whole guard, and
-// setup never reads further into a directory that is not its own.
+// setup writes gets a content digest. Setup keeps a current or foreign
+// directory whatever it holds, so its classification is its whole guard.
+// Setup never reads further into a directory that is not its own.
 func guardSkill(root string, entry skills.Entry) (SkillGuard, error) {
 	guard := SkillGuard{Rel: entry.Rel}
 
@@ -919,8 +1001,8 @@ func applyWrite(plan *SetupPlan, rel string, written map[string]bool) error {
 		}
 	}
 
-	guard := plan.Reads[slices.IndexFunc(plan.Reads, func(g FileGuard) bool { return g.Path == rel })]
-	write := plan.Writes[slices.IndexFunc(plan.Writes, func(w FileWrite) bool { return w.Path == rel })]
+	guard := plan.Reads[guardIndex(plan.Reads, rel)]
+	write := plan.Writes[writeIndex(plan.Writes, rel)]
 	target := filepath.Join(plan.Root, filepath.FromSlash(rel))
 
 	if !guard.Exists {

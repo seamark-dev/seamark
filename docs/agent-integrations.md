@@ -1,6 +1,7 @@
 # AI coding agent integrations
 
-This guide targets **v0.7.0 or newer**. See
+This guide targets **v0.9.0 or newer**; the lesson-check and
+exploration hooks are new in v0.9.0. See
 [installation](getting-started.md) to install or upgrade Seamark.
 
 Seamark connects to Claude Code and Codex in three ways:
@@ -9,6 +10,9 @@ Seamark connects to Claude Code and Codex in three ways:
   repository. MCP is the protocol the agent uses to call Seamark tools.
 - **Hooks** run automatically before supported edits and shell commands.
   They provide lesson reminders and check commands against repository policy.
+  The agent reads a lesson reminder in its next model request, with the
+  result of the edit call. So the reminder can guide the next step, not
+  the edit that triggered it.
 - **Optional inference** asks your installed agent CLI to draft lessons from
   findings or suggest where existing lessons apply.
 
@@ -68,6 +72,62 @@ check project trust and `/hooks`, and check that hooks are enabled in Codex.
 Also ensure `seamark` is on the `PATH` visible to Codex. A lesson reminder
 appears only when Seamark has a relevant lesson for the edited files.
 
+For Claude Code, check that no project settings file sets
+`disableAllHooks: true`.
+`seamark init`, `seamark doctor`, and `seamark status` read only
+`.claude/settings.json` and `.claude/settings.local.json`. They do not read
+your user settings (`~/.claude/settings.json`), settings passed with
+`claude --settings`, or the Claude Code policy file
+(`managed-settings.json`), so a hook or a `disableAllHooks: true` there is
+not in their reports.
+
+Doctor and status warn when a seamark hook command names a binary that
+does not exist, or that is not an executable file. The warning names the
+cause: the path is missing, is not a regular file, or has no execute
+bit. The client cannot start such a hook, so it blocks nothing and
+delivers nothing. A committed hook file with an absolute path from
+another machine is one example. For the file that setup manages, the
+fix is a setup run, which rewrites the command to the running binary;
+Codex then asks for a new review in `/hooks`.
+
+Setup writes the absolute path of the running binary into each hook
+command, with symbolic links resolved. Init, doctor, and status read a
+hook as seamark's when that path has the basename `seamark`, or when it
+is the path of the binary that runs them. So a renamed build, such as
+`seamark-1.2`, or a link named `seamark` to such a file, keeps one hook
+set across re-runs, and doctor and status run through that binary report
+it. The same rule names the seamark binary inside a wrapper that you
+wrote, such as `test -x <path> && <path> gate --enforce --hook`: setup
+keeps the wrapper as written, and the gate line names its mode. Run
+through another binary, such as `seamark` on your PATH, they read the
+renamed build's hooks and wrappers as another program's, and a setup run
+adds its own hooks beside them.
+
+Setup keeps the matcher of an existing hook, because a narrow matcher can
+be your choice. When the matcher of a seamark hook in the file that setup
+manages never fires for the hook's tools, init, doctor, and status warn
+and name the matcher to set in that file. A setup run does not change
+it. When another handler of setup in that file already runs the hook for
+each of its tools, these commands name the removal of the idle handler
+instead, because a matcher edit would make the hook run twice. A Codex
+gate handler in the Claude Code form is the exception when `seamark init
+--client codex` removes it, because another gate handler stays: doctor
+names that setup run instead.
+
+Seamark reads a Codex matcher as the source of codex-cli 0.164.0 does.
+An empty matcher and `*` select every tool. A matcher of only ASCII
+letters, digits, `_`, and `|` is a list of exact tool names. Any other
+matcher is a regular expression that selects a tool when it matches a
+part of the name. Each rule tests the tool name and its aliases, so
+`Edit` and `Write` also select `apply_patch`, and `Agent` selects
+`spawn_agent`. Seamark uses Go regular expressions, and Codex uses Rust
+ones, so a rare pattern can compile or match differently in the two.
+
+Codex runs every matching handler, so two handlers of the seamark gate
+or lessons hook in `.codex/hooks.json` that run for one tool run that
+hook twice. init and doctor warn and ask you to keep one of them. Setup
+removes neither, because it does not choose which keys you keep.
+
 ## What each agent supports
 
 The table distinguishes installed features from behavior verified with a
@@ -77,7 +137,7 @@ minimum supported version.
 | Capability | Claude Code | Codex |
 | --- | --- | --- |
 | Skills (`--skills`) | `.claude/skills/` | `.agents/skills/`; verified on codex-cli 0.152.1 |
-| MCP registration | `seamark` entry in `.mcp.json` | `[mcp_servers.seamark]` in `.codex/config.toml`; `codex mcp list` read it on 0.157.0; live tool calls remain unverified |
+| MCP registration | `seamark` entry in `.mcp.json` | `[mcp_servers.seamark]` in `.codex/config.toml`; `codex mcp list` read it on 0.157.0; live tool calls remain unverified: in the recordings of 0.169.0, `codex exec` with the approval policy `never` refused a seamark tool call in a project set up without `--approve-tools` |
 | Tool grants (`--approve-tools`) | five MCP tool rules and three skill rules in `.claude/settings.json` | `approval_mode = "approve"` for the five tools; native approval behavior remains unverified |
 | Edit hook (lesson reminders) | `PreToolUse` on Edit, Write, MultiEdit | `PreToolUse` on `apply_patch`; verified on codex-cli 0.154.0 |
 | Command gate | `PreToolUse` on Bash | `PreToolUse` on `Bash`; native blocking behavior remains unverified |
@@ -95,12 +155,377 @@ current Codex session or trust decisions.
 A capability an agent does not declare is reported as unsupported, not
 broken. `init` prints what it skipped, and `doctor` does not fail on it.
 
+A running MCP server keeps the seamark binary it started with, because
+the agent starts it once per session. After you replace or upgrade the
+binary, each tool reply opens with a note that names the old version
+until you restart the agent or reconnect its MCP server.
+
 The real-model smoke passed on 2026-09-27 with codex-cli 0.157.0 and
 GPT-6 Luna at low reasoning: one group produced a proposal with Codex
 provenance, and all 10 script checks passed. A temporary CLI wrapper added
 only the model and reasoning overrides to the preset. The tested tree was
 uncommitted; its diff was saved with the run record. Trigger extraction
 was dry-run only, and trusted-hook isolation was not tested.
+
+The smoke passed again on 2026-11-16 with codex-cli 0.169.0 at release
+commit 4ab89dc, from a committed tree, with the operator's saved login
+and the CLI's configured default model (no override). One group produced
+a proposal with Codex provenance, and all 11 script checks passed,
+including a byte-identical workspace and no lesson firing or gate record
+inside the run. Trigger extraction was dry-run only, and trusted-hook
+isolation was not tested.
+
+## Lesson checks and exploration
+
+v0.9.0 is the first release with lesson-check hook handlers. The
+features below have fixture coverage. Reviewed native recordings of
+Claude Code 2.1.319 and 2.1.325 and codex-cli 0.169.0 cover part of
+them, as the tables below name; a path without reviewed native evidence
+keeps a pending or unverified state (see the
+[release checklist](#release-checklist)). Installing an `enforce`
+configuration is not a claim of verified enforcement.
+
+Choose each client's lesson hooks explicitly:
+
+```bash
+seamark init --client claude --lesson-checks check
+seamark init --client claude --lesson-checks enforce --lesson-exploration on
+seamark init --client codex --lesson-checks check
+seamark init --client codex --lesson-checks enforce
+```
+
+Omitting either option preserves that installed choice. `check` installs
+a pre-edit baseline and post-edit verification pair; `enforce` replaces
+the baseline handler with the separate pre-write guard and keeps the
+post-edit verification. Neither turns the advisory lesson hook into a
+guard. Pin modes and check definitions remain in `lessons.yaml`; see
+[executable lessons](lessons.md#executable-lessons-advisory-check-and-enforce).
+
+### Tool, stage, and context coverage
+
+Each root and child context has its own reported path. This table names
+implemented handlers, not verified native prevention:
+
+| Client / tool | Pre-write | Post-edit | Contexts and current evidence |
+| --- | --- | --- | --- |
+| Claude Code `Edit`, `Write`, `MultiEdit` | Baseline in check mode; complete-or-unknown projection and guard in enforce mode | `PostToolUse` and `PostToolUseFailure` verification | Root and child paths. `Write` and `Edit`: native deny and in-budget slow deny verified on Claude Code 2.1.319, with the client's 10 s fail-open limit. `MultiEdit`: pending, because the client offers no MultiEdit tool. The model's replies in the 2.1.319 recording say so, and the model-free check of `make agents-native-check CLIENT=claude` shows that 2.1.325 offers none, inline or deferred, and refuses a MultiEdit call. Post-edit reply on `PostToolUse`: verified for `Write` and `Edit` on Claude Code 2.1.325, with the client's 15 s limit (the findings are lost, the edit stays); `MultiEdit` pending. The `PostToolUseFailure` reply is seen on 2.1.319, with no slow case |
+| Claude Code `Read` | None | Exploration guidance after the read, when enabled | Root and child; reply seen in the next model request on Claude Code 2.1.319, still unverified in the report; main-context repeats reset at compaction, child reminders repeat |
+| Claude Code `NotebookEdit`, `Bash` | No lesson-check hook | No lesson-check hook | Uncovered writers in both contexts; a shell command can write files |
+| Codex `apply_patch` | Baseline or guard; Add, Delete, move, and Update content projection; an Add or Update outside the verified rules reads unknown | `PostToolUse` verification; the handler reads a failed exit status, but codex-cli 0.169.0 sends no `PostToolUse` after a patch that fails during its execution | Root and child paths. Native deny and in-budget slow deny verified on codex-cli 0.169.0, with the client's 10 s fail-open limit; the paths still read `active-unverified (trust-unknown)`, because Seamark cannot read the Codex trust record. A pure move never reaches the hook: that client refuses it first. Post-edit reply verified on codex-cli 0.169.0, with the client's 15 s limit; the paths still read `active-unverified (trust-unknown)`. Child call and lane attribution: unsupported |
+| Codex structured `Read` | Unsupported | No exploration hook | Setup prints the no-Read notice and installs nothing for exploration; use preparation |
+| Codex `shell` | No lesson-check hook | No lesson-check hook | Uncovered writer in both contexts |
+
+For a Codex Update, the guard projects the bytes that the Codex
+applier writes: it applies the hunks of each section to the current
+file by the rules of the codex-cli 0.169.0 applier. Each rule follows
+a recorded case of the content oracle (see
+[Fixtures and evidence](#fixtures-and-evidence)), and
+a seeded differential in `make agents-native-check CLIENT=codex`
+compares the projection with the installed applier. The rules cover
+the line ends of new lines, a missing final newline, fuzzy context
+(trailing and leading whitespace and a fixed table of Unicode dashes,
+quotes, and spaces), anchors, `*** End of File`, and the order of
+several hunks. Where the projection is not exact by those rules, a
+content check gets `unknown/unprojectable-edit` and an armed guard
+requests denial instead of guessing the after-content:
+
+- a hunk form outside the verified grammar, for example
+  `*** End of File` as the first line of a section, or a change line
+  that ends with a carriage return;
+- a hunk whose lines or anchor do not match the current file, as when
+  the applier refuses the patch;
+- a current file with a carriage return that no line feed follows;
+- a file that two sections of one patch name;
+- an Add section with a line that ends with two or more carriage
+  returns: the codex-cli 0.169.0 applier removes two of them and the
+  decoder one, so the decoded line is not the written line;
+- a move onto its own path, a source that is absent, not a regular
+  file, or a symbolic link, and current content that is binary, not
+  UTF-8, or too large;
+- a result above `max-file-bytes`, and the guard budget ending during
+  the projection (`unknown/resource-limit`).
+
+Path-only checks decide an Update on its complete path metadata, as
+before. The projection runs on whatever Codex version is installed. The
+hook cannot read that version cheaply, so a later Codex release that
+changes the applier rules shows up in the differential of
+`make agents-native-check`, in the version-pinned oracle replay, and as
+`projection-differs` in the post-edit record. Post-edit findings and
+explicit working-tree verification do not prove pre-write projection.
+
+A Codex patch whose header path (Add, Update, Delete, or Move to) holds
+a tab or a carriage return gets `incomplete-paths`. codex-cli 0.169.0
+removes both characters from the path when it writes: with a carriage
+return after `sen`, the path `sentinel/x.txt` is written, but the text
+names a path outside a `sentinel/` scope. An armed guard denies such a
+patch, the baseline handler stores no baseline, and the post-edit check
+reports every executable pin as `unknown/incomplete-paths`. The advisory
+edit hook keeps the path as the patch names it. Offline runs of that
+applier keep the other probed characters (every other C0 and C1
+control, DEL, and the Unicode space characters) in the written path, so
+such a path is checked as written. `make agents-native-check
+CLIENT=codex` checks this rule against the installed applier.
+
+Codex post-edit findings go back as `additionalContext` in the
+`PostToolUse` hook reply on stdout, with exit 0. The advisory edit hook
+uses the same form on `PreToolUse`. A native recording of codex-cli
+0.164.0 showed that findings on stderr never reached the model, so that
+channel is no longer used. The guard recording of codex-cli 0.169.0
+shows the new reply in the thread: each post-edit reply is a hook
+developer record after the patch and before the next model step, in the
+root and in a worker. The post-edit recording of the same version shows
+the same order after a hook that waits 12 seconds, so the Codex
+post-edit evidence reads verified in both contexts. The path still
+reads `active-unverified`, because every Codex path keeps
+`trust-unknown`.
+
+codex-cli 0.169.0 sends no `PostToolUse` after a patch that passes
+`PreToolUse` and fails during its execution, such as an Add into a
+read-only directory. So no post-edit check runs for that patch, and its
+baseline stays in `.seamark/checks/pending/` until the sweep discards
+it after `pending-max-age` (1 hour). A patch that the client refuses in
+its own patch check, such as a pure move, reaches no hook at all. These
+are the two recorded failure shapes. No recording shows an Update whose
+hunk does not match, a write that the sandbox refuses, or a patch of
+several files that fails at a later file. Run
+`seamark lessons --verify` after a failed patch to check what it left
+on disk.
+
+Codex bounds model-visible hook context with `additionalContextLimit`,
+about 2,500 tokens by default. So the Codex reply holds at most 3,072
+bytes of findings. A longer text, such as the findings of a patch on many
+files, keeps its first whole lines. Its last line counts the lines left
+out and names `seamark lessons --verify`. That command checks tracked
+changes and untracked files that git does not ignore, so it can skip an
+ignored file that the call wrote. The Claude Code reply keeps the whole
+text.
+
+The installed pre-edit timeout is **10 seconds**, and the post-edit
+timeout is **15 seconds**. The handlers budget 5 seconds for the guard
+and 10 seconds for post-edit evaluation inside those limits. The hook
+timeouts remain candidates until native validation covers each supported
+tool and context. A slow-tool result cannot verify another path. Failed
+validation reopens the defaults. Claude Code 2.1.319
+validates the pre-edit timeout for `Write` and `Edit` in the root and
+child contexts: it waits for a pre-edit hook that ends after about 7
+seconds and honors its deny. A root `Write` case also shows that it
+stops a hook at 10 seconds and lets the write run. codex-cli 0.169.0
+validates it for `apply_patch` in the root and child contexts in the
+same way: it waits about 7 seconds for a slow deny and honors it. A
+root patch case also shows that it stops a hook at 10 seconds and lets
+the patch run, without a message. No child case of either client
+records the stop at 10 seconds.
+
+Claude Code 2.1.325 validates the post-edit timeout on `PostToolUse`
+for `Write` and `Edit` in the root and child contexts: it waits for a
+post-edit hook that ends after about 12 seconds, and the reply reaches
+the next model request. codex-cli 0.169.0 validates it for
+`apply_patch` in the root and a worker in the same way: the call output
+waits for the hook, and the reply enters the thread before the next
+model step. A root case of each client (a `Write`, a patch) shows that
+the client stops a post-edit hook at 15 seconds: the findings are lost,
+the edit stays, and neither client tells the model. No child case and
+no `Edit` case records that stop. The Claude Code `PostToolUseFailure`
+entry has the same 15-second timeout, but no recording has a slow or a
+stopped hook on that event. The `MultiEdit` pre-edit and post-edit
+timeouts remain candidates. No recording can validate them while the
+client offers no MultiEdit tool, as on Claude Code 2.1.319 and 2.1.325.
+
+### Installed, active, and verified are different
+
+`status`, `doctor`, preparation, mode-change impact and TUI read the same
+capability report. It separates the requested pin mode, installed mode,
+path state, binary identity and native evidence. An installed path
+reads `active` only with verified native evidence and no reason; it
+can also read `active-unverified`, `inactive`, or `unsupported`. A
+requested mode alone does not establish a working guard. A pin reads
+`enforced` only when every pre-write path of the client is `active`. An
+`enforced-unverified` badge is explicitly unverified, not the verified
+`enforced` state.
+
+A verified path can carry a limit. A client can stop a slow pre-edit
+hook at its timeout and let the write run (fail-open). Claude Code
+2.1.319 and codex-cli 0.169.0 do this at 10 seconds. Such a path reads
+`active`, and a pin `enforced`, only when a reviewed native recording
+of that client version, tool, and context shows a guard that is slow
+but ends inside the timeout, and the client waits for it and honors its
+deny. The claim
+then holds only inside the limit, so every surface that shows it names
+the limit too, for example `claude enforced (limit: the client lets the
+write run after its 10 s hook timeout)`. Status, doctor, setup,
+preparation, mode-change impact, and the TUI print it. The JSON report
+carries it in `verification.limit` of the path and in `limits` of the
+pin badge. A client that waits for a hook past its timeout, or blocks
+the write, gives no limit. No path reads `active` before its recording
+is reviewed and committed as test data.
+
+The reviewed Claude Code 2.1.319 recordings give this proof for `Write`
+and `Edit` in the root and child contexts. Status prints these paths as
+`pre-write Edit, Write active (limit: the client lets the write run after
+its 10 s hook timeout)`. The baseline paths of check mode read the same,
+because the recording shows that the client waits for a slow pre-edit
+hook. `MultiEdit` has no recorded call, so its paths stay
+`active-unverified`. In the Claude Code 2.1.319 recording, the model's
+replies say that the client offered no MultiEdit tool.
+`make agents-native-check CLIENT=claude` shows without a model that
+2.1.325 offers none either: no request offers it, inline or
+deferred, `ToolSearch` finds no such tool, and a scripted call gets the
+error `No such tool available: MultiEdit`. So no recording can show a
+native MultiEdit deny on these versions. The paths stay pending, not
+`unsupported`. In enforce mode its guard paths also name
+`native-deny-unverified` and `native-timeout-unverified`, and a Claude
+Code enforce pin reads `enforced-unverified`. In check mode its baseline
+path reads `active-unverified` with no reason.
+
+The reviewed codex-cli 0.169.0 recordings give the same proof for
+`apply_patch` in the root and child contexts, with the same limit. So
+these paths lose `native-deny-unverified` and
+`native-timeout-unverified`, a written Codex deny counts as prevented,
+and the JSON report carries the limit in `verification.limit`. Seamark
+cannot read the Codex trust record, so every installed Codex path keeps
+`trust-unknown` and reads `active-unverified`, and a Codex enforce pin
+reads `enforced-unverified`. Status,
+doctor, and the TUI print a limit only beside an `active` path, so for
+Codex the setup line and the JSON report show it.
+
+A post-edit path can carry a limit too. A post-edit hook runs after the
+edit, so it can never block it. Claude Code 2.1.325 and codex-cli
+0.169.0 stop a post-edit hook at its 15-second timeout: the findings
+are lost, the edit stays, and the model gets no notice. A post-edit
+path has verified evidence only when a reviewed native recording of
+that client version, tool, and context shows a post-edit hook that ends
+inside the timeout, after a wait of about 12 seconds, and its reply
+before the next model step. The reviewed post-edit recordings give this
+proof on `PostToolUse` for Claude Code `Write` and `Edit` and for Codex
+`apply_patch`, in the root and child contexts. Status prints the Claude
+Code paths as `post-edit Edit, Write active (limit: the client drops
+the post-edit findings after its 15 s hook timeout; the edit stays);
+MultiEdit active-unverified`. The Codex paths keep `trust-unknown` and
+read `active-unverified`, so the setup line and the JSON report show
+their limit. A check pin reads `checked` with or without this evidence.
+The `MultiEdit` post-edit paths stay pending. The claim covers
+`PostToolUse` only: the Claude Code `PostToolUseFailure` entry has the
+same timeout, and no recording has a slow or a stopped hook on that
+event.
+
+Setup keeps warning-and-install behavior for unknown local capability or
+trust. It refuses known-bad enforce states, such as disabled hooks (Claude
+Code `disableAllHooks: true` in `.claude/settings.json` or
+`.claude/settings.local.json`, Codex `[features] hooks = false`) or a
+report-only wrapper, rather than silently substituting check mode. The
+refusal names each document and the step for each reason; doctor prints
+the same step for a report-only definition, and it lists each removal
+for a client before any step that reruns init for that client. A client
+without a guard cannot install enforce mode. Codex trust remains the
+user's decision: review new or changed hooks with `/hooks`. Seamark
+never grants trust, and cannot read that approval back as proof.
+`make agents-native-check CLIENT=codex` checks on the installed client
+that setup leaves every Seamark hook untrusted.
+
+A gate or pre-write hook that runs in the background (`async`, and for
+Claude Code also `asyncRewake`) cannot block. Setup removes that key
+from its own gate, lesson guard, and lesson baseline entries and says
+so. Codex then asks you to review that entry again in `/hooks`. A
+definition that setup does not manage and that runs in the background
+is report-only: setup warns, and enforce refuses a background pre-write
+hook. A Claude Code `if` field on a tool event makes coverage uncertain:
+setup reports the hook as one that may run, and an owned lesson-check
+path reads `tool-uncovered`. On another event, such as `PostCompact`,
+that hook never runs. Setup reports an `if` field on its own entries and
+leaves it. `onFailure` does not change the gate mode, because a deny
+exits with status 2, and status 2 blocks whatever `onFailure` says.
+
+Claude and Codex setup both keep one handler per lesson check. When a
+definition that setup does not manage certainly runs a lesson-check hook
+that the run installs or keeps, setup refuses before any write, including
+a relevant flag-less rerun. When setup cannot tell whether a definition
+runs the hook, it warns and installs the managed handler. Claude refuses
+only when the definition shares a tool with the managed handler, because
+setup keeps a matcher that the user narrowed. A second exploration
+handler gets a warning and no refusal, because that hook runs no check.
+`--lesson-checks off` is never refused.
+
+Claude Code runs a handler that both settings files define identically
+only once: its handler key is the type, `shell`, `command`, `args`, and
+`if`. So Claude setup accepts a copy in `.claude/settings.local.json`
+that equals the managed handler in every field except `statusMessage`,
+and reports it as information. A background key (`async` or
+`asyncRewake`) that is not `true`, such as `false`, counts as absent in
+this comparison, because either copy then runs in the foreground. A copy with another `if`, `shell`, or `args` is a second
+handler: Claude Code runs both, so setup refuses it. A copy with
+another `timeout`, `async`, `asyncRewake`, or `onFailure` is refused
+too: Claude Code runs one of the two, and setup cannot tell which
+fields apply. For the gate, lessons, context reset, and exploration
+hooks, such a copy gets a warning that says so, not "runs twice".
+Codex runs every copy, so Codex setup refuses each. A plain `init` reads
+`.claude/settings.local.json` for this rule only when it installs or keeps
+lesson-check hooks, and an unreadable file there gets a warning. Doctor
+retains all-client coverage: a Claude-only setup can still warn about
+Codex.
+
+For an unreadable hook document, path states report
+`inactive (document-unreadable)`. The doctor, status and TUI summaries
+read `unreadable (<reason>)`, and the reason names the file. An unreadable
+supplemental source keeps the installed mode and adds
+`(a hook source is unreadable)`. Beside no installed handler, no path
+reports that source, so the summary stays `off`. The JSON report has no
+unknown mode, so it keeps `installed: off` and the path reason
+`document-unreadable`. Do not read `off` as proof that an unreadable
+document contains no handler.
+
+### Delivery attribution
+
+Attribution is separate from hook installation and from the native
+recordings above:
+
+| Item | Claude root | Claude child | Codex root | Codex child |
+| --- | --- | --- | --- | --- |
+| Call match identity | Verified | Verified | Verified | Unsupported |
+| Receiving-lane identity | Verified | Verified | Verified | Unsupported |
+| Context reset | Unverified | Unsupported | Unsupported | Unsupported |
+| Turn boundary | Verified | Unverified | Verified | Unverified |
+| Model boundary | Verified | Unverified | Unverified | Unverified |
+
+The reviewed timing recording of Claude Code 2.1.319 verifies the
+Claude items marked Verified, for that client version only. Its one
+child case is a subagent read, which shows no turn or model step of the
+child, so those child items stay unverified. Context reset copies the
+evidence of the reset hook, which the report keeps unverified. The
+reviewed timing recording of codex-cli 0.169.0 verifies the Codex root
+call, lane, and turn, for that client version only. Its turn rests on
+the output of a preparation command in one turn and a patch in the next
+turn of the same thread, because the gate hook gives no reply in warn
+mode. No Codex case shows a model step or a turn of a worker, and the
+Codex payloads give no call or lane identity of a worker. Own-call
+advice arrives in the same call as the edit that it names, so it is no
+evidence of guidance before construction. A command/MCP preparation
+names no receiver. The delivery report reads every observation window
+as incomplete. A guard's requested deny is not proof of prevention:
+`prevented` counts only a deny with a written reply, no later execution
+record, and a verified native deny path, which today means Claude Code
+`Write` or `Edit`, or Codex `apply_patch`. See
+[lesson delivery](lessons.md#lesson-delivery-lessons---delivery).
+
+### Disable and downgrade safely
+
+Use the binary that supports the handlers before installing a binary
+older than v0.9.0. Remove checks and exploration for **each configured
+client**, then inspect the result:
+
+```bash
+seamark init --client claude --lesson-checks off --lesson-exploration off
+seamark init --client codex --lesson-checks off --lesson-exploration off
+seamark status
+seamark doctor
+```
+
+These commands remove owned lesson-check/exploration entries, not the
+advisory reminders, accepted pins or policy. Inspect user-added duplicate
+handlers separately. A downgrade does not make a schema 8 database
+readable by an older binary, and hook removal does not reverse that
+upgrade. Preserve a compatible backup; see
+[Going back to an older seamark](configuration.md#going-back-to-an-older-seamark).
+For removal of the rest of an integration, see below.
 
 ## Choose an agent for inference
 
@@ -205,7 +630,9 @@ prompt is not necessarily the entire model input. See
 
 ## Removing an integration
 
-Rollback leaves user content and policy intact. Remove only the
+Rollback leaves user content and policy intact. First
+[disable lesson checks and exploration](#disable-and-downgrade-safely)
+for each configured client, if installed. Remove only the remaining
 entries seamark wrote, with the agent's native controls or an exact
 edit:
 
@@ -324,10 +751,15 @@ The rules that hold every adapter to the same behavior:
 
 - **Ownership is by marker, and setup edits only what it owns.** A
   hook command is seamark's when it is one executable word followed by
-  the marker (`gate --hook --client codex`). A wrapper, a shell
+  the marker (`gate --hook --client codex`). The word names seamark:
+  its basename is `seamark`, or it is exactly the path of the running
+  binary (`hooks.BinaryPath`), which setup writes. A wrapper, a shell
   condition, or an environment prefix is someone else's definition:
-  keep it as written, report it, and install
-  no second handler when it certainly runs the hook. When the adapter
+  keep it as written, report it (the shell reader names seamark inside
+  it by the same two rules), and install
+  no second handler when it certainly runs the hook. For a lesson-check
+  hook, setup refuses the run instead (`refuseSecondLessonHandler`).
+  When the adapter
   cannot tell whether a command runs the hook, install the managed hook
   and name the command; a missing hook costs more than a repeated
   reminder. Such a definition is one that *may* run a gate: the
@@ -336,15 +768,24 @@ The rules that hold every adapter to the same behavior:
   the line say `enforce` or `warn`. A run with an explicit `--gate-mode`
   installs the managed gate hook beside a definition that certainly
   runs the gate but cannot deliver the mode asked for (a `report-only`
-  one, or a warn one under a request for enforce), and warns that the
-  hook runs twice. A single-quoted executable path generated by Seamark is
+  one, or a warn one under a request for enforce). Codex runs both, and
+  setup warns that the hook runs twice. Claude Code runs both when the
+  two have different handler keys, and setup warns the same. A Claude
+  Code copy with the handler key of the managed gate hook is
+  `report-only` only through a background key. Claude Code runs one of
+  the two copies, so setup warns that it runs only one, and reads the
+  managed gate as `report-only` too. A single-quoted executable path generated by Seamark is
   still owned; quoting alone does not make it a wrapper. A wrapped gate
   that certainly runs and whose exit status never reaches the client
   (`… || true`, `… ; echo done`, `… | cat`) is `report-only`: it runs
   and reports, no verdict of it blocks, and a finding says what to
   change. A gate in the background (`… &`) may run, so the adapter
   installs the managed hook beside it, and the finding about its exit
-  status still applies. The reader parses a hook command
+  status still applies. A gate definition that the client runs in the
+  background (its execution rule, read beside the matcher rule) is
+  `report-only` too, and the finding names the key. The managed mode
+  stays the mode of the owned marker, because the next setup run keeps
+  that mode and removes the key. The reader parses a hook command
   with `mvdan.cc/sh`, the parser the gate uses, in the bash dialect,
   which accepts every POSIX form, so a form that bash and dash read in
   different ways (`&>`, `((` at the start of a command) is seen and
@@ -382,7 +823,21 @@ The rules that hold every adapter to the same behavior:
   must not read any other document; a test records the documents it
   reads. `Plan` rewrites every owned gate command, also one under a
   matcher that never fires, and the narration reports each `--enforce`
-  that the rewrite removes.
+  that the rewrite removes. Codex also runs a gate handler in the
+  Claude Code form (`gate --hook` or `gate --enforce --hook`, without
+  `--client codex`), and that handler blocks. So the Codex readers count
+  it as a managed gate in its own mode, and doctor names it. The Codex
+  `Plan` keeps at most one such handler: none when a Codex-form handler
+  runs for Bash, else the first one that runs, rewritten in place to the
+  managed command with its matcher and other keys. It removes the
+  others, and an entry left without handlers. `Plan` keeps every
+  Codex-form handler, so it reads the merged document and warns when two
+  of them still run for one tool, as `Inspect` does. The merged document
+  also picks the route for a Codex-form handler that never fires, because
+  the merge rewrites a handler whose binary is missing, and that handler
+  then runs. Without `--gate-mode`,
+  enforce in either form wins, and each removal or rewrite names the
+  `/hooks` review that the new trust hash needs.
 - **A finding names its document once.** `Finding.Path` is the document
   that holds what the finding describes, and every consumer prints
   `<Path>: <Reason>`. The reason never starts with a path. It names a
@@ -428,9 +883,25 @@ stay out of the repository until sanitized: paths and identifiers are
 substituted consistently, and nothing that names an account is kept.
 
 An oracle file (`apply_patch_oracle.json`) records what the installed
-client binary did with each input offline, no model involved. The
-decoder is tested against it, and the native check reruns it on the
-installed version to catch parser drift.
+client binary did with each input offline, no model involved. Its path
+cases come from codex-cli 0.154.0: they record which paths a patch
+names. The decoder is tested against them, and the native check reruns
+them on the installed version to catch parser drift. Its content cases
+come from codex-cli 0.169.0, the version of the native Codex
+recordings: they record the exact before and after bytes of 99 patch
+shapes, and the native check replays them when the installed version
+is the recorded one. A recording of the first 29 cases on codex-cli
+0.164.0 gave identical results, and so did a recording of the first 96
+on 0.169.0. The Update projection is tested
+against every content case offline in `make test`: it gives the bytes
+that the applier wrote, or unknown where the applier refused the patch
+and for eight listed cases that it keeps unknown on purpose: a lone
+carriage return in the file, one path in two sections, and change
+or added lines that end with more than one carriage return. The
+guard recording of 0.169.0 holds one live Update (case
+`update-permitted`) with the one-hunk shape of the content case
+`01_one_hunk`, and the replay projects it to the bytes that the live
+tool wrote.
 
 ### Tests and checks
 
@@ -438,8 +909,12 @@ installed version to catch parser drift.
 | --- | --- | --- |
 | `make agents-test` | Go and the repository's build prerequisites; no agent CLI or credentials | adapter contracts, setup, hooks, delivery, gates, diagnostics, and fake subprocesses; also covered by `make test` and CI |
 | `make smoke` | the built binary | the generated Claude Code and Codex configuration in a fresh repository, the hook commands it wrote running as written, and no credential in a generated file; part of CI and of every release |
-| `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository |
+| `make agents-native-check CLIENT=codex` | the client CLI on PATH; no model, no credentials | the installed version beside the recorded evidence; the preset's flags on this version; the patch oracle on this version; the exit status, output, and after bytes of every apply_patch content case and path-control case, when the installed version is the recorded one (else it skips with the reason); the Codex Update projection against the installed applier on 500 seeded patches, with no difference and no content for a refused patch; on any version, that the guard decoder refuses each path-control patch or names every file that the applier changed, over the recorded cases and a generated sweep of control and space characters in header paths; the preset refusing a workspace write under an allow rule, returning the final message on stdout, and failing with the provider's reason; the generated configuration read by the client from a scratch home that trusts the disposable repository; that setup with enforce lesson checks writes nothing into the client home and leaves every Seamark hook untrusted in the hook list of `codex app-server` |
+| `make agents-native-check CLIENT=claude` | the client CLI on PATH; no model, no credentials | the generated configuration, the hook commands it wrote, the offline diagnostics, and no credential in a generated file; the replay of the reviewed Claude Code recordings; the tools that the installed client offers to a scripted loopback Messages API: no `MultiEdit` tool in the tools field or in the deferred tool list, nothing loaded by `ToolSearch select:MultiEdit`, and the error `No such tool available: MultiEdit` for a `MultiEdit` call |
+| `make agents-oracle-record ORACLE_VERSION=<version>` | the Codex CLI on PATH at that version; no model, no credentials | a new recording of the apply_patch content cases into `internal/integration/testdata/codex/apply_patch_oracle.json` and of the path-control cases into `internal/integration/testdata/codex/apply_patch_path_control_oracle.json`, from the installed applier in scratch directories; it refuses a version that is not installed, and it keeps the bytes of the path cases |
 | `make agents-native-smoke CLIENT=codex` | the client CLI and operator authentication; costs tokens | one distillation group read through the client preset with no failed group and a proposed pin, the pin's client provenance in the ledger, the command disclosed by `--dry-run`, trigger extraction in dry-run only, and the workspace unchanged afterwards |
+| `make native-replay CLIENT=<client>` | Go and the repository's build prerequisites; no client CLI, no model, no credentials | the replay of the reviewed timing, guard, and post-edit recordings in `internal/integration/testdata/<client>/timing`, `.../guard`, and `.../post-edit`, and the offline tests of the recording script for that client; a replay without a reviewed recording skips as pending, and a skip gives no evidence |
+| `make native-record CLIENT=<client>` | the client CLI and operator authentication; costs tokens | the prompts of one scenario (`NATIVE_RECORD_SCENARIO=timing`, the default, `guard`, or `post-edit`) in a scratch repository, with one cost line per run; it writes a sanitized copy for review and never writes into testdata; it refuses a binary or a tree with uncommitted changes unless `SEAMARK_ALLOW_DIRTY=1`; with `NATIVE_RECORD_RUNS=0` it runs no paid turn |
 
 The Go checks use ordinary test results and label missing prerequisites
 as `blocked` in their failure messages. The shell script prints `ok`,
@@ -448,11 +923,22 @@ The Makefile stops on either a failed Go test or a nonzero script exit;
 do not rely on `make` returning the script's exit code. A blocked check
 provides no compatibility evidence.
 
-The Codex offline checks use a scratch `CODEX_HOME`. They configure trust
-only for the disposable test repository, leaving your project's trust
-unchanged. Scripted responses come from a local test server, not a model.
-`CLIENT=claude` runs the shell configuration checks; the Go native tests
-are Codex-only.
+The Codex offline checks use a scratch `CODEX_HOME`. The shell check
+configures project trust only for the disposable test repository, so
+the client reads its generated registration; your project's trust stays
+unchanged. The hook trust check writes no trust record at all. Scripted
+responses come from a local test server, not a model.
+`CLIENT=claude` runs the shell configuration checks, the Go tests
+that replay the reviewed Claude Code timing, guard, and post-edit
+recordings, and one tool check. That check runs the installed Claude
+Code against a scripted Messages API on the loopback interface, with a
+dummy key and a scratch `CLAUDE_CONFIG_DIR`, so no model runs. It reads the tools that
+the client offers in the tools field and in the deferred tool list of
+its message text, and checks that neither names `MultiEdit`. It checks
+that `ToolSearch select:MultiEdit` loads nothing, and that a scripted
+`MultiEdit` call gets the error `No such tool available: MultiEdit`.
+An offline test in `make test` runs the same verdict against fake
+clients. The other Go native tests are Codex-only.
 
 The credential canary belongs to the offline check only; the smoke
 leaves the operator's environment as it is. The smoke's distillation
@@ -472,8 +958,188 @@ MCP approval behavior, and trusted-hook isolation need separate checks.
 
 ### Release checklist
 
-1. `make agents-test`, then `make test`, `make test-race`, `make lint`,
-   `make build`, `make smoke`.
+**The prerequisites below are complete for v0.9.0, and the `MultiEdit`
+paths stay pending.** Each item names what it does not cover. Fixture
+success and confirmed version numbering are not native compatibility
+evidence, so a path without reviewed native evidence keeps its pending
+or unsupported state.
+
+Release prerequisites:
+
+- **Done**, with `MultiEdit` pending: Collect and review native timing
+  and guard recordings for each supported client, tool, stage and
+  root/child context. Record versions, receiving identity, reply
+  visibility, denied execution and slow-hook behavior. Preserve pending
+  or unsupported states for unproven paths; never generalize a
+  successful path to the rest. Claude Code: the
+  timing and guard recordings of 2.1.319 are reviewed and committed in
+  `internal/integration/testdata/claude/timing` and `.../guard`;
+  `MultiEdit` has no recorded call, because the client offers no
+  MultiEdit tool: the model's replies in the 2.1.319 recording say so,
+  and `make agents-native-check CLIENT=claude` shows it without a model
+  on 2.1.325. Its paths stay pending. Codex: the timing and guard
+  recordings of codex-cli 0.169.0 are reviewed and committed in
+  `internal/integration/testdata/codex/timing` and `.../guard`; that
+  client refuses a pure move before any hook, sends no `PostToolUse`
+  after a patch that fails during its execution, and every Codex path
+  keeps `trust-unknown`. The post-edit recordings of Claude Code 2.1.325
+  and codex-cli 0.169.0 are reviewed and committed in
+  `internal/integration/testdata/claude/post-edit` and
+  `internal/integration/testdata/codex/post-edit`.
+- **Done**, with `MultiEdit` pending: Validate the candidate 10-second
+  pre-edit timeout per tool/context, including slow cases. Change the
+  default if validation fails. Claude Code 2.1.319 validates the
+  10-second pre-edit timeout for `Write` and `Edit` in both contexts,
+  and codex-cli 0.169.0 for `apply_patch` in both contexts, each with a
+  fail-open limit at 10 seconds, so the default stays 10 seconds.
+  `MultiEdit` stays a candidate in both stages: no recording can
+  validate it while Claude Code offers no MultiEdit tool.
+- **Done** for `PostToolUse`: Validate the 15-second post-edit timeout
+  per tool/context, including slow cases. Claude Code 2.1.325 waits for
+  a post-edit hook of `Write` and `Edit` that ends after about 12
+  seconds, in the root and child contexts, and codex-cli 0.169.0 does
+  the same for `apply_patch` in the root and a worker. A root `Write`
+  and a root patch show that each client stops a post-edit hook at 15
+  seconds, drops the findings without a notice, and keeps the edit. So
+  these paths carry the limit "the client drops the post-edit findings
+  after its 15 s hook timeout; the edit stays", and the default stays
+  15 seconds. Not covered: `MultiEdit` (see the item above), a stop in
+  a child context or for an `Edit`, and the Claude Code
+  `PostToolUseFailure` entry, which has the same timeout and no slow
+  case.
+- **Done** for `PostToolUse`: Verify post-edit reply visibility
+  separately from pre-write denial. The post-edit scenario runs check
+  pins, so no case can deny. On Claude Code 2.1.325 each post-edit reply
+  of `Write` and `Edit`, root and child, is in the chain of the next
+  assistant record, and the next request holds it. On codex-cli 0.169.0
+  each reply is a hook developer record after the patch and before the
+  next model step, in the root and a worker. The capability report
+  reads this evidence: the Claude Code `Write` and `Edit` post-edit
+  paths read `active` with the limit above, and the Codex paths read
+  verified evidence and stay `active-unverified (trust-unknown)`. The
+  Claude Code `PostToolUseFailure` reply keeps the proof of the 2.1.319
+  guard recording.
+- **Done** as unsupported: Record whether Codex runs the post-edit hook
+  after a failed patch. codex-cli 0.169.0 sends no `PostToolUse` after a
+  patch that passes `PreToolUse` and fails during its execution, and it
+  refuses a pure move in its own patch check before any hook. So a
+  Codex post-edit check after a failed patch is unsupported on that
+  version for these two recorded shapes. Other failure shapes are not
+  recorded, so the docs claim nothing about them. The baseline of a
+  call with no post-edit run stays in `.seamark/checks/pending/` until
+  the sweep discards it after `pending-max-age` (1 hour).
+- **Done:** Verify Codex trust without granting it in setup.
+  `make agents-native-check CLIENT=codex` runs the setup of
+  `seamark init --client codex --lesson-checks enforce` in a scratch
+  repository with an empty scratch `CODEX_HOME`. Then it asks
+  `codex app-server` for its hook list, with no thread and no model, and
+  writes no trust record. On codex-cli 0.169.0 setup writes nothing into
+  `CODEX_HOME`, and the list shows no project hook, because the client
+  loads none before the user trusts the project. The same entries in the
+  user layer of the scratch home read `untrusted`. Seamark cannot read
+  the trust record, so every Codex path keeps `trust-unknown`.
+- **Done:** Implement and test the content projection of a Codex
+  Update patch. The oracle holds 99 content cases from codex-cli
+  0.169.0 in `internal/integration/testdata/codex/apply_patch_oracle.json`;
+  the first 29 gave identical results on codex-cli 0.164.0. The
+  projection gives the applier bytes for every accepted case except eight
+  listed cases that it keeps unknown on purpose, and unknown for every
+  refused update, offline in `make test`. On codex-cli 0.169.0
+  the seeded differential of `make agents-native-check CLIENT=codex`
+  found no difference in 500 cases, and the replay projects the live
+  Update of the guard recording to the recorded bytes. Shapes outside
+  the verified rules stay unknown, so an armed guard denies them.
+- **Done:** Refuse conflicting duplicate lesson-check handlers consistently
+  across clients. Retain Codex strict refusal and add equivalent Claude
+  handling.
+- **Done:** Fix the misleading status/TUI `off` summary for unreadable hook
+  configuration; keep the already qualified doctor behavior.
+- **Done:** Name the internal audit/lock exclusions in verification's
+  `not covered` output, as one fixed text. Default selection semantics
+  and explicit-path inclusion stay unchanged.
+- **Done:** Close the Codex guard bypass through a tab or a carriage
+  return in a patch header path. codex-cli 0.169.0 removes both
+  characters when it writes, so the guard and the post-edit check judged
+  a path that the applier did not write. Both now refuse such a path as
+  an incomplete path set (fail closed); the advisory edit hook is
+  unchanged. The applier behavior is recorded offline in
+  `internal/integration/testdata/codex/apply_patch_path_control_oracle.json`.
+- **Done:** Investigate and fix the known local-script timeout flake in the
+  benchmark tests without weakening validated behavior. Handle any
+  benchmark fingerprint change explicitly; successful reruns alone do
+  not close this prerequisite. The two interrupted-session tests
+  (`TestRunWorkflowTreatsInterruptedSessionAsCancellation` and
+  `TestRunActivationTreatsInterruptedSessionAsCancellation`) cancelled
+  on a fixed timer, so their bound measured fixture setup. They now
+  cancel when the stub agent has started and bound the time from the
+  interrupt to the return at 30 seconds, half the agent's sleep. With a
+  slowed `git` and CPU load the old interrupted-session tests fail and
+  the new ones pass. The new `TestRunActivationStopsCleanlyOnCancel`
+  covers a cancel before the first session.
+  `TestCommandVersionReadsTheFirstLineOrUnknown` now starts each fresh
+  script once before its timed call, because on macOS the first start
+  of a freshly written script can wait for seconds while other new
+  programs start; a repeat start stays fast. That wait is measured, not
+  explained. Its failure was not reproduced: the old test passed under
+  the same load, so this step rests on the measured first-start delays
+  and on earlier full-suite failures. Only test files change, so no
+  benchmark fingerprint changes. This item covers these four tests.
+  `TestOTelHistogramPreparedFixtureContract` is a
+  separate known flake under load, a judge timeout, and it is not
+  fixed. Its first judge run on a fresh tree builds with an empty Go
+  build cache, and under CPU load that run can pass the 30-second limit
+  in the embedded `judge_command.go`; a timeout counts as a failed
+  verdict. In one loaded run the same command took 34 seconds without
+  the limit. A change to the limit changes the benchmark fingerprints.
+
+Native recording commands require the operator's login, can cost tokens,
+and run in scratch workspaces. Cover the per-tool/context cases above:
+
+```bash
+NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=claude
+NATIVE_RECORD_SCENARIO=timing make native-record CLIENT=codex
+NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=claude
+NATIVE_RECORD_SCENARIO=guard make native-record CLIENT=codex
+NATIVE_RECORD_SCENARIO=post-edit make native-record CLIENT=claude
+NATIVE_RECORD_SCENARIO=post-edit make native-record CLIENT=codex
+```
+
+The post-edit scenario installs `seamark init --lesson-checks check`
+with check pins, so no case can deny a write. An indirection entry on
+`PostToolUse` has the 15-second timeout of the owned post-edit entry. In
+the slow phases the owned entry is removed, and the indirection entry
+runs the post-edit command after a wait of 12 seconds (inside the
+timeout) or 20 seconds (past it). It logs a line before the wait and the
+exit status after the command. Claude Code runs seven cases: the plain
+post-edit reply of an `Edit` in the root and the child context, the
+in-budget slow reply of `Write` and `Edit` in both contexts, and one
+root `Write` past the timeout. Codex runs four turns: a patch that fails
+during its execution (an Add into a read-only directory), the in-budget
+slow reply in the root and a worker, and one root patch past the
+timeout. Each Claude Code child case uses the foreground launch shape.
+For Codex, setup moves the owned post-edit entry alone into the last
+`PostToolUse` group, so one trust review of the setup covers every case.
+`NATIVE_RECORD_RUNS=0` sets up the scratch repository without a paid
+turn: a new Codex repository stops at the trust step, and a new Claude
+Code repository collects an empty copy. The reviewed copies of Claude
+Code 2.1.325 and codex-cli 0.169.0 are committed in
+`internal/integration/testdata/claude/post-edit` and
+`internal/integration/testdata/codex/post-edit`. The README of each
+names the cases, the review verdicts, and how to record again.
+
+A sanitized recording needs review before evidence declarations change.
+The reviewer copies a reviewed recording into
+`internal/integration/testdata/<client>/timing`, `.../guard`, or
+`.../post-edit`, where `make native-replay CLIENT=<client>` replays it
+offline, with no model.
+Do not substitute an in-process handler fixture for a native result. Keep
+raw conversations and native identifiers out of public reports.
+
+Then run the existing release gates:
+
+1. `make verify`: one full gate that runs the ordinary tests, the race
+   detector, lint and the binary smoke exactly once, in that order. It
+   refuses a narrowed package, regex or flag selection.
 2. `make agents-native-check CLIENT=codex` on a machine with the CLI:
    record the installed version and every `blocked` line.
 3. `make agents-native-smoke CLIENT=codex` from a committed tree with
@@ -483,7 +1149,12 @@ MCP approval behavior, and trusted-hook isolation need separate checks.
 4. Review the generated files of the fixture run for anything
    credential-shaped; the checks grep for the canary they set, not for
    every possible secret.
-5. Update the per-agent table above, `docs/STATUS.md`, the README's
+5. `make native-replay CLIENT=claude` and `make native-replay CLIENT=codex`
+   replay the reviewed timing, guard, and post-edit recordings. A replay
+   without a reviewed recording skips as pending and gives no evidence. A
+   reviewed recording moves an aspect from pending to verified only for
+   the client version, tool and context that it shows.
+6. Update the per-agent table above, `docs/STATUS.md`, the README's
    setup section, and `CHANGELOG.md`. `TestUserDocsCoverEveryCommand`
    and `TestOnboardingGuidesNameRealCommands` check the command
    names and flags in the documentation against the CLI.

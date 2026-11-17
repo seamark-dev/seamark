@@ -12,23 +12,30 @@ import (
 const CodexID = "codex"
 
 // codexClient registers Codex setup, hook codecs, and one-shot invocation.
+// It has guard and completion codecs for apply_patch. It has no explore
+// codec, because Codex reports no structured read event.
 func codexClient() Client {
 	return Client{
-		ID:         CodexID,
-		Name:       "Codex",
-		SkillDirs:  []string{skills.AgentsDir},
-		Setup:      codexSetup{},
-		SetupOps:   SetupSupport{Hooks: true, GateHook: true, RegisterMCP: true, ApproveTools: true},
-		Edits:      codexEdits{},
-		Commands:   codexCommands{},
-		Resets:     codexResets{},
-		Invocation: codexInvocation,
+		ID:        CodexID,
+		Name:      "Codex",
+		SkillDirs: []string{skills.AgentsDir},
+		Setup:     codexSetup{},
+		SetupOps: SetupSupport{
+			Hooks: true, GateHook: true, RegisterMCP: true, ApproveTools: true,
+			LessonVerify: true, LessonGuard: true,
+		},
+		Edits:       codexEdits{},
+		Commands:    codexCommands{},
+		Resets:      codexResets{},
+		Guards:      codexGuards{},
+		Completions: codexCompletions{},
+		Invocation:  codexInvocation,
 	}
 }
 
 // codexInvocation returns the Codex one-shot command for a workspace.
-// Flags were checked against codex-cli 0.154.0 and 0.157.0; see the
-// compatibility record.
+// The flags match the `codex exec --help` output of codex-cli 0.154.0 and
+// 0.157.0, and docs/agent-integrations.md documents the preset.
 //
 //   - `--ephemeral` avoids persisting sessions.
 //   - `--sandbox read-only` restricts model-generated commands.
@@ -40,8 +47,9 @@ func codexClient() Client {
 //   - `-` reads the prompt from stdin.
 //
 // User authentication, model, and provider settings still apply. Codex also
-// loads AGENTS.md and project instructions. Stdout carries the final reply;
-// stderr carries progress and errors after a banner, hence DiagnosticTail.
+// loads AGENTS.md and project instructions. Stdout carries the final reply.
+// Stderr starts with a banner before progress and errors, so the error keeps
+// the last stderr lines (DiagnosticTail).
 //
 // root must be absolute so -C does not resolve a relative path again from Dir.
 func codexInvocation(root string) (agent.CommandSpec, error) {

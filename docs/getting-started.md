@@ -1,7 +1,9 @@
 # Install Seamark and connect your AI coding agent
 
-This guide targets **v0.7.0 or newer**. Upgrade an older installation before
-using `--client` and the Codex hook integration.
+This guide targets **v0.9.0 or newer**. `--client` and the Codex hook
+integration need v0.7.0 or newer. Lesson preparation
+(`lessons --prepare`), the delivery reading (`lessons --delivery`), and
+the executable lesson checks need v0.9.0.
 
 ## Requirements
 
@@ -23,7 +25,15 @@ seamark version
 
 Homebrew installs the latest published version, not the development tree.
 Existing installations can update with
-`brew update` followed by `brew upgrade seamark`.
+`brew update` followed by `brew upgrade seamark`. Restart your AI coding
+agent after an upgrade, because its running MCP server keeps the old binary.
+
+An upgrade to v0.9.0 moves the index database to schema 8 when the new
+binary first opens it. The move is one way: an older binary then refuses
+the database. Make a backup before you upgrade: a copy of
+`.seamark/index.db` with any `-wal` and `-shm` file, or a
+`seamark state export` run by the older binary. See
+[Going back to an older seamark](configuration.md#going-back-to-an-older-seamark).
 
 The [tap](https://github.com/seamark-dev/homebrew-tap) provides bottles for
 Apple Silicon macOS and x86_64 Linux. Other platforms, including Intel macOS,
@@ -45,7 +55,8 @@ seamark version
 
 Add `~/.local/bin` to your shell's startup configuration to keep it on `PATH`.
 Check that `command -v seamark` points to the build you intend to use, especially
-if you also installed a release with Homebrew.
+if you also installed a release with Homebrew. Restart your AI coding agent
+after each rebuild, because its running MCP server keeps the old binary.
 
 ## Install a release archive
 
@@ -107,10 +118,11 @@ seamark orient
 seamark doctor
 ```
 
-`orient` shows the main code areas, frequently called functions, files that
-often change together, and recent decisions. `doctor` reports setup problems
-and suggests corrective commands. An optional component that is missing may
-need attention only if you want to use it; read the individual findings.
+`orient` shows a short index health header, the main code areas, frequently
+called functions, files that often change together, and recent decisions.
+`doctor` reports setup problems and suggests corrective commands. An optional
+component that is missing may need attention only if you want to use it; read
+the individual findings.
 
 Ask your AI coding agent:
 
@@ -118,7 +130,9 @@ Ask your AI coding agent:
 > Which files often change together?
 
 For a specific file, run `seamark why path/to/file` or ask the agent to explain
-it using Seamark. A young repository may have little history to report.
+it using Seamark. It lists what the file defines, with line ranges and
+signatures. It also gives caller counts and a few caller definitions. A young
+repository may have little history to report.
 
 ## Start learning from past mistakes
 
@@ -131,12 +145,30 @@ is a matching lesson. You can inspect a file with
 `seamark lessons --file path/to/file` and check delivered reminders with
 `seamark lessons --stats`.
 
+A pin can also carry a check that Seamark runs, such as a pattern that
+no added line may match. You write the check in `.seamark/lessons.yaml`
+and set the mode of the pin to `check` or `enforce`:
+
+```bash
+seamark lessons --set-mode check --pin <pin-ref> --check <check-id>
+seamark lessons --verify                             # check the working tree
+seamark init --client claude --lesson-checks check   # also check each covered edit
+```
+
+See [Executable lessons](lessons.md#executable-lessons-advisory-check-and-enforce)
+for the two checks, the modes, and their limits.
+
 ## If something is missing
 
 - **The command rejects `--client`:** run `seamark version` and check
-  `command -v seamark`. Upgrade to v0.7.0 or newer.
+  `command -v seamark`. Upgrade to v0.9.0 or newer, the version that this
+  guide targets.
 - **The AI coding agent cannot find tools:** restart it from the repository,
   run `seamark doctor`, and check its MCP registration and project trust.
+- **Tools report a database schema newer than they understand:** the running
+  MCP server can be an older binary than the one you installed. Restart the
+  AI coding agent, and run `seamark version` to see the installed version.
+  Do not delete the database.
 - **Codex has tools but no reminders:** review `/hooks`, check hooks are
   enabled, and verify there is a lesson for the edited file.
 - **No findings or proposals:** the history may lack recognizable fixes or

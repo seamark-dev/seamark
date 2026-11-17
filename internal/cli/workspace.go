@@ -2,9 +2,12 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
+	"github.com/seamark-dev/seamark/internal/ownership"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/workspace"
 )
@@ -38,10 +41,11 @@ func resolveWorkspace(opts *options) (workspace.Workspace, error) {
 // neither.
 //
 // The root is the repo_root that the index records, not the -C
-// directory. A copied workspace thus reads the original repository
-// (A0 defect D15, kept as is).
+// directory. A copied workspace thus reads the original repository. A
+// command that writes under that root uses openPinWriter, which refuses
+// that case.
 func openIndex(opts *options) (*store.Store, string, error) {
-	st, p, err := openIndexProbe(opts)
+	st, p, _, err := openIndexWorkspace(opts)
 	if err != nil {
 		return nil, "", err
 	}
@@ -53,11 +57,21 @@ func openIndex(opts *options) (*store.Store, string, error) {
 // probe root is the root that openIndex returns. Pin maintenance needs
 // the probe, because its plan binds the index run (IndexedAt).
 func openIndexProbe(opts *options) (*store.Store, workspace.IndexProbe, error) {
+	st, p, _, err := openIndexWorkspace(opts)
+
+	return st, p, err
+}
+
+// openIndexWorkspace is openIndexProbe that also returns the workspace
+// that it resolved. status compares that workspace with the recorded
+// root. A second resolution starts a second git process, so status
+// uses this one.
+func openIndexWorkspace(opts *options) (*store.Store, workspace.IndexProbe, workspace.Workspace, error) {
 	var none workspace.IndexProbe
 
 	ws, err := resolveWorkspace(opts)
 	if err != nil {
-		return nil, none, err
+		return nil, none, ws, err
 	}
 
 	// The probe classifies the database without a write, so a missing
@@ -66,13 +80,13 @@ func openIndexProbe(opts *options) (*store.Store, workspace.IndexProbe, error) {
 
 	switch p.State {
 	case workspace.IndexAbsent:
-		return nil, none, errNoIndex
+		return nil, none, ws, errNoIndex
 	case workspace.IndexUnreadable:
 		// Probe calls a stat failure other than "not exist" unreadable.
 		// These commands report any stat failure as a missing index, so
 		// this second stat keeps their message.
 		if _, err := os.Stat(ws.DBPath); err != nil {
-			return nil, none, errNoIndex
+			return nil, none, ws, errNoIndex
 		}
 	}
 
@@ -80,7 +94,7 @@ func openIndexProbe(opts *options) (*store.Store, workspace.IndexProbe, error) {
 	// database it returns the error that these commands print.
 	st, err := store.Open(ws.DBPath)
 	if err != nil {
-		return nil, none, err
+		return nil, none, ws, err
 	}
 
 	// The probe reads the meta only with the supported schema. After
@@ -95,8 +109,93 @@ func openIndexProbe(opts *options) (*store.Store, workspace.IndexProbe, error) {
 	if p.State != workspace.IndexReady {
 		_ = st.Close()
 
-		return nil, none, errNoIndex
+		return nil, none, ws, errNoIndex
 	}
 
-	return st, p, nil
+	return st, p, ws, nil
+}
+
+// openPinWriter opens the index of a command that writes the pin file
+// under the recorded root and the ledger of this database: lessons
+// --apply, --retarget, and --prune. It refuses when the two lie in two
+// repositories, as the console does. The refusal comes before the open,
+// because the open migrates an older schema.
+//
+// A refused command writes nothing and prints no change to make by
+// hand, also with distill.write off. That answer reads the write gate of
+// the recorded root, and it promises a file that this workspace does not
+// use.
+func openPinWriter(opts *options) (*store.Store, workspace.IndexProbe, error) {
+	var none workspace.IndexProbe
+
+	// Locate widens -C to the git top level also with --db, as the
+	// console does. So a directory inside a copy finds its default
+	// database, and the rule reads that file as the default database.
+	ws, err := workspace.Locate(opts.workspace, opts.dbPath)
+	if err != nil {
+		return nil, none, err
+	}
+
+	state := ownership.GatherCommand(ws.Root, ws.AbsoluteDB())
+
+	// A root that does not read waits for the open: the open waits longer
+	// for a lock, and it reports a broken database in its own words.
+	if state.Root != ownership.RootUnreadable {
+		if err := pinWriteRefusal(state); err != nil {
+			return nil, none, err
+		}
+	}
+
+	st, probe, err := openIndexProbe(opts)
+	if err != nil {
+		return nil, none, err
+	}
+
+	// The open can end the failure of the first read, so a root that
+	// reads now reaches the rule. A root that still does not read fails
+	// closed, because the file can belong to another repository.
+	if state.Root == ownership.RootUnreadable {
+		if err := pinWriteRefusal(ownership.GatherCommand(ws.Root, ws.AbsoluteDB())); err != nil {
+			_ = st.Close()
+
+			return nil, none, err
+		}
+	}
+
+	return st, probe, nil
+}
+
+// pinWriteRefusal says why a pin write must not run in this state and
+// names the next step, or it returns nil. Only an open that follows can
+// report a file without an index or a newer schema. The recorded root
+// comes from the database, so the text sanitizes it.
+func pinWriteRefusal(s ownership.State) error {
+	d := ownership.Decide(s.Facts)
+	if d.Write != ownership.WriteRefused {
+		return nil
+	}
+
+	root := render.Sanitize(s.Recorded)
+	route := s.Route(d.Route, ownership.SurfaceCommand)
+
+	subject := "this database"
+	if s.File == ownership.FileDefault {
+		subject = "the index of this checkout"
+	}
+
+	switch {
+	case s.Root == ownership.RootUnreadable:
+		return fmt.Errorf("the recorded root of the index cannot be read (%s: %w), so this "+
+			"command could change two repositories; no pin changed; run it again, %s",
+			render.Sanitize(s.DB), s.ReadErr, route)
+	case s.Root == ownership.RootGone:
+		return fmt.Errorf("%s records a directory that no longer exists (%s), and a write would "+
+			"recreate it; nothing changed; %s", subject, root, route)
+	case s.File == ownership.FileDefault:
+		return fmt.Errorf("%s records another repository (%s), so this command would change the pin "+
+			"file there and the ledger in this database; nothing changed; %s", subject, root, route)
+	default:
+		return fmt.Errorf("%s records another repository (%s) that does not own it, so this command would "+
+			"change the pin file there and the ledger in this database; nothing changed; %s", subject, root, route)
+	}
 }

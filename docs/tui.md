@@ -8,13 +8,15 @@ inference agent, deciding on those proposals, maintaining and writing
 the installed pins, and editing the settings that these workflows read.
 Pin maintenance covers a retarget or a prune of a proposal-linked pin and
 a trigger extraction for selected proposals. Pin authoring writes a new
-pin, a pin edit, or a pin removal, and never the proposal ledger.
+pin, a pin edit, or a pin removal, and never the proposal ledger. A scope
+edit of a linked pin is the one pin edit that also writes the ledger.
 Settings also edits the lesson settings of `.seamark/lessons.yaml`: the
 threshold, the budgets, the repetition mode, and the mutes. A selection
 sample shows what a reviewed change does to the lessons of explicit
 paths. It is experimental. The plain commands stay the stable
-interface. Every console write has a plain route: a command, or an edit
-of the file by hand.
+interface. Every console write but one has a plain route: a command, or
+an edit of the file by hand. The exception is a scope edit of a linked
+pin: no command makes it, and a region change by hand unlinks the pin.
 
 ```bash
 seamark tui                 # the enclosing git repository of the cwd
@@ -48,14 +50,17 @@ guide for this session without writing anything.
   with the proposal ledger. SQLite may create its `-wal` and `-shm` side
   files next to an existing database. A selection sample only reads: it
   records no delivery and writes nothing.
-- It never starts network or model work, and never writes a durable
-  change, without a preview. The start or the save is always `y` in that
-  preview, never `enter`; `esc` before `y` changes nothing. The index
+- It never starts network/model work or changes pins, settings or
+  decisions without a preview. The start or save is `y` in that preview,
+  never `enter`; `esc` before `y` changes nothing. Explicit verification
+  (`V`) instead runs at once and appends its audit record; it changes
+  no pin or decision. The index
   build keeps its confirmation (`enter` or `y`), because it writes only
   local derived data. A retarget or a prune writes `.seamark/lessons.yaml`
   and the ledger only after `y` in its preview, and only while
-  `distill.write` is on. A new pin, a pin edit, and a pin removal follow
-  the same rule, but they write `.seamark/lessons.yaml` only, never the
+  `distill.write` is on. A scope edit of a linked pin writes both too.
+  Any other new pin, pin edit, or pin removal follows
+  the same rule, but it writes `.seamark/lessons.yaml` only, never the
   ledger. A save of a lesson setting writes `.seamark/lessons.yaml` only;
   it needs neither the gate nor an index, because it writes no pin.
 - It never chains steps. An evidence refresh does not start a
@@ -68,9 +73,10 @@ guide for this session without writing anything.
 - It never retries work, and it runs one mutation at a time.
 - It never changes the policy, the gate mode, or pins outside a reviewed
   apply, retarget, prune, new pin, pin edit, or pin removal. It never
-  edits the rule of a linked pin. It never sets a scope of your choice
-  on a linked pin: only a retarget changes that scope, to the computed
-  regions. It never removes a linked pin: that is a prune. It never
+  edits the rule of a linked pin. It changes the scope of a linked pin
+  in two reviewed ways only: a retarget sets the computed regions, and a
+  scope edit sets the regions that you choose. It never removes a linked
+  pin: that is a prune. It never
   retargets or prunes a pin without exactly one linked proposal.
   Settings edits only the five fields of `config.yaml` and the five
   lesson settings listed in
@@ -94,7 +100,7 @@ The state of the workspace at a glance.
   LEARN (pending proposals, lessons, review mining, distill agent), and
   GUARD (policy mode and rule counts, gate hooks). Missing data says why;
   it never shows as zero. A stale index adds a banner with `b rebuild
-  now`. A narrow terminal folds the cards into the **Workspace summary**
+  now`; an index that another seamark version built says so there. A narrow terminal folds the cards into the **Workspace summary**
   item, which shows every fact in full.
 - **Attention**: actionable problems, optional additions, unsupported
   capabilities, and unknown evidence stay in separate groups, with one
@@ -105,9 +111,25 @@ The state of the workspace at a glance.
   with `enter`. A link only opens a view, and the Overview never suggests
   paid work that ran before or runs now.
 - **Index build** (`b`): a local parse plus git history mining that writes
-  the index database; `enter` or `y` confirms. It never fetches reviews or
+  the index database; `enter` or `y` confirms, and `f` rebuilds from
+  scratch. It never fetches reviews or
   runs a distillation, and it cannot be cancelled, so `q` offers to exit
-  after it finishes.
+  after it finishes. `b` refuses a database that records another
+  repository and names the console of that root. A newer schema asks for
+  an upgrade instead. When that console cannot run, it names `seamark
+  index --move-root --db <file>` in this workspace when the file lies in
+  it and in no nested checkout. It names that run too when the recorded
+  root is missing and the file lies outside every checkout. Otherwise it
+  names `use another --db`. A missing root
+  can be a moved repository or a detached disk, so `b` builds over it
+  only for a file inside this workspace and outside any repository nested
+  in it. It also
+  refuses a default path that links to the database of another worktree,
+  and a `--db` file whose recorded root cannot be read. For a database in
+  a directory that refuses writes, the refusal names that directory to
+  make writable. A refused `b`
+  reads the index again first, so a fixed cause opens the confirmation
+  on that press. Leaving Overview drops that check.
 
 Plain route: `seamark status`, `seamark doctor`, `seamark index`. Exact
 rules: the header of `internal/tui/overview_learn.go`.
@@ -138,6 +160,18 @@ installs hooks and registers MCP. Setup and the inference agent are
 independent: setting up Codex does not make it the distill agent. Exact
 rules: `internal/integration`.
 
+With lesson checks configured, the detail also shows installed mode,
+configuration, paths per tool/stage/root-child context, binary identity,
+uncovered writers and CLI install/remove commands. This section does not
+install lesson-check or exploration hooks; use the named CLI route. An
+installed choice differs from an active or native-verified path.
+The section also stays for an unreadable hook document, because that file
+can hold a hook. The Installed row then reads `unreadable (<reason>)`, in
+the words of doctor, and the section names no binary and no setup command,
+because setup stops at that file. An unreadable supplemental source keeps
+the installed mode and adds `(a hook source is unreadable)`. See
+[integration limits](agent-integrations.md#installed-active-and-verified-are-different).
+
 ### 3 Lessons
 
 Five sub-views: **Proposals** (`p`), **Pins** (`m`), **Stats** (`s`),
@@ -156,7 +190,10 @@ advisories of `seamark lessons --proposals`. `space` marks pending rows;
   change. With `distill.write` off the preview only shows the YAML to
   paste under `pin:` (`c` copies it through OSC 52 where the terminal
   allows it). With the gate on, `y` writes the pins at the head of the
-  `pin:` list and records the proposals as applied.
+  `pin:` list and records the proposals as applied. When a retarget or a
+  prune would refuse, the preview names the refusal and `y` stays off.
+  `c` still copies the block or records existing pins, and `d` still
+  dismisses, because they write no pin.
 - `d` **dismiss** marks proposals dismissed for the same evidence; pins
   stay. There is no undo.
 - `c` **record as applied** updates the ledger only, for a proposal
@@ -189,7 +226,7 @@ shows the rule, the regions (`repo-wide` for none), and a state label:
 
 | State | Meaning | Route |
 | --- | --- | --- |
-| `pN linked` | One entry and one applied proposal have this rule and regions. | `w`, `-`, `t`; `i` edits the note only |
+| `pN linked` | One entry and one applied proposal have this rule and regions. | `w`, `-`, `t`; `i` edits note, mode, check, and regions, not the rule |
 | `pN edited` | Linked, but the live note differs from the recorded note. | As linked |
 | `no proposal` | No applied or pending proposal has this rule and regions. | `i` edit, `d` remove |
 | `pending pN` | Only pending proposals match. | Record one as applied (`c` in Proposals) |
@@ -219,12 +256,16 @@ Attention words follow the relationship, the most urgent first: `blocked`,
   removes linked pins and moves their proposals from applied to
   superseded; it is a deliberate retirement, not a dismiss. `t` opens a
   trigger extraction review for the linked proposals.
+- A retarget replaces regions that a person chose only in this preview.
+  The preview says so before `y`, and the retarget clears the choice.
+  The detail names the choice and its date, and it calls a computed scope
+  a suggestion.
 - The preview lists every selected pin as `ready`, `no-op`, or `blocked`,
   the regions that change or the note that leaves, WILL and WON'T lines,
   the file diff, and the ledger change. `y` shows only when every pin is ready and
   `distill.write` is on; `o` opens Settings › Pin writing when it is off.
-  The gate covers apply, retarget, prune, and new pins, pin edits, and
-  pin removals in Lessons › Pins.
+  The gate covers apply, retarget, prune, and new pins, pin edits, check
+  definitions, and pin removals in Lessons › Pins.
 - `y` plans again from the current files, rows, gate, and evidence, and
   any difference writes nothing. The commit replaces the pin file
   atomically, then updates the ledger. The two writes are not one
@@ -241,18 +282,21 @@ the same engine without a preview: they change the ready pins and print a
 reason line for each other proposal.
 
 Pins also writes pins for you. It creates, edits, and removes manual
-pins, which no proposal stands behind, and it edits the note of a
-linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
+pins, which no proposal stands behind, and edits the note, mode, check,
+and regions of a linked pin
+([Lessons](lessons.md#pins-that-a-person-writes)):
 
 - `n` opens the form of a new pin in every state, also without an index.
   `i` edits and `d` removes the cursor pin; marks are ignored and stay.
-  A pin with no proposal allows every field. A linked pin allows a note
-  edit only: the rule and scope rows are read-only, and `d` reads `n/a`
-  with "use - Prune". A pending, ambiguous, or duplicate pin refuses `i`
-  and `d`, and so do an entry that the editor cannot change safely and
+  A pin with no proposal allows every field. A linked pin allows note,
+  mode, check, and region edits: the rule stays read-only, and `d` reads
+  `n/a` with "use - Prune". The scope row of a linked pin stays read-only
+  only when the form cannot hold its stored regions. A pending, ambiguous,
+  or duplicate pin refuses `i` and `d`, and so do an entry that the editor cannot change safely and
   an unreadable pin file. The press names the reason and the route.
-- The form has four rows. Rule is one line. Note takes several lines,
-  and `enter` adds a line break. Scope is repository-wide or a list of
+- The form has rule, note and scope rows, plus mode and check rows when
+  lesson-check editing is available. Rule is one line. Note takes
+  several lines, and `enter` adds a line break. Scope is repository-wide or a list of
   regions, and a new pin starts with no choice. A region matches that
   file, or everything under that directory; there are no wildcards. The
   form checks each field as you type. The fields drop control and
@@ -270,11 +314,48 @@ linked pin ([Lessons](lessons.md#pins-that-a-person-writes)):
   The review shows the operation, the file, the entry, the guidance
   before and after, the exact diff, and every blocker with its route.
   It also states the ledger effect: "The proposal ledger does not
-  change." A wording or
-  scope edit says whether the delivery identity changes. A new pin goes
+  change." The exception is a draft that changes the regions of a linked
+  pin, which takes the scope preview below. A wording or
+  scope edit says whether the delivery identity changes. A mode, check,
+  or note edit that keeps the identity but gives the pin a new version
+  says that a context that already saw the pin can receive it again,
+  also in `once-per-context` mode. A new pin goes
   after the last pin; apply still inserts at the head. `y` writes only
   while `distill.write` is on and a readable index records this
   workspace; `o` opens Settings › Pin writing or the Overview build.
+  With `--db` of another repository, `o` names no build.
+- `s` on a draft that changes the regions of a linked pin opens the
+  scope preview. The preview holds every field of the draft as one save.
+  It shows the old and new regions, narrower or broader or
+  repository-wide, each region that names no path yet, the ledger change,
+  and the diff. For a `check` or `enforce` pin it also shows the impact
+  block with the active state, and one coverage sentence. The preview
+  never says that evidence supports your scope. With `y` off, it shows
+  each blocker with its route.
+- A scope edit writes the pin file and the ledger in the same way as a
+  retarget, and a partial result offers the same `c` completion. The row
+  records that a person chose the regions and the date. Its rule, note,
+  and evidence stay. A changed set gives the pin a new delivery identity
+  and version. A new order of the same regions
+  writes both stores, but it keeps the identity and the version. A
+  retyped spelling of the same regions is no change, so it takes the pin
+  review and records no choice. A chosen set can hold more than three
+  regions, and a pin with scope `*` reads as repository-wide.
+- Only the console in its own recorded root can save a scope edit. A
+  copied checkout and `--db` of another repository refuse it, also where
+  they allow a retarget or a prune. If a fix of the file comes first,
+  leave the regions of the pin as they are, then press `i` to open the
+  draft again. A region change by hand unlinks the pin.
+- The form and the MAINTENANCE detail name `w` Retarget for a linked pin
+  only while `w` offers it. While `w` reads `n/a`, they and a press of
+  `w` give the reason and a next action. That action is a route that
+  can finish in that state: `i` to edit the regions, `-` Prune and a new
+  pin with `n` when the form cannot hold the stored regions, an edit by
+  hand, `r` to read again, the Overview build in a copied checkout, or
+  the console in the recorded root with `--db` of another repository.
+  Pins names Prune only while the new pin can save, and the rule row
+  follows the same rule. A review blocker of a rule change says to press
+  `r` and read the route for the rule under MAINTENANCE.
 - `y` plans again from the current file, ledger, and gate. Any
   difference writes nothing, and the result lists the differences. The
   save replaces the file: it keeps the permission bits, not an access
@@ -313,11 +394,14 @@ unavailable; it never shows zero lessons instead.
 **Stats** shows the lessons by source, the proposals by state, the top
 regions, and the records delivered per day (`f` changes the period), with
 the most surfaced lessons, the totals by surface (hook, `change_set`,
-`check`) and by client, suppressed repeats, and eligible lessons never
-delivered. Delivered means emitted through a recorded surface, not read or
+`check`, and `prepare` or `explore` once they have records) and by
+client, suppressed repeats, and eligible lessons never delivered.
+Delivered means emitted through a recorded surface, not read or
 followed. When mined lessons are below the threshold or muted, a line
 counts them, and `o` opens Settings › Lesson mutes. Plain route:
-`seamark lessons --stats`, from the same reader.
+`seamark lessons --stats`, from the same reader. The CLI view also shows
+the MCP tool usage from `.seamark/mcp-usage.jsonl`; the console does
+not.
 
 **Evidence** shows the two sources: local fix commits and GitHub reviews.
 Each source shows its stored findings, its freshness (`refreshed <age>`,
@@ -380,8 +464,32 @@ keys).
 
 Plain route for pin authoring: edit `.seamark/lessons.yaml` by hand;
 `seamark lessons --list` prints the exact rule and region values to
-paste. The sample has no plain command. `seamark lessons --file <path>`
-lists up to 8 lessons of one file, with no pin budget.
+paste. A scope edit of a linked pin has no plain route, because it writes
+the ledger too and a hand edit of the regions unlinks the pin. The sample
+has no plain command. `seamark lessons --file <path>`
+lists every lesson of one file, with no pin budget.
+
+#### Check definitions and verification
+
+With lesson checks configured or relevant hooks installed, the CHECK
+section of Pins shows pin-ref, requested mode, check ID/kind/version,
+predicate, scope and each client's active state. An advisory pin with a
+check is listed, not evaluated. `i` edits the pin's mode and check
+binding; it does not infer a predicate from the note.
+
+`M` opens a check-definition form. It loads the cursor pin's definition
+when one exists, or starts a new definition. Choose the ID, checker kind
+and pattern (pattern checker only). `s` reviews the predicate, exact diff
+and impact on all pins using that ID; `y` writes through `distill.write`.
+This does not change any pin's binding. Invalid definitions and unsafe
+files block the save. See [configuration](configuration.md#executable-lesson-configuration).
+
+`V` runs default working-tree verification, not only the cursor pin or
+marked pins. It shows the shared verification result and appends an
+audit record, so it is an explicit action, not browsing. `V` in that
+view runs again. Freshness reads can mark the held result stale without
+rerunning the checker. A default selection names the audit and lock
+exclusions in `not covered`.
 
 ### 4 Doctor
 
@@ -411,8 +519,10 @@ when each takes effect.
   default, which removes the key; the mute list has no reset. `x`
   discards the draft of the group under the cursor.
 - Pin writing (`distill.write`) governs apply, retarget, prune, and new
-  pins, pin edits, and pin removals in Lessons › Pins. A save of a lesson
-  setting writes no pin, so the gate does not govern it.
+  pins, pin edits, check definitions, and pin removals in Lessons › Pins.
+  It also governs `seamark lessons --apply`, `--prune`, `--retarget`, and
+  `--set-mode`. A save of a lesson setting writes no pin, so the gate does
+  not govern it.
 - A number field of lesson delivery takes the default or a whole number
   above 0. `enter` refuses a number out of range and keeps the typed
   text, so you can fix it. The field refuses an eleventh digit as you
@@ -463,16 +573,22 @@ Exact rules: `internal/settings`.
 | Context | Keys |
 | --- | --- |
 | Global | `1`–`5` destinations, `r` refresh the view, `?` help, `q` quit |
+| Overview | `↑↓` attention items, `enter` open the selected item, `b` index build; in the build confirmation `enter` or `y` builds, `f` rebuilds from scratch, `esc` cancels; `s` opens the setup of Integrations while no agent is set up |
 | Lessons sub-views | `p` Proposals, `m` Pins, `s` Stats, `e` Evidence, `u` Run |
 | Proposals | `space` select pending rows, `x` clear the selection, `f` state (pending, applied, dismissed, superseded), `/` region, `a` apply, `d` dismiss, `c` record as applied, `o` open the PR, `t` trigger extraction; `?` lists every key, and `n/a` marks a key that the cursor row, the selection, or the filters cannot use; the footer lists only the keys that work |
 | Pins | `↑↓` pins, `tab` detail, `space` mark, `x` clear the marks, `f` list (installed, not present, superseded), `/` region, `z` text search, `v` compare with a similar pin, `w` retarget preview, `-` prune preview, `t` trigger extraction, `n` new pin, `i` edit, `d` remove (unlinked; `i` and `d` act on the cursor pin only); `?` always lists `n`, `i`, `d`, `-`, `w`, `t`, and `v`. While one of them reads `n/a`, the footer lists all seven from 60×20. A narrow footer then shows some keys by their letter alone, and at 60×20 the pane, list, and switch keys give way without a marker. When all seven work, a narrow footer cuts keys from the end and shows `…`, as other footers do. At 120 columns `t` and `v` then give way, and at 60×20 only `space select` stays. `n/a` marks a key that the targets cannot use (its press names the reason) |
+| Pins, lesson checks | `M` check definition, `V` verify default working-tree selection; shown when lesson-check UI is available |
+| Check definition | `enter` edit a row, `space` choose kind, `s` review; review `y` writes, `esc` back |
+| Verification | `V` verify again, `r` check freshness (reads the working tree and `lessons.yaml` again and runs no checker), scroll keys, `esc` close |
 | Pins region or search field | `enter` apply, `esc` keep the previous value |
 | Pins comparison | `tab` next similar pin, `↑↓` scroll, `esc`/`enter` close |
 | Retarget or prune preview | `↑↓` scroll, `y` confirm (every pin ready, `distill.write` on, and no other operation running), `o` open Settings › Pin writing (gate off), `esc` cancel |
 | Retarget or prune result | `enter` close, or preview again after a refusal; with a recovery offer: `c` preview the ledger-only completion, `esc` drop it |
+| Scope preview | `↑↓` scroll, `y` confirm (no blocker, `distill.write` on, and no other operation running), `o` open Settings › Pin writing (gate off), `esc` cancel (keeps the draft; `i` opens it again) |
+| Scope edit result | `enter` close (a draft that did not save stays; `i` opens it again); with a recovery offer: `c` preview the ledger-only completion, `esc` drop it |
 | Ledger completion preview | `y` complete the ledger update, `o` open Settings › Pin writing (gate off), `esc` back to the result |
 | Pin form | `enter` edit the row, `esc` leave a field (keeps the text) or close the form (keeps the draft), `s` review, `a` add a region, `x` remove the region under the cursor, or on another row discard the draft (`d` confirm, `esc` keep), `↑↓` rows, `?` help (no field focused); in the Note field `enter` adds a line break. The footer lists the keys in this order, so `esc close` stays in view at 60×20 |
-| Pin review | `y` confirm, `s` sample (while the review holds a candidate file), `o` open the route of a blocker (Settings › Pin writing or the Overview build), `esc` back to the form (close for a removal), scroll keys |
+| Pin review | `y` confirm, `s` sample (while the review holds a candidate file), `o` open the route of a blocker (Settings › Pin writing or the Overview build; no build with `--db` of another repository; no Settings route while Settings refuses the save), `esc` back to the form (close for a removal), scroll keys |
 | Pin result | `enter` close after a written result; after any other result `enter` reviews again and `esc` goes back; `r` read the file again after a failed read |
 | Orphaned pin draft | `c` copy the draft, `x` discard, `esc` close |
 | Sample | `↑↓` rows, `enter` edit a path, `a` add path, `x` remove path, `space` surface, `esc` back |
@@ -487,7 +603,7 @@ Exact rules: `internal/settings`.
 | Extraction result | `↑↓` rows, `tab` pane, `enter` show the cursor proposal in Pins or Proposals, `n` prepare a new review of the open questions |
 | Run, earlier records | `[` earlier run, `]` later run; read-only: `↑↓` rows, `tab` pane, `enter` review the proposals of a distillation |
 | Stats | `tab` pane, `f` period, `↑↓` scroll, `o` open Settings › Lesson mutes (while mined lessons are hidden) |
-| Settings list | `↑↓` move, `enter` edit, `d` return to default, `s` review and save the group under the cursor, `x` discard the draft of that group, `tab` detail |
+| Settings list | `↑↓` move, `enter` edit, `d` return to default, `s` review and save the group under the cursor, `x` discard the draft of that group, `tab` detail, `o` open the Overview build while the index of another repository blocks the selected lessons group |
 | Settings editor | `↑↓` choose, `space` select, `enter`/`esc` done; list editor `a` add, `x` remove, `K`/`J` move |
 | Settings mute editor | `a` add, `enter` change, `x` remove, `s` review and save, `esc` done |
 | Mute record form | `tab` next field, `enter` keep, `esc` cancel |
@@ -516,7 +632,7 @@ discards the drafts and quits, and `esc` stays.
 
 These stay on the CLI or need a hand edit:
 
-- the rule or a scope of your own choice for a linked pin
+- the rule of a linked pin, and stored regions that the form cannot hold
 - a pin with a pending, ambiguous, or duplicate link
 - the order of the pins
 - more than one pin or one mute per save
@@ -566,17 +682,44 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
 - A copied checkout keeps the index of the original repository until it
   is indexed again, and the console then works on the files of that
   root, as the CLI does. Pins detects the case and turns retarget and
-  prune off. A pin review names it as a blocker, the lesson settings
-  groups refuse a save, and the sample is unavailable.
-  `seamark lessons --retarget` and `--prune` still edit the pin file of
-  the original repository. Run `seamark index` in the copy before you
-  use it. With `--db` of another repository, retarget and prune stay on,
-  as in the CLI. The pin writes, the lesson settings saves, and the
-  sample refuse in the same way. The pin form then treats the link of
+  prune off. Proposals turns apply off in the same way. A pin review
+  names it as a blocker, every Settings group refuses a save, and the
+  sample is unavailable. Settings shows the files of the recorded root
+  until the build and says so. After the build the copy reads its own
+  `config.yaml`, so `distill.write` can read another value.
+  `seamark lessons --apply`, `--retarget`, and `--prune` refuse there
+  too. Run `seamark index` in the copy. With `--db` of another repository, retarget, prune, apply, and
+  `config.yaml` saves stay on only when the recorded root owns the
+  database: its default path names that file, also through a link, or it
+  exists and has no default database. Otherwise they refuse and name the console of
+  the recorded root, with this `--db` when the file is a custom database
+  outside another checkout. A file of this checkout, also in its state
+  directory, names `seamark index --move-root --db <file>` in this
+  workspace instead. A command in the recorded root with that file would
+  write two repositories, and without it an id names a row of another
+  ledger. A root that a stat cannot reach for a reason other than a
+  missing path, or that git now widens, names that run here when the
+  file lies in this workspace and in no nested checkout, else another
+  `--db`, because no command can enter that root. A missing root names `seamark index --db <file>` here
+  for a file of this workspace, that `--move-root` run for a file
+  outside every checkout, and another `--db` for a file in another
+  checkout. The home directory counts as no checkout. The pin writes, the lesson settings saves, and the
+  sample refuse in the same way. The CLI commands `--apply`,
+  `--retarget`, and `--prune` follow the same rule, with one difference:
+  outside git, a command in a directory inside the recorded root counts
+  as that root, unless that directory holds `.seamark` or `.git`. A
+  route to a custom database names `--db`. The pin form then treats the link of
   every pin as unknown, because the index records another repository.
-  Its review names that root.
-- The new pin, pin edit, pin removal, mute, and delivery saves refuse a
-  `.seamark/lessons.yaml` with CRLF line breaks. They also refuse a file
+  Its review names that root. Pins names no build here, because `b`
+  refuses a database that records another repository: the build would
+  move that root. The lesson settings name the console of the recorded
+  root, or the `--move-root` run or another `--db` when that console
+  cannot run, and `o` opens no build. A `--db` that names the default database
+  through a link, a relative path, or another case of the path counts as
+  the default database.
+- The new pin, pin edit, pin removal, mute, delivery, and check
+  definition (`M`) saves refuse a `.seamark/lessons.yaml` with CRLF line
+  breaks. They also refuse a file
   with more than one hard link: "replacing this file would break its
   hard link; edit .seamark/lessons.yaml by hand". Apply still writes a
   CRLF file.
@@ -590,8 +733,8 @@ settings of `.seamark/lessons.yaml`; every other key is edited by hand.
   rule or region that you write by hand can be longer; the pin form then
   opens it read-only and names the length.
 - The edit hook, `change_set`, `check`, `why`, `orient`, and `seamark
-  lessons --file` print a pin on one line. So the lines of a multi-line
-  note join without a space. The pin form, the review, and the Pins
+  lessons --file` print a pin on one line. So a line break in a
+  multi-line note reads as one space. The pin form, the review, and the Pins
   detail show the line breaks.
 - A selection sample lists at most the first 8 paths that the hook
   rejects. It reads at most 100 mined lessons per path, as the hook

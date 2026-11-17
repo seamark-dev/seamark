@@ -128,11 +128,12 @@ func TestPinsDetailOfALinkedPinShowsItsReadings(t *testing.T) {
 		"(derived recurrence check; not proof of cause, and not a reason to prune)",
 		"Exposure delivered 3× · first 2026-09-22 · matched 5×",
 		"MAINTENANCE The - key previews a prune. These keys act on the selected pins, or on this pin when nothing is " +
-			"selected. i edits the note of this pin only.",
+			"selected. i edits the note and regions of this pin only.",
 		"Nothing changes before you confirm with y.",
 		"No retarget: its regions are already current.",
 		"No trigger extraction: its trigger paths are already stored.",
-		"distill.write is on",
+		// The gate line names the whole scope that distill.write gates.
+		"distill.write is on: a confirmed preview writes .seamark/lessons.yaml (" + pinWriteScope + ").",
 	} {
 		assert.Contains(t, text, want)
 	}
@@ -242,8 +243,9 @@ func TestPinsActionKeysOpenTheReviewedRequests(t *testing.T) {
 	// The cursor row stands in for an empty selection, and says so.
 	msg, ok := p.requestMaint(maintain.ActionRetarget)().(openMaintMsg)
 	require.True(t, ok)
-	assert.Equal(t, maintain.Request{Action: maintain.ActionRetarget, Refs: []pinfile.EntryRef{pinsRef(in, 2)},
-		Cursor: true}, msg.req)
+	assert.Equal(t, maintain.Request{
+		Action: maintain.ActionRetarget, Refs: []pinfile.EntryRef{pinsRef(in, 2)}, Cursor: true, ReplaceChosen: true,
+	}, msg.req)
 
 	// Marked rows replace the cursor row, in file order. A marked row
 	// that cannot be edited stays in the request, so the preview can
@@ -382,7 +384,7 @@ func TestPinsHiddenKeysNameTheTargetAndTheReason(t *testing.T) {
 	// Without marks the cursor pin is the target, so the note names it
 	// after the reason.
 	h.press("w")
-	assert.Equal(t, `No retarget: its regions are already current ("wrap-sql-errors").`, h.m.toast.text)
+	assert.Equal(t, `No retarget: its regions are already current ("wrap-sql-errors"). `+pinsFormSentence, h.m.toast.text)
 
 	h.press("t")
 	assert.Equal(t, `No trigger extraction: its trigger paths are already stored ("wrap-sql-errors").`,
@@ -391,7 +393,7 @@ func TestPinsHiddenKeysNameTheTargetAndTheReason(t *testing.T) {
 	pinsCursorTo(h, 4)
 	h.press("w")
 	assert.Equal(t, "No retarget: its scope is unknown: scope advice needs an indexed database (the index is "+
-		"stale); build it with `seamark index` (\"close-database-handles\").", h.m.toast.text)
+		"stale); build it with `seamark index` (\"close-database-handles\"). "+pinsFormSentence, h.m.toast.text)
 
 	// With marks the selection is the target, so the note says so and
 	// names the selected pin whose reason it gives.
@@ -400,7 +402,7 @@ func TestPinsHiddenKeysNameTheTargetAndTheReason(t *testing.T) {
 	pinsCursorTo(h, 1)
 	h.press("w")
 	assert.Equal(t, `No retarget: no cited finding is living, so no scope can be computed ("close-db-handles", `+
-		"the selected pin).", h.m.toast.text)
+		"the selected pin). "+pinsFormSentence, h.m.toast.text)
 
 	h.press("t")
 	assert.Equal(t, `No trigger extraction: no cited finding is living ("close-db-handles", the selected pin).`,
@@ -410,7 +412,7 @@ func TestPinsHiddenKeysNameTheTargetAndTheReason(t *testing.T) {
 	pinsCursorTo(h, 4)
 	h.press("space", "w")
 	assert.Equal(t, `No retarget: no cited finding is living, so no scope can be computed ("close-db-handles", `+
-		"the first of 2 selected pins).", h.m.toast.text)
+		"the first of 2 selected pins). "+pinsFormSentence, h.m.toast.text)
 
 	// A history row is no target at all.
 	h.press("x", "f", "w")
@@ -1325,7 +1327,7 @@ func TestPinsRetargetNamesThePinThatHasTheComputedRegions(t *testing.T) {
 		assert.NotContains(t, text, "w previews a retarget", c.name)
 
 		h.press("w")
-		assert.Equal(t, "No retarget: "+c.owner+` ("check-nil-errors").`, h.m.toast.text, c.name)
+		assert.Equal(t, "No retarget: "+c.owner+` ("check-nil-errors"). `+pinsFormSentence, h.m.toast.text, c.name)
 		assert.False(t, pinsOf(h).host.open(), "%s: w opens no preview that can only refuse", c.name)
 		assert.Empty(t, f.called(), c.name)
 	}
@@ -1410,9 +1412,8 @@ func TestPinsCitationsNameEachFindingAndTheGoneOnes(t *testing.T) {
 	assert.NotContains(t, text, "finding 303", "a row that differs needs no ID")
 }
 
-func TestPinsTriggerReadingNamesAHandEditOnlyWithoutARetarget(t *testing.T) {
+func TestPinsTriggerReadingNamesARouteOnlyWithoutARetarget(t *testing.T) {
 	blocked := distill.TriggerFact{Path: "internal/store/rows.go", Together: 3}
-	hand := "edit the regions in .seamark/lessons.yaml by hand"
 
 	f := pinsFake()
 	f.pins.Pins[1].Readings.Trigger.Blocked = []distill.TriggerFact{blocked}
@@ -1425,9 +1426,10 @@ func TestPinsTriggerReadingNamesAHandEditOnlyWithoutARetarget(t *testing.T) {
 	assert.Contains(t, text, "! trigger internal/store/rows.go is confirmed by co-change (3 shared commits), but it "+
 		"sets no region: the path is not in the working tree")
 	assert.NotContains(t, text, "by hand", "w makes the change, so no hand edit is a route")
-	assert.NotContains(t, text, blocked.BlockedLine(), "the CLI words stay out of the console")
+	assert.NotContains(t, text, pinRouteForm, "w makes the change, so no other route shows")
+	assert.NotContains(t, text, blocked.BlockedLine(domain.ProposalApplied), "the CLI words stay out of the console")
 
-	// Without a retarget, the hand edit is the route, and the words say
+	// Without a retarget, the route of the pin shows, and the words say
 	// so. A full region set is told apart from a gone path.
 	full := distill.TriggerFact{Path: "internal/store/rows.go", Region: "internal/store/rows.go", Direct: true}
 	f = pinsFake()
@@ -1438,7 +1440,7 @@ func TestPinsTriggerReadingNamesAHandEditOnlyWithoutARetarget(t *testing.T) {
 	require.NotContains(t, pinsKeys(h), "w")
 
 	assert.Contains(t, pinsDetail(t, h), "! trigger internal/store/rows.go is directly cited by the evidence, but it "+
-		"sets no region: the region set is full; "+hand)
+		"sets no region: the region set is full; use i to edit its regions")
 }
 
 func TestPinsBlockScalarNoteHasNoTrailingBlankRow(t *testing.T) {

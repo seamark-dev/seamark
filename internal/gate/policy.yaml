@@ -1,13 +1,15 @@
-# Default gate policy (RFC-001 §5.5). Ships in WARN mode: verdicts are
-# reported but nothing blocks until a workspace opts into enforcement —
-# a policy layer that cries wolf gets disabled (§10). Override or extend
-# in <workspace>/.seamark/policy.yaml.
+# Default gate policy. Ships in WARN mode: verdicts are reported but
+# nothing blocks until a workspace opts into enforcement, because users
+# turn off a policy that raises false alarms. Override or extend in
+# <workspace>/.seamark/policy.yaml. docs/policies.md in the Seamark
+# repository describes the rules.
 #
 # Rules are CEL expressions over:
 #   effect   list of tags the command classifies to ("infra:mutate" …)
 #   command  {name, argv, raw, is_push, is_force_push, target_branch, dynamic}
 #   env      {is_prod, is_dev, detected: {VAR: value…}}
-#   diff     {files, effects}   (populated by `seamark check`)
+#   diff     {files, effects, unindexed_files, unknown_reach_symbols}
+#            (populated by `seamark check`; the last two are counts, not lists)
 # effect.contains("x") and "x" in effect are both supported.
 
 mode: warn

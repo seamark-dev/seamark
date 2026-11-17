@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/privatedir"
 )
 
 // auditFile is the append-only log of edit-hook firings, the impact/decay
@@ -23,6 +25,18 @@ const auditFile = "lessons-audit.jsonl"
 // under a kilobyte. A longer "line" is corruption (a torn append, stray
 // binary) — it is skipped, not fatal.
 const maxAuditLine = 1 << 20
+
+// The modes of a new firing log and a new .seamark directory. They are
+// the modes of the lesson-check audit stream and the delivery state, so
+// only the owner reads the record of the user's work.
+const (
+	auditDirMode  os.FileMode = 0o700
+	auditFileMode os.FileMode = 0o600
+)
+
+// errUnsafeAuditPath is the error value of a refused firing-log path, so
+// a caller can tell a refusal from a failed write.
+var errUnsafeAuditPath = errors.New("unsafe path")
 
 // DeliveryStatus records whether a matching edit actually received the
 // rendered lesson context. Empty means an injected legacy record written
@@ -95,10 +109,37 @@ type Firing struct {
 	// client identifies one. A session can hold several receiving
 	// contexts, so SessionSHA alone does not say who got the advice.
 	ContextSHA string `json:"context_sha256,omitempty"`
+
+	// The keys of record version 2 follow the legacy keys in this order.
+	// A v2 line without them is the legacy line byte for byte, so every
+	// legacy reader keeps its counts. Only RecordEvent sets them, and the
+	// v1 entry points above leave them empty.
+	SchemaVersion     int         `json:"schema_version,omitempty"`
+	EventID           string      `json:"event_id,omitempty"`
+	EventSeq          int         `json:"event_seq,omitempty"`
+	EventRecords      int         `json:"event_records,omitempty"`
+	Emission          string      `json:"emission,omitempty"`
+	Evaluation        string      `json:"evaluation,omitempty"`
+	PathsComplete     *bool       `json:"paths_complete,omitempty"`
+	RejectedPaths     int         `json:"rejected_paths,omitempty"`
+	GuidanceSHA       string      `json:"guidance_sha256,omitempty"`
+	GuidanceStatus    string      `json:"guidance_status,omitempty"`
+	TurnSHA           string      `json:"turn_sha256,omitempty"`
+	Lane              string      `json:"lane,omitempty"`
+	ContextResettable *bool       `json:"context_resettable,omitempty"`
+	ExploreGeneration uint64      `json:"explore_generation,omitempty"`
+	RecordEvaluations bool        `json:"record_evaluations,omitempty"`
+	Read              *bool       `json:"read,omitempty"`
+	ScopeSHA          string      `json:"scope_sha256,omitempty"`
+	Pins              []FiringPin `json:"pins,omitempty"`
+	PinsOmitted       int         `json:"pins_omitted,omitempty"`
 }
 
-// Delivered reports whether the record represents context that reached the
-// agent. Legacy records have no status and are treated as delivered.
+// Delivered reports whether a surface returned or injected the record's
+// lessons. A record with no status counts as delivered. A legacy edit-hook
+// record has no status. A check, preparation, or change_set record also has
+// no status, because it names no receiver. Delivered does not show that an
+// agent read the lessons.
 func (f Firing) Delivered() bool {
 	return f.Delivery == "" || f.Delivery == DeliveryInjected
 }
@@ -235,19 +276,88 @@ func newFiring(surface string, files []string, tool string, lessons []model.Less
 
 // appendFiring writes one record to the firing log.
 func appendFiring(root string, rec Firing) error {
-	dir := filepath.Join(root, ".seamark")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	f, err := os.OpenFile(filepath.Join(dir, auditFile),
-		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := openAuditLog(root)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
 
 	return json.NewEncoder(f).Encode(rec)
+}
+
+// openAuditLog opens the firing log of root for appends and creates it
+// when it is absent. The v1 entry points and RecordEvent share it, so
+// both writers use one path, one file mode, and one link refusal.
+//
+// A cloned repository can commit a link at .seamark or at the log, and
+// an append through it would write a file outside the repository. So
+// .seamark must be a real directory and the log must not be a link, as
+// for the policy audit log and the lesson-check audit stream. The open
+// also passes NoFollow, for a link that appears after the check. The log
+// has no lock and no rotation: each event is one write on an O_APPEND
+// file, and the statistics need the whole history.
+func openAuditLog(root string) (*os.File, error) {
+	dir := filepath.Join(root, ".seamark")
+
+	if err := ensureAuditDir(dir); err != nil {
+		return nil, err
+	}
+
+	path := filepath.Join(dir, auditFile)
+
+	if err := privatedir.RefuseLink(path, auditLinkRefused); err != nil {
+		return nil, err
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY|privatedir.NoFollow, auditFileMode)
+	if err != nil {
+		return nil, err
+	}
+
+	// An earlier version created the log 0644. The sibling logs tighten
+	// an existing file too, and the chmod acts on the open file, never on
+	// a path that can change after the check.
+	if err := f.Chmod(auditFileMode); err != nil {
+		_ = f.Close()
+
+		return nil, err
+	}
+
+	return f, nil
+}
+
+// ensureAuditDir runs privatedir.EnsureRealDir on dir. It runs it once
+// more when another writer creates the directory between the check and
+// the create, so concurrent hooks never fail on that race.
+func ensureAuditDir(dir string) error {
+	const createPrefix = "firing log: create"
+
+	err := privatedir.EnsureRealDir(dir, auditDirMode, errUnsafeAuditPath, createPrefix)
+	if errors.Is(err, os.ErrExist) {
+		err = privatedir.EnsureRealDir(dir, auditDirMode, errUnsafeAuditPath, createPrefix)
+	}
+
+	return err
+}
+
+// auditLinkRefused builds the error for a symbolic link at the firing
+// log. The text matches the lesson-check audit stream.
+func auditLinkRefused(path string) error {
+	return fmt.Errorf("%w: %s is a symbolic link", errUnsafeAuditPath, path)
+}
+
+// openAuditRead opens the firing log for reading. It refuses a link at
+// the log file itself, as the writer does and as the lesson-check reader
+// does, so a link planted at the file cannot feed outside records into a
+// report. It does not check .seamark: a link there is followed, unlike in
+// the writer, which refuses it. The read creates nothing and changes no
+// mode.
+func openAuditRead(path string) (*os.File, error) {
+	if err := privatedir.RefuseLink(path, auditLinkRefused); err != nil {
+		return nil, err
+	}
+
+	return os.OpenFile(path, os.O_RDONLY|privatedir.NoFollow, 0)
 }
 
 // AuditLogPath returns the firing log path under root. A reader that
@@ -270,9 +380,10 @@ func ReadFirings(root string) ([]Firing, error) {
 // A skipped line is not valid JSON or is longer than the line bound.
 // The count lets a view say that unreadable records exist, instead of
 // showing a log of corrupt lines as an empty log. Blank lines are not
-// records, so the count excludes them.
+// records, so the count excludes them. A symbolic link at the log is an
+// error, because the writer refuses it too.
 func ReadFiringsCounted(root string) (firings []Firing, skipped int, err error) {
-	f, err := os.Open(AuditLogPath(root))
+	f, err := openAuditRead(AuditLogPath(root))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, 0, nil
@@ -594,10 +705,11 @@ func Summarize(firings []Firing, surfaced []model.Lesson) Summary {
 	}
 }
 
-// Exposure is one lesson's firing history: when it first reached an
-// agent, and how many times in total. The first firing — not the pin's
-// apply date — starts the outcome loop's exposure clock, because a pin
-// that never surfaced cannot have changed behavior.
+// Exposure is one lesson's firing history: its first firing on any surface,
+// and how many times in total. A firing shows that a surface returned or
+// injected the lesson, not that an agent read it. The first firing, not the
+// pin's apply date, starts the exposure clock of the outcome loop. A pin that
+// no surface returned cannot have changed behavior.
 type Exposure struct {
 	First   time.Time // earliest delivered firing with a parseable timestamp, UTC
 	Count   int       // delivered firing records naming this lesson, all surfaces

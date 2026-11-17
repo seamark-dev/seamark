@@ -353,6 +353,68 @@ func TestPlanDistillBlocksAMissingAgentAndRunRefusesIt(t *testing.T) {
 	assert.Empty(t, distMarks(t, ws))
 }
 
+func TestInputBindingOpenIndexRefusesAChangedIndex(t *testing.T) {
+	ws, _ := distWorkspace(t, distAreaFindings("a"))
+	b := inputBinding{stale: distill.ErrStale, repoRoot: workspace.Probe(ws).Root}
+
+	st, err := b.openIndex(ws, ErrDistillNotReady)
+	require.NoError(t, err)
+	require.NoError(t, st.Close())
+
+	// The plan read its inputs under another root than the index records.
+	b.repoRoot = filepath.Join(b.repoRoot, "elsewhere")
+
+	_, err = b.openIndex(ws, ErrDistillNotReady)
+	require.ErrorIs(t, err, distill.ErrStale)
+	assert.Contains(t, err.Error(), "the index changed while planning; prepare again")
+
+	absent, err := workspace.Resolve(t.TempDir(), "")
+	require.NoError(t, err)
+
+	_, err = b.openIndex(absent, ErrDistillNotReady)
+	require.ErrorIs(t, err, ErrDistillNotReady)
+	assert.NoFileExists(t, absent.DBPath, "the read-only open never creates the database")
+}
+
+func TestDistInvokerChecksTheCommandBeforeItBuildsTheAgent(t *testing.T) {
+	ws, _ := distWorkspace(t, distAreaFindings("a"))
+
+	bind := func(t *testing.T) inputBinding {
+		t.Helper()
+
+		b, _, err := distReadInputs(integration.Builtin(), distill.ErrStale, ws.Root, ws.DBPath,
+			func(_ string, err error) error { return err })
+		require.NoError(t, err)
+
+		return b
+	}
+
+	b := bind(t)
+	fake := &distAgent{}
+
+	got, err := distInvoker(nil, b, fake, ErrDistillBlocked)
+	require.NoError(t, err)
+	assert.Same(t, fake, got, "a given invoker runs as it is")
+
+	got, err = distInvoker(nil, b, nil, ErrDistillBlocked)
+	require.NoError(t, err)
+	require.NotNil(t, got, "a nil invoker builds the previewed command")
+	assert.Empty(t, fake.called())
+
+	// A command that cannot start wraps the blocked error of the caller.
+	distWrite(t, ws, ".seamark/config.yaml", "agent:\n  argv: [\"no-such-agent-binary-for-tests\"]\n")
+
+	_, err = distInvoker(nil, bind(t), nil, ErrExtractBlocked)
+	require.ErrorIs(t, err, ErrExtractBlocked)
+	assert.Contains(t, err.Error(), `agent cli "no-such-agent-binary-for-tests" not found on PATH`)
+
+	// The configuration now resolves to another command than b binds.
+	_, err = distInvoker(nil, b, fake, ErrDistillBlocked)
+	require.ErrorIs(t, err, distill.ErrStale)
+	assert.NotErrorIs(t, err, ErrDistillBlocked)
+	assert.Contains(t, err.Error(), "the agent command changed since the preview")
+}
+
 func TestNoOpAndCleanupOnlyPreviewsStartNoAgent(t *testing.T) {
 	ws, _ := distWorkspace(t, distAreaFindings("a"))
 
@@ -730,7 +792,7 @@ func TestRunDistillStopsInTheOnlyPlannedGroup(t *testing.T) {
 // Only Codex pins the agent's working directory to the root. The
 // default Claude preset and a custom agent.argv leave Dir empty, so the
 // process runs in the console's working directory. A surface that
-// discloses the directory depends on this contract.
+// discloses the directory relies on this rule.
 func TestDistillPreviewInvocationDirFollowsTheCommand(t *testing.T) {
 	cases := []struct {
 		name, config, command string

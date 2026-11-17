@@ -591,15 +591,15 @@ func TestCLIWorkspaceStateExportCases(t *testing.T) {
 }
 
 func TestCLIWorkspaceCheckWithAMissingDirectory(t *testing.T) {
-	// check resolves -C without a directory test. The index walk then
-	// names the missing directory.
+	// check resolves -C with a directory test, so it names the missing
+	// directory before the index refresh.
 	missing := filepath.Join(t.TempDir(), "missing")
 
 	out, err := run(t, "-C", missing, "check")
 	require.Error(t, err)
 
 	assert.Empty(t, out)
-	assert.Equal(t, fmt.Sprintf("index: walk %s: lstat %s: no such file or directory", missing, missing), err.Error())
+	assert.Equal(t, fmt.Sprintf("workspace %s: no such file or directory", missing), err.Error())
 	assert.NoDirExists(t, missing)
 }
 

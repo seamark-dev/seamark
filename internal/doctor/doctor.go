@@ -95,10 +95,11 @@ func run(reg *integration.Registry, root, dbPath, version string) *Report {
 	inspections := reg.Inspect(root)
 
 	checkHooks(r, inspections)
+	checkLessonChecks(r, inspections, root, integration.SelfIdentity(version))
 	checkAgent(r, reg, root)
 	checkGH(r)
 	checkMCP(r, inspections)
-	checkSkills(r, reg.InspectSkills(root), inspections)
+	checkSkills(r, reg.InspectSkills(root), inspections, autoSkillReaders(reg.Clients(), root))
 	checkApprovals(r, inspections)
 	checkClients(r, inspections)
 	checkGitignore(r, root)
@@ -192,7 +193,10 @@ func checkEffects(r *Report, root string) {
 // in registry order, from the shared inspection. Absent is a fact: a
 // client is set up on request. A hook document that cannot be read, a
 // hook the client runs for some tools only, or a client with one of its
-// two hooks is a warning, because the user expects the other half.
+// two hooks is a warning, because the user expects the other half. The
+// fix gives the action of each hook entry, so one doctor run names every
+// step. The gate action comes first, because the detail names the gate
+// hook first.
 func checkHooks(r *Report, inspections []integration.Inspection) {
 	var (
 		parts   []string
@@ -215,12 +219,10 @@ func checkHooks(r *Report, inspections []integration.Inspection) {
 		lessons := edits.Supported && edits.State != integration.StateAbsent
 
 		switch {
-		case edits.State == integration.StateUnreadable, commands.State == integration.StateUnreadable:
+		case edits.State == integration.StateUnreadable, commands.State == integration.StateUnreadable,
+			edits.State == integration.StatePartial, commands.State == integration.StatePartial:
 			state = StateWarn
-			actions = append(actions, firstAction(edits, commands))
-		case edits.State == integration.StatePartial, commands.State == integration.StatePartial:
-			state = StateWarn
-			actions = append(actions, firstAction(edits, commands))
+			actions = append(actions, commands.Action, edits.Action)
 		case gateHook != lessons && edits.Supported && commands.Supported:
 			state = StateWarn
 			actions = append(actions, restoreAction(insp.ClientID, edits, commands, gateHook))
@@ -238,7 +240,7 @@ func checkHooks(r *Report, inspections []integration.Inspection) {
 		return
 	}
 
-	r.add("hooks", state, strings.Join(parts, " · "), strings.Join(compact(actions), "; "))
+	r.add("hooks", state, strings.Join(parts, " · "), joinActions(actions))
 }
 
 // restoreAction returns the fix for a client with one of its two hooks.
@@ -258,15 +260,33 @@ func restoreAction(clientID string, edits, commands integration.CapabilityInspec
 	return "re-run `seamark init --client " + clientID + "` to restore the missing hook"
 }
 
-// firstAction returns the first corrective action among entries.
-func firstAction(entries ...integration.CapabilityInspection) string {
-	for _, entry := range entries {
-		if entry.Action != "" {
-			return entry.Action
+// joinActions joins corrective actions into one fix line, in the given
+// order. It drops empty actions and repeats, because they add no step.
+// It also drops an action that another kept action contains: the longer
+// action already gives that step. The JSON field stays one string, so
+// the separator is "; ".
+func joinActions(actions []string) string {
+	distinct := compact(actions)
+
+	var kept []string
+
+	for i, action := range distinct {
+		inside := false
+
+		for j, other := range distinct {
+			if i != j && strings.Contains(other, action) {
+				inside = true
+
+				break
+			}
+		}
+
+		if !inside {
+			kept = append(kept, action)
 		}
 	}
 
-	return ""
+	return strings.Join(kept, "; ")
 }
 
 // compact drops empty and repeated strings, keeping the first order.
@@ -365,7 +385,7 @@ func checkMCP(r *Report, inspections []integration.Inspection) {
 		actions = nil
 	}
 
-	r.add("mcp", state, strings.Join(parts, " · "), strings.Join(compact(actions), "; "))
+	r.add("mcp", state, strings.Join(parts, " · "), joinActions(actions))
 }
 
 // checkSkills reports the agent skills per destination, labelled by
@@ -375,8 +395,10 @@ func checkMCP(r *Report, inspections []integration.Inspection) {
 // load text that no longer matches this binary's tool surface. A
 // directory under a seamark skill name that seamark does not own is
 // named and never touched. The verdict comes from the per-client
-// entries of the inspection, the action from the same entries.
-func checkSkills(r *Report, states []skills.ClientState, inspections []integration.Inspection) {
+// entries of the inspection, the action from the same entries. The
+// install route names readers: the clients that a bare `seamark init
+// --skills` installs for.
+func checkSkills(r *Report, states []skills.ClientState, inspections []integration.Inspection, readers []string) {
 	detail := skills.Details(states)
 	worst := integration.StateAbsent
 	action := ""
@@ -409,20 +431,35 @@ func checkSkills(r *Report, states []skills.ClientState, inspections []integrati
 		// --skills` never replaces it, so the fix must say what to do first.
 		r.add("skills", StateInfo, detail, action)
 	case integration.StateAbsent:
-		r.add("skills", StateInfo, "agent skills not installed ("+detail+")",
-			action+" for "+strings.Join(clientNames(inspections), " and "))
+		// The route names no client when no client reads a directory
+		// that the install writes.
+		if action != "" && len(readers) > 0 {
+			action += " for " + strings.Join(readers, " and ")
+		}
+
+		r.add("skills", StateInfo, "agent skills not installed ("+detail+")", action)
 	default:
 		r.add("skills", StateOK, detail, "")
 	}
 }
 
-// clientNames lists the display names of the clients that read skills.
-func clientNames(inspections []integration.Inspection) []string {
+// autoSkillReaders lists, in registry order, the display names of the
+// clients that read a directory of skills.AutoTargets. A bare `seamark
+// init --skills` writes only those directories, so the route names only
+// those clients. The rule stays in skills.AutoTargets, which also feeds
+// the install and the init hint.
+func autoSkillReaders(clients []integration.Client, root string) []string {
+	targets := skills.AutoTargets(root)
+
 	var names []string
 
-	for _, insp := range inspections {
-		if entry, ok := insp.Entry(integration.CapabilitySkills); ok && entry.Supported {
-			names = append(names, insp.Name)
+	for _, c := range clients {
+		reads := slices.ContainsFunc(targets, func(t skills.Target) bool {
+			return slices.Contains(c.SkillDirs, t.Dir)
+		})
+
+		if reads {
+			names = append(names, c.Name)
 		}
 	}
 
@@ -484,15 +521,16 @@ func checkApprovals(r *Report, inspections []integration.Inspection) {
 // it cannot read, a receiving context it does not identify, a handler
 // that runs twice, hooks turned off) and the native evidence for what
 // is installed. A warning finding makes the line a warning; evidence
-// and informational findings are facts. A client with nothing
-// installed and nothing to report gets no line: an absent optional
-// capability is not a broken installation.
+// and informational findings are facts. The fix gives the action of
+// each finding, warnings first, because status prints each one too. A
+// client with nothing installed and nothing to report gets no line: an
+// absent optional capability is not a broken installation.
 func checkClients(r *Report, inspections []integration.Inspection) {
 	for _, insp := range inspections {
 		var (
-			parts []string
-			state = StateInfo
-			fix   string
+			parts          []string
+			warns, notices []string
+			state          = StateInfo
 		)
 
 		if evidence := insp.DescribeVerification(); evidence != "" {
@@ -507,16 +545,14 @@ func checkClients(r *Report, inspections []integration.Inspection) {
 
 			parts = append(parts, reason)
 
-			// A warning's action outranks an informational one: the fix
-			// line must name what stops the warning.
+			// Warning actions come first, because they stop the warning.
+			// An informational action follows, unless a warning action
+			// already contains it.
 			if finding.Level == integration.FindingWarning {
-				if state != StateWarn && finding.Action != "" {
-					fix = finding.Action
-				}
-
+				warns = append(warns, finding.Action)
 				state = StateWarn
-			} else if fix == "" && finding.Action != "" {
-				fix = finding.Action
+			} else {
+				notices = append(notices, finding.Action)
 			}
 		}
 
@@ -524,7 +560,7 @@ func checkClients(r *Report, inspections []integration.Inspection) {
 			continue
 		}
 
-		r.add(insp.ClientID, state, strings.Join(parts, "; "), fix)
+		r.add(insp.ClientID, state, strings.Join(parts, "; "), joinActions(append(warns, notices...)))
 	}
 }
 

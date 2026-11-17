@@ -203,3 +203,138 @@ func TestIsRepo(t *testing.T) {
 	assert.True(t, IsRepo(root))
 	assert.False(t, IsRepo(t.TempDir()))
 }
+
+func TestMineListsRenameUnderBothPaths(t *testing.T) {
+	// gitLog passes --no-renames after the fixed --find-renames. Without
+	// it, numstat writes a rename as "pkg/{load.go => loader.go}". That
+	// text names no file, so co-change needs the old and the new path.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root := t.TempDir()
+
+	isolatedGit(t, root, "init", "-q", "-b", "main")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "pkg"), 0o755))
+	writeLines(t, filepath.Join(root, "pkg", "load.go"), 20)
+	isolatedGit(t, root, "add", "-A")
+	isolatedGit(t, root, "commit", "-q", "-m", "add the loader")
+	isolatedGit(t, root, "mv", "pkg/load.go", "pkg/loader.go")
+	isolatedGit(t, root, "commit", "-q", "-m", "rename the loader")
+
+	decisions, _, err := Mine(root, Options{})
+	require.NoError(t, err)
+	require.Len(t, decisions, 2)
+	assert.Equal(t, "rename the loader", decisions[0].Title)
+	assert.ElementsMatch(t, []string{"pkg/load.go", "pkg/loader.go"}, decisions[0].Files)
+}
+
+func TestMineIgnoresLogShowRoot(t *testing.T) {
+	// log.showRoot=false drops the file list of the root commit from
+	// git log --numstat. The root commit holds a+b here, so the co-change
+	// total and the pair counts must not depend on that setting.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root, commit := gitRepo(t)
+
+	commit("feat: a+b together", "pkg/a.go", "pkg/b.go")
+	commit("chore: c alone", "pkg/c.go")
+	commit("fix: a+b again", "pkg/a.go", "pkg/b.go")
+	commit("chore: c again", "pkg/c.go")
+	commit("fix: a+b third time", "pkg/a.go", "pkg/b.go")
+	commit("touch everything once", "pkg/a.go", "pkg/b.go", "pkg/c.go")
+
+	wantDecisions, wantPairs, err := Mine(root, Options{})
+	require.NoError(t, err)
+
+	plainLog := func() string {
+		out, err := exec.Command("git", "-C", root, "log", "--numstat", "--format=%s").Output()
+		require.NoError(t, err)
+
+		return string(out)
+	}
+
+	before := plainLog()
+
+	out, err := exec.Command("git", "-C", root, "config", "log.showRoot", "false").CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	// The case is real only when it changes the plain git log text.
+	require.NotEqual(t, before, plainLog(), "plain git log --numstat")
+
+	gotDecisions, gotPairs, err := Mine(root, Options{})
+	require.NoError(t, err)
+	assert.Equal(t, wantDecisions, gotDecisions)
+	assert.Equal(t, wantPairs, gotPairs)
+}
+
+// TestCoChangeTotalCountsTheWindow pins what the docs say about M in
+// "N/M commits". M counts the commits that co-change keeps, the same for
+// every pair, and it is not the commit count of either file.
+// A merge, a bulk commit, and a lockfile-only commit do not count.
+// A commit with exactly MaxFilesPerCommit files counts, because the cap drops only commits with more files.
+// The cap applies after the exclusion, so excluded files do not make a commit bulk.
+func TestCoChangeTotalCountsTheWindow(t *testing.T) {
+	root, commit := gitRepo(t)
+
+	// The commit helper has no branch support, so the merge uses its own runner with the same env.
+	git := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=tester", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=tester", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
+		)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+
+	commit("a and b", "a.go", "b.go")
+	commit("c alone", "c.go")
+	commit("c alone again", "c.go")
+
+	git("checkout", "-b", "side")
+	commit("a and b on a side branch", "a.go", "b.go")
+	git("checkout", "main")
+	git("merge", "--no-ff", "-m", "merge side", "side")
+
+	bulk := make([]string, 12)
+	for i := range bulk {
+		bulk[i] = fmt.Sprintf("bulk/f%d.go", i)
+	}
+
+	commit("mass reformat", bulk...)
+
+	// The docs and the flag help say "more than", so a commit at the cap still counts.
+	edge := make([]string, 10)
+	for i := range edge {
+		edge[i] = fmt.Sprintf("edge/e%d.go", i)
+	}
+
+	commit("ten files at the cap", edge...)
+
+	// Two lockfile-only commits, so a lost exclusion adds more than the vendored commit drops.
+	commit("bump deps", "go.sum")
+	commit("bump npm deps", "package-lock.json")
+
+	vendored := []string{"d.go"}
+	for i := range 11 {
+		vendored = append(vendored, fmt.Sprintf("vendor/v%d.go", i))
+	}
+
+	commit("d with vendored code", vendored...)
+
+	_, pairs, err := Mine(root, Options{MaxFilesPerCommit: 10})
+	require.NoError(t, err)
+	require.Len(t, pairs, 1)
+
+	assert.Equal(t, "a.go", pairs[0].FileA)
+	assert.Equal(t, "b.go", pairs[0].FileB)
+	assert.Equal(t, 2, pairs[0].Together)
+	assert.Equal(t, 6, pairs[0].Total,
+		"counting the merge, the bulk or the lockfile commits gives more; "+
+			"capping before the exclusion or dropping the commit at the cap gives 5")
+}

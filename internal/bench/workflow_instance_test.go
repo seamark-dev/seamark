@@ -75,6 +75,8 @@ func TestWorkflowInstanceValidateRejectsBadPairs(t *testing.T) {
 // three synthetic variants: deterministic, judged like the base, byte-equal to
 // the base tree, and with the trigger and companion sharing commits.
 func TestCochangeVariantsKeepTheBaseTreeAndCarryThePair(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		variant WorkflowInstance
 		base    Instance

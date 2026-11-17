@@ -3,11 +3,14 @@ package index
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1576,6 +1579,147 @@ func TestRefreshSourcesWithoutGitHubOrigin(t *testing.T) {
 	assertReviewsKept(t, readEvidenceState(t, dbPath))
 }
 
+// readReviewRecord returns the no-review-repository record, the fixes
+// stamp, and the evidence horizon of the database at dbPath.
+func readReviewRecord(t *testing.T, dbPath string) (record, fixesAt string, horizon int64) {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	record, err = st.GetMeta(store.MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+
+	fixesAt, err = st.GetMeta(store.MetaFixesMinedAt)
+	require.NoError(t, err)
+
+	return record, fixesAt, st.EvidenceHorizon()
+}
+
+// setOrigin replaces the origin remote of the repository at root.
+func setOrigin(t *testing.T, root, origin string) {
+	t.Helper()
+
+	for _, args := range [][]string{{"remote", "remove", "origin"}, {"remote", "add", "origin", origin}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		_ = cmd.Run() // remove fails when no origin exists yet, and that is the wanted state
+	}
+}
+
+func TestRefreshSourcesRecordsANoReviewRepository(t *testing.T) {
+	noFetch := func(t *testing.T) reviews.FetchFunc {
+		return func(context.Context, string, string, reviews.Options) ([]byte, error) {
+			t.Error("an origin that names no GitHub repository is never fetched")
+
+			return nil, errors.New("unexpected fetch")
+		}
+	}
+
+	for _, origin := range []string{"", "git@gitlab.com:o/r.git"} {
+		for _, mode := range []SourceMode{SourcesLocal, SourcesReviewsAndLocal} {
+			t.Run(fmt.Sprintf("origin %q mode %v", origin, mode), func(t *testing.T) {
+				root, dbPath := sourceFixture(t, origin)
+
+				res, err := RefreshSources(context.Background(), RefreshRequest{
+					Root: root, Mode: mode, Fetch: noFetch(t),
+				})
+				require.NoError(t, err)
+				require.Equal(t, SourceRefreshed, res.Fixes.State)
+
+				record, fixesAt, horizon := readReviewRecord(t, dbPath)
+				assert.NotEqual(t, "1000", fixesAt)
+				assert.Equal(t, fixesAt, record, "the record holds the fixes stamp of its write")
+				assert.Equal(t, res.Fixes.MinedAt, horizon, "fix findings alone set the horizon")
+			})
+		}
+	}
+
+	t.Run("github origin", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+		_, err := RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, horizon := readReviewRecord(t, dbPath)
+		assert.Empty(t, record)
+		assert.Equal(t, int64(1000), horizon, "the older reviews stamp still bounds the horizon")
+	})
+
+	// A fetch failure comes after origin resolves to GitHub, so it never
+	// counts as a repository without reviews.
+	missing := fmt.Errorf("gh api: %w", &exec.Error{Name: "gh", Err: exec.ErrNotFound})
+	failures := map[string]error{
+		"gh missing": missing,
+		"auth":       fmt.Errorf("gh api: To get started with GitHub CLI: %w", ghExitError(t, 4)),
+	}
+
+	for name, fetchErr := range failures {
+		t.Run(name, func(t *testing.T) {
+			root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
+
+			res, err := RefreshSources(context.Background(), RefreshRequest{
+				Root: root, Mode: SourcesReviewsAndLocal, Fetch: staticFetch("", fetchErr),
+			})
+			require.NoError(t, err)
+			require.NotEqual(t, SourceRefreshed, res.Reviews.State)
+
+			record, _, horizon := readReviewRecord(t, dbPath)
+			assert.Empty(t, record)
+			assert.Equal(t, "1000", readEvidenceState(t, dbPath).reviewsAt)
+			assert.Equal(t, int64(1000), horizon)
+		})
+	}
+
+	t.Run("a GitHub origin clears the record", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "")
+
+		_, err := RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, _ := readReviewRecord(t, dbPath)
+		require.NotEmpty(t, record)
+
+		setOrigin(t, root, "git@github.com:o/r.git")
+
+		_, err = RefreshSources(context.Background(), RefreshRequest{Root: root, Mode: SourcesLocal})
+		require.NoError(t, err)
+
+		record, _, horizon := readReviewRecord(t, dbPath)
+		assert.Empty(t, record, "the next fix write decides again")
+		assert.Equal(t, int64(1000), horizon)
+	})
+
+	t.Run("a fix phase that writes nothing keeps the record", func(t *testing.T) {
+		root, dbPath := sourceFixture(t, "")
+
+		st, err := store.Open(dbPath)
+		require.NoError(t, err)
+		require.NoError(t, st.SetMeta(store.MetaNoReviewRepositoryAt, "1000"))
+		require.NoError(t, st.Close())
+
+		_, err = RefreshSources(context.Background(), RefreshRequest{
+			Root: root, Mode: SourcesLocal, BeforePersist: func(string) error { return errRefused },
+		})
+		require.ErrorIs(t, err, errRefused)
+
+		// A root without git history mines nothing into the same database.
+		res, err := RefreshSources(context.Background(), RefreshRequest{
+			Root: t.TempDir(), DBPath: dbPath, Mode: SourcesLocal,
+		})
+		require.NoError(t, err)
+		require.Equal(t, CauseNoHistory, res.Fixes.Cause)
+
+		record, fixesAt, horizon := readReviewRecord(t, dbPath)
+		assert.Equal(t, "1000", record)
+		assert.Equal(t, "1000", fixesAt)
+		assert.Equal(t, int64(1000), horizon)
+	})
+}
+
 func TestRefreshSourcesStopDuringFetchKeepsTheCorpus(t *testing.T) {
 	root, dbPath := sourceFixture(t, "git@github.com:o/r.git")
 
@@ -1955,4 +2099,1827 @@ func TestSourceModeNames(t *testing.T) {
 	assert.Equal(t, "local", SourcesLocal.String())
 	assert.Equal(t, "reviews-and-local", SourcesReviewsAndLocal.String())
 	assert.Equal(t, "SourceMode(7)", SourceMode(7).String())
+}
+
+// writeTree writes each file of files under root.
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+
+	for rel, content := range files {
+		p := filepath.Join(root, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	}
+}
+
+// calleeFQNs lists the FQNs that the symbol found by query calls.
+func calleeFQNs(t *testing.T, st *store.Store, query string) map[string]string {
+	t.Helper()
+
+	callees, err := st.Callees(mustFind(t, st, query).ID)
+	require.NoError(t, err)
+
+	out := make(map[string]string, len(callees))
+	for _, c := range callees {
+		out[c.FQN] = c.Origin
+	}
+
+	return out
+}
+
+// TestGoTestCallerSkipsTestMethodsOfOtherDirectories proves the Go test
+// visibility rule of the name-match tier. A _test.go method of another
+// directory can never be the target, so it must not make a call ambiguous.
+func TestGoTestCallerSkipsTestMethodsOfOtherDirectories(t *testing.T) {
+	snapFiles := map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"snap/snap.go": `package snap
+
+type Snapshot struct{}
+
+func (s *Snapshot) Err() error { return nil }
+`,
+		"snap/snap_test.go": `package snap
+
+import "testing"
+
+func TestErr(t *testing.T) {
+	s := &Snapshot{}
+	_ = s.Err()
+}
+`,
+		"fake/fake_test.go": `package fake
+
+type fakeCtx struct{}
+
+func (fakeCtx) Err() error { return nil }
+`,
+	}
+
+	t.Run("other directory test method is skipped", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, snapFiles)
+		writeTree(t, root, map[string]string{
+			// Root files share the directory ".", so the edge must exist.
+			"a_test.go": `package m
+
+import "testing"
+
+func TestPing(t *testing.T) {
+	var x pinger
+	x.Ping()
+}
+`,
+			"b_test.go": `package m
+
+type pinger struct{}
+
+func (pinger) Ping() {}
+`,
+			// The rule limits test methods only. A production method stays
+			// visible to a test file of any directory.
+			"other/other_test.go": `package other
+
+import (
+	"testing"
+
+	"example.com/m/snap"
+)
+
+func TestOtherErr(t *testing.T) {
+	s := &snap.Snapshot{}
+	_ = s.Err()
+}
+`,
+		})
+
+		_, st := runIndex(t, root)
+
+		callees := calleeFQNs(t, st, "snap.TestErr")
+		assert.Equal(t, model.OriginUniqueName, callees["snap.Snapshot.Err"], "callees: %v", callees)
+
+		fakeErr := mustFind(t, st, "fake.fakeCtx.Err")
+		callers, err := st.Callers(fakeErr.ID)
+		require.NoError(t, err)
+		assert.Empty(t, callers, "a test method of another directory is never the target")
+
+		assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "TestPing")["pinger.Ping"],
+			"root test files count as one directory")
+
+		otherCallees := calleeFQNs(t, st, "TestOtherErr")
+		assert.Equal(t, model.OriginUniqueName, otherCallees["snap.Snapshot.Err"],
+			"a test caller of another directory still resolves to the production method: %v", otherCallees)
+	})
+
+	t.Run("non-test file in a test directory skips test methods", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, snapFiles)
+		writeTree(t, root, map[string]string{
+			// helpers.go is test code by its directory, but Go builds it
+			// without the _test.go files beside it. So the method of
+			// double_test.go is never its target.
+			"test/e2e/helpers.go": `package e2e
+
+import "example.com/m/snap"
+
+func CheckErr(s *snap.Snapshot) error {
+	return s.Err()
+}
+`,
+			"test/e2e/double_test.go": `package e2e
+
+type double struct{}
+
+func (double) Err() error { return nil }
+`,
+		})
+
+		_, st := runIndex(t, root)
+
+		callees := calleeFQNs(t, st, "CheckErr")
+		assert.Equal(t, model.OriginUniqueName, callees["snap.Snapshot.Err"], "callees: %v", callees)
+	})
+
+	t.Run("same directory test double keeps the call ambiguous", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, snapFiles)
+		writeTree(t, root, map[string]string{
+			"snap/double_test.go": `package snap
+
+type double struct{}
+
+func (double) Err() error { return nil }
+`,
+		})
+
+		_, st := runIndex(t, root)
+
+		for fqn := range calleeFQNs(t, st, "snap.TestErr") {
+			assert.NotContains(t, fqn, ".Err", "two visible Err methods give no edge")
+		}
+	})
+}
+
+// TestPythonTestCallerKeepsTestMethodsOfOtherDirectories proves that the
+// Go visibility rule stays Go only. A Python test file can import a helper
+// from another test directory, so that helper still makes a call ambiguous.
+func TestPythonTestCallerKeepsTestMethodsOfOtherDirectories(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"tests/a/test_x.py": `def test_ping(obj):
+    obj.ping()
+`,
+		"api/svc.py": `class Service:
+    def ping(self):
+        return 1
+`,
+		"tests/b/test_y.py": `class Helper:
+    def ping(self):
+        return 2
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Empty(t, calleeFQNs(t, st, "tests/a/test_x.test_ping"), "two ping methods give no edge")
+}
+
+// effectTags lists the effect tags of the symbol found by query.
+func effectTags(t *testing.T, st *store.Store, query string) []string {
+	t.Helper()
+
+	effs, err := st.EffectsForSymbol(mustFind(t, st, query).ID)
+	require.NoError(t, err)
+
+	tags := make([]string, 0, len(effs))
+	for _, e := range effs {
+		tags = append(tags, e.Tag)
+	}
+
+	return tags
+}
+
+// TestGoCommonMethodNeedsPackageEvidence proves the evidence rule of the
+// name-match tier. A common standard-library method name keeps its guess
+// only when the calling file shares the method's directory or imports its
+// package. A false guess would give the target's effects to the caller.
+func TestGoCommonMethodNeedsPackageEvidence(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"pin/pin.go": `package pin
+
+import "os"
+
+type writer struct{}
+
+func (writer) Replace(s string) { _ = os.WriteFile(s, nil, 0o600) }
+
+func (writer) SetStatus() { _ = os.WriteFile("status", nil, 0o600) }
+
+func files() writer { return writer{} }
+
+func Commit() { files().Replace("x") }
+`,
+		"ui/ui.go": `package ui
+
+import "strings"
+
+func OneLine(s string) string {
+	r := strings.NewReplacer("\n", " ")
+	return r.Replace(s)
+}
+`,
+		"cli/cli.go": `package cli
+
+import "example.com/m/pin"
+
+var _ = pin.Commit
+
+func Write(w interface{ Replace(string) }) { w.Replace("x") }
+`,
+		"blank/b.go": `package blank
+
+import _ "example.com/m/pin"
+
+func Write(w interface{ Replace(string) }) { w.Replace("x") }
+`,
+		"led/led.go": `package led
+
+type Ledger interface{ SetStatus() }
+
+func Move(ls Ledger) { ls.SetStatus() }
+`,
+		"snap.go": `package m
+
+type Snapshot struct{}
+
+func (s *Snapshot) Err() error { return nil }
+`,
+		"sub/a.go": `package sub
+
+import "context"
+
+func A(ctx context.Context) error { return ctx.Err() }
+`,
+		"sub/b.go": `package sub
+
+import "example.com/m"
+
+func B(s *m.Snapshot) error { return s.Err() }
+`,
+		// An empty import path maps to the root key "" too. It is no
+		// import of the module root, so it is no evidence.
+		"sub/c.go": `package sub
+
+import ""
+
+func C(e interface{ Err() error }) error { return e.Err() }
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Empty(t, calleeFQNs(t, st, "ui.OneLine"), "a strings.Replacer call is no call into pin")
+	assert.Empty(t, effectTags(t, st, "ui.OneLine"), "no false effect flows into the text helper")
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "pin.Commit")["pin.writer.Replace"],
+		"the method's own directory is evidence")
+	assert.Equal(t, []string{"fs:write"}, effectTags(t, st, "pin.Commit"))
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "cli.Write")["pin.writer.Replace"],
+		"an import of the method's package is evidence")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "blank.Write")["pin.writer.Replace"],
+		"a blank import is evidence too")
+
+	// A name outside the common table keeps today's guess without evidence:
+	// interface dispatch into another package is a real call.
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "led.Move")["pin.writer.SetStatus"])
+	assert.Equal(t, []string{"fs:write"}, effectTags(t, st, "led.Move"))
+
+	// The root package key is "". Only an import of the module root counts.
+	assert.Empty(t, calleeFQNs(t, st, "sub.A"), "a context call is no call into the root package")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "sub.B")["Snapshot.Err"],
+		"an import of the module root is evidence")
+	assert.Empty(t, calleeFQNs(t, st, "sub.C"), "an empty import path is no evidence")
+}
+
+// TestGoCommonMethodEvidenceIsPerFile proves that the package evidence of a
+// common method name comes from the imports of the calling file. The
+// receiver tier passes them on, so a promoted method keeps its guess. An
+// import in another file of the same directory is no evidence. That rule
+// loses some real calls on purpose, because a directory-wide rule restores
+// many more false guesses.
+func TestGoCommonMethodEvidenceIsPerFile(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"buf/buf.go": `package buf
+
+import "os"
+
+type Buffer struct{}
+
+func (*Buffer) WriteString(s string) { _ = os.WriteFile(s, nil, 0o600) }
+
+type Base struct{}
+
+func (Base) Flush() { _ = os.WriteFile("flush", nil, 0o600) }
+`,
+		"emb/emb.go": `package emb
+
+import "example.com/m/buf"
+
+type T struct{ buf.Base }
+
+func (t T) Done() { t.Flush() }
+`,
+		"pair/pair.go": `package pair
+
+import "example.com/m/buf"
+
+type Pair struct {
+	buf.Base
+	Data *buf.Buffer
+}
+`,
+		// use.go imports nothing, so its calls have no package evidence.
+		"pair/use.go": `package pair
+
+func Fill(p *Pair) { p.Data.WriteString("x") }
+
+func (p Pair) Stop() { p.Flush() }
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "emb.T.Done")["buf.Base.Flush"],
+		"a promoted method keeps its guess through the imports of the calling file")
+	assert.Equal(t, []string{"fs:write"}, effectTags(t, st, "emb.T.Done"))
+
+	assert.Empty(t, calleeFQNs(t, st, "pair.Fill"), "the import of pair.go is no evidence for a field call in use.go")
+	assert.Empty(t, calleeFQNs(t, st, "pair.Pair.Stop"), "the import of pair.go is no evidence for a promoted call in use.go")
+}
+
+// TestCommonMethodNameNeedsNoEvidenceOutsideGo proves that the evidence rule
+// for common Go method names stays Go only. A Python or ECMA method with
+// such a name keeps its guess from another directory without an import,
+// because an import is weak evidence in those languages.
+func TestCommonMethodNameNeedsNoEvidenceOutsideGo(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"lib/conn.py": `class Conn:
+    def Close(self):
+        return 1
+`,
+		"app/stop.py": `def stop(c):
+    c.Close()
+`,
+		"web/sink.ts": `export class Sink {
+	Flush(): number { return 1; }
+}
+`,
+		"app/drain.ts": `export function drain(s: any) {
+	s.Flush();
+}
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "app/stop.stop")["lib/conn.Conn.Close"],
+		"a Python method named Close keeps its guess")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "app/drain.drain")["web/sink.Sink.Flush"],
+		"an ECMA method named Flush keeps its guess")
+}
+
+// TestGoGuessSkipsChainsFromExternalImports proves that a Go call whose
+// operand chain starts at a package outside the repository gets no
+// name-match edge. Such a value is rarely a repository value, so the guess
+// would give the caller false effects.
+func TestGoGuessSkipsChainsFromExternalImports(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"pin/pin.go": `package pin
+
+import "os"
+
+type writer struct{}
+
+func (writer) Replace(s string) { _ = os.WriteFile(s, nil, 0o600) }
+
+func Open() writer { return writer{} }
+
+type Doc struct{}
+
+func (Doc) Render() {}
+`,
+		"parser/parser.go": `package parser
+
+type Parser struct{}
+
+func (Parser) Parse(s string) {}
+`,
+		// The file imports pin, so the package evidence rule cannot be the
+		// reason for a missing edge.
+		"ui/ui.go": `package ui
+
+import (
+	"strings"
+
+	"example.com/m/pin"
+)
+
+var _ = pin.Open
+
+func OneLine(s string) string { return strings.NewReplacer("\n", " ").Replace(s) }
+`,
+		"tpl/t.go": `package tpl
+
+import (
+	"text/template"
+
+	"example.com/m/parser"
+)
+
+var _ parser.Parser
+
+func Load(s string) { _, _ = template.New("x").Parse(s) }
+`,
+		"cli/c.go": `package cli
+
+import "example.com/m/pin"
+
+func Save() { pin.Open().Replace("x") }
+`,
+		"ta/ta.go": `package ta
+
+import (
+	"context"
+
+	"example.com/m/pin"
+)
+
+func Show(k any) { context.Background().Value(k).(pin.Doc).Render() }
+`,
+		"paren/p.go": `package paren
+
+import (
+	_ "strings"
+
+	"example.com/m/pin"
+)
+
+func Show() { (&pin.Doc{}).Render() }
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Empty(t, calleeFQNs(t, st, "ui.OneLine"), "a strings.Replacer value has no repository method")
+	assert.Empty(t, effectTags(t, st, "ui.OneLine"), "no false effect flows into the text helper")
+	assert.Empty(t, calleeFQNs(t, st, "tpl.Load"), "a text/template value has no repository method")
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "cli.Save")["pin.writer.Replace"],
+		"a chain from a repository package keeps its guess")
+	assert.Equal(t, []string{"fs:write"}, effectTags(t, st, "cli.Save"))
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "ta.Show")["pin.Doc.Render"],
+		"a type assertion ends the walk, so the guess stays")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "paren.Show")["pin.Doc.Render"],
+		"a parenthesized operand has no root, and a blank import has no name")
+}
+
+// TestGoUnexportedMethodStaysInItsDirectory proves that a Go call to an
+// unexported method resolves only into the caller's directory. Go allows
+// no call to an unexported method of another package.
+func TestGoUnexportedMethodStaysInItsDirectory(t *testing.T) {
+	files := map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"b/b.go": `package b
+
+type analysis struct{}
+
+func (analysis) change() {}
+`,
+		"a/a.go": `package a
+
+func A(x interface{ change() }) { x.change() }
+`,
+		"b/b2.go": `package b
+
+func B(y analysis) { y.change() }
+`,
+	}
+
+	t.Run("sole candidate", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, files)
+
+		_, st := runIndex(t, root)
+
+		assert.Empty(t, calleeFQNs(t, st, "a.A"), "an unexported method of another directory is never the target")
+		assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "b.B")["b.analysis.change"],
+			"the caller's own directory keeps the guess")
+	})
+
+	t.Run("two candidates", func(t *testing.T) {
+		root := t.TempDir()
+		writeTree(t, root, files)
+		writeTree(t, root, map[string]string{
+			"c/c.go": `package c
+
+type own struct{}
+
+func (own) change() {}
+
+func C(z own) { z.change() }
+`,
+		})
+
+		_, st := runIndex(t, root)
+
+		assert.Empty(t, calleeFQNs(t, st, "c.C"), "two change methods give no edge, as before")
+		assert.Empty(t, calleeFQNs(t, st, "b.B"), "two change methods give no edge, as before")
+	})
+}
+
+// TestUnexportedMethodRuleIsGoOnly proves that the unexported-method rule
+// stays Go only. A lowercase method name is the normal case in Python and
+// ECMA code, and another directory can call it there.
+func TestUnexportedMethodRuleIsGoOnly(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"api/svc.py": `class Service:
+    def ping(self):
+        return 1
+`,
+		"cli/run.py": `def run(svc):
+    svc.ping()
+`,
+		"web/store.ts": `export class Store {
+	save(): number { return 1; }
+}
+`,
+		"app/load.ts": `export function load(s: any) {
+	s.save();
+}
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "cli/run.run")["api/svc.Service.ping"],
+		"a lowercase Python method of another directory keeps its guess")
+	assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, "app/load.load")["web/store.Store.save"],
+		"a lowercase ECMA method of another directory keeps its guess")
+}
+
+// partnerFiles lists the co-change partners of file in the database at
+// dbPath, keyed by path, at any lift.
+func partnerFiles(t *testing.T, dbPath, file string) map[string]store.CoChangePartner {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	partners, err := st.CoChangePartners(file, 0, 100)
+	require.NoError(t, err)
+
+	byFile := make(map[string]store.CoChangePartner, len(partners))
+	for _, p := range partners {
+		byFile[p.File] = p
+	}
+
+	return byFile
+}
+
+// goneList returns the paths of the stored gone list of the database at
+// dbPath. The list holds a hex key for each path, so the helper decodes
+// the keys.
+func goneList(t *testing.T, dbPath string) []string {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	stored, err := st.GetMeta(store.MetaGoneFiles)
+	require.NoError(t, err)
+
+	var keys []string
+	require.NoError(t, json.Unmarshal([]byte(stored), &keys))
+
+	paths := make([]string, 0, len(keys))
+
+	for _, k := range keys {
+		b, err := hex.DecodeString(k)
+		require.NoError(t, err)
+
+		paths = append(paths, string(b))
+	}
+
+	return paths
+}
+
+// hotFileNames lists the files that the orient hubs read from the
+// database at dbPath.
+func hotFileNames(t *testing.T, dbPath string) []string {
+	t.Helper()
+
+	st, err := store.Open(dbPath)
+	require.NoError(t, err)
+
+	defer func() { _ = st.Close() }()
+
+	hot, err := st.HotFiles(100)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(hot))
+	for _, h := range hot {
+		names = append(names, h.File)
+	}
+
+	return names
+}
+
+func TestIndexKeepsLivePartnersOfGoneFiles(t *testing.T) {
+	root := t.TempDir()
+
+	// Every partner changes with pkg/a.go in three commits. Each later
+	// step removes some of them in a different way.
+	partners := []string{
+		"pkg/live.go",              // stays
+		"pkg/unstaged.go",          // deleted, not staged
+		"pkg/staged.go",            // deleted with git rm
+		"pkg/committed.go",         // deleted in a commit
+		"pkg/moved.go",             // renamed with git mv, not committed
+		"pkg/cmoved.go",            // renamed in a commit
+		"pkg/testdata/a.golden",    // under a skipped directory
+		"pkg/testdata/gone.golden", // under a skipped directory, deleted, not staged
+		"pkg/gen.go",               // generated, so not parsed
+		"README.md",                // no parser
+		"pkg/sparse.go",            // skip-worktree, missing from disk
+		"AUTHORS.old",              // deleted in a commit, sorts before every partner
+	}
+
+	body := func(file string, v int) string {
+		switch {
+		case file == "pkg/gen.go":
+			return fmt.Sprintf("// Code generated by hand. DO NOT EDIT.\n\npackage pkg\n\nvar Gen = %d\n", v)
+		case strings.HasSuffix(file, ".go"):
+			name := strings.TrimSuffix(filepath.Base(file), ".go")
+
+			return fmt.Sprintf("package pkg\n\nfunc %s%d() {}\n", strings.ToUpper(name[:1])+name[1:], v)
+		default:
+			return fmt.Sprintf("version %d\n", v)
+		}
+	}
+
+	gitIn(t, root, "init", "-b", "main")
+
+	for v := 1; v <= 3; v++ {
+		writeRepoFile(t, root, "pkg/a.go", fmt.Sprintf("package pkg\n\nfunc A%d() {}\n", v))
+
+		for _, f := range partners {
+			writeRepoFile(t, root, f, body(f, v))
+		}
+
+		gitIn(t, root, "add", "-A")
+		gitIn(t, root, "commit", "-q", "-m", fmt.Sprintf("change %d", v))
+	}
+
+	// Commits without pkg/a.go keep the lift of its pairs above one.
+	for v := 1; v <= 3; v++ {
+		writeRepoFile(t, root, "docs/notes.txt", fmt.Sprintf("notes %d\n", v))
+		gitIn(t, root, "add", "-A")
+		gitIn(t, root, "commit", "-q", "-m", fmt.Sprintf("notes %d", v))
+	}
+
+	gitIn(t, root, "rm", "-q", "pkg/committed.go", "AUTHORS.old")
+	gitIn(t, root, "mv", "pkg/cmoved.go", "pkg/crenamed.go")
+	gitIn(t, root, "commit", "-q", "-m", "remove and rename")
+
+	first, err := Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+	require.True(t, first.HistoryMined)
+
+	before := partnerFiles(t, first.DBPath, "pkg/a.go")
+	require.Contains(t, before, "pkg/live.go")
+	assert.NotContains(t, before, "pkg/committed.go", "a file deleted in a commit is no partner")
+	assert.NotContains(t, before, "pkg/cmoved.go", "the old path of a committed rename is no partner")
+
+	// Mining sorts the files of a commit, so a path that sorts first is
+	// only ever the first file of its pairs.
+	assert.NotContains(t, before, "AUTHORS.old", "a gone file that sorts first is no partner")
+	assert.Equal(t, []string{"AUTHORS.old", "pkg/cmoved.go", "pkg/committed.go"}, goneList(t, first.DBPath))
+
+	// The partners that stay in the workspace through every step, with
+	// their run-1 numbers as seen from each other file.
+	live := []string{"pkg/a.go", "pkg/live.go", "pkg/testdata/a.golden", "pkg/gen.go", "README.md", "pkg/sparse.go"}
+	firstPartners := map[string]map[string]store.CoChangePartner{}
+
+	for _, f := range append(slices.Clone(live), partners...) {
+		firstPartners[f] = partnerFiles(t, first.DBPath, f)
+	}
+
+	// Now the working tree removes files in every uncommitted way.
+	require.NoError(t, os.Remove(filepath.Join(root, "pkg", "unstaged.go")))
+	require.NoError(t, os.Remove(filepath.Join(root, "pkg", "testdata", "gone.golden")))
+	gitIn(t, root, "rm", "-q", "pkg/staged.go")
+	gitIn(t, root, "mv", "pkg/moved.go", "pkg/renamed.go")
+	gitIn(t, root, "update-index", "--skip-worktree", "pkg/sparse.go")
+	require.NoError(t, os.Remove(filepath.Join(root, "pkg", "sparse.go")))
+
+	second, err := Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+
+	// The refresh that tools run mines history again and reuses the parse
+	// cache, so no --force is needed for the gone list to change.
+	assert.False(t, second.Skipped)
+	assert.True(t, second.HistoryMined)
+	assert.Less(t, second.FilesReparsed, second.FilesParsed)
+
+	// The deletion rule ignores skipped directories, so a deleted golden
+	// file is gone too, although the index never parses it.
+	goneFiles := []string{
+		"AUTHORS.old", "pkg/cmoved.go", "pkg/committed.go", "pkg/moved.go", "pkg/staged.go",
+		"pkg/testdata/gone.golden", "pkg/unstaged.go",
+	}
+
+	assert.Equal(t, goneFiles, goneList(t, second.DBPath))
+
+	after := partnerFiles(t, second.DBPath, "pkg/a.go")
+	hubs := hotFileNames(t, second.DBPath)
+
+	for _, gone := range goneFiles {
+		assert.NotContains(t, after, gone, "%s is gone from the workspace", gone)
+		assert.NotContains(t, hubs, gone, "the orient hubs leave out %s", gone)
+
+		// A gone file keeps exactly its live partners, with the numbers
+		// of run 1, because an agent that deletes it still needs them.
+		want := map[string]store.CoChangePartner{}
+		for _, f := range live {
+			want[f] = firstPartners[gone][f]
+		}
+
+		assert.Equal(t, want, partnerFiles(t, second.DBPath, gone), "%s keeps its live partners", gone)
+	}
+
+	// Presence is a git question, not a parse question.
+	for _, kept := range []string{"pkg/testdata/a.golden", "pkg/gen.go", "README.md", "pkg/sparse.go"} {
+		assert.Contains(t, after, kept, "%s is still in the workspace", kept)
+	}
+
+	// The filter runs at read time, so the gone files still count in the
+	// numbers of a surviving pair, and the pair count stays the same.
+	assert.Equal(t, before["pkg/live.go"], after["pkg/live.go"])
+	assert.Equal(t, first.Stats.CoChanges, second.Stats.CoChanges)
+
+	// A full refresh gives the same result as the incremental one.
+	third, err := Run(Options{Root: root, Force: true, Logf: t.Logf})
+	require.NoError(t, err)
+	assert.Equal(t, goneList(t, second.DBPath), goneList(t, third.DBPath))
+	assert.Equal(t, second.Stats.CoChanges, third.Stats.CoChanges)
+
+	for _, f := range append(slices.Clone(live), goneFiles...) {
+		assert.Equal(t, partnerFiles(t, second.DBPath, f), partnerFiles(t, third.DBPath, f), "partners of %s", f)
+	}
+
+	assert.Equal(t, hubs, hotFileNames(t, third.DBPath))
+
+	// A file that comes back stops being gone.
+	gitIn(t, root, "checkout", "--", "pkg/unstaged.go")
+
+	fourth, err := Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+	assert.False(t, fourth.Skipped)
+	assert.NotContains(t, goneList(t, fourth.DBPath), "pkg/unstaged.go")
+	assert.Equal(t, before["pkg/unstaged.go"], partnerFiles(t, fourth.DBPath, "pkg/a.go")["pkg/unstaged.go"])
+	assert.Equal(t, first.Stats.CoChanges, fourth.Stats.CoChanges)
+}
+
+// configGit runs git in root with a fixed identity and no global or
+// system config.
+func configGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull)
+
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v\n%s", args, out)
+}
+
+// constantDiffScript writes an executable script that prints a constant
+// line and touches marker when it runs. It stands in for an external diff
+// program and a textconv driver.
+func constantDiffScript(t *testing.T) (script, marker string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	script = filepath.Join(dir, "const.sh")
+	marker = filepath.Join(dir, "ran")
+	body := "#!/bin/sh\ntouch '" + marker + "'\necho constant\n"
+
+	require.NoError(t, os.WriteFile(script, []byte(body), 0o755))
+
+	return script, marker
+}
+
+func TestWorkspaceStateIgnoresGitConfig(t *testing.T) {
+	// The fingerprint decides whether the index is current. A config that
+	// changes the diff or status text must not change it, or a second edit
+	// of a dirty file or a new file can read as no change.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	script, marker := constantDiffScript(t)
+
+	cases := []struct {
+		name   string
+		config [][2]string
+		attrs  string
+		env    [2]string
+	}{
+		{name: "diff.external", config: [][2]string{{"diff.external", script}}},
+		{name: "GIT_EXTERNAL_DIFF", env: [2]string{"GIT_EXTERNAL_DIFF", script}},
+		{
+			name:   "textconv",
+			config: [][2]string{{"diff.hide.textconv", script}},
+			attrs:  "*.go diff=hide\n",
+		},
+		{name: "color.ui always", config: [][2]string{{"color.ui", "always"}}},
+		{name: "status.showUntrackedFiles no", config: [][2]string{{"status.showUntrackedFiles", "no"}}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			tracked := filepath.Join(root, "main.go")
+			untracked := filepath.Join(root, "new.go")
+			stamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+			require.NoError(t, os.WriteFile(tracked, []byte("package main\n"), 0o644))
+			configGit(t, root, "init", "-q", "-b", "main")
+			configGit(t, root, "add", "-A")
+			configGit(t, root, "commit", "-q", "-m", "initial")
+
+			// The three states: a dirty file, a second edit of it, and a
+			// new untracked file next to it.
+			states := []func(){
+				func() {
+					require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc one() {}\n"), 0o644))
+					_ = os.Remove(untracked)
+				},
+				func() {
+					require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc two() {}\n"), 0o644))
+					_ = os.Remove(untracked)
+				},
+				func() {
+					// The fingerprint holds the mtime of an untracked file, so
+					// each write sets the same mtime.
+					require.NoError(t, os.WriteFile(untracked, []byte("package main\n\nfunc three() {}\n"), 0o644))
+					require.NoError(t, os.Chtimes(untracked, stamp, stamp))
+				},
+			}
+
+			want := make([]string, len(states))
+
+			for i, set := range states {
+				set()
+
+				want[i] = WorkspaceState(root, "")
+				require.NotEmpty(t, want[i])
+			}
+
+			require.NotEqual(t, want[0], want[1], "a second edit changes the fingerprint")
+			require.NotEqual(t, want[1], want[2], "a new file changes the fingerprint")
+
+			for _, kv := range c.config {
+				configGit(t, root, "config", kv[0], kv[1])
+			}
+
+			if c.attrs != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "info", "attributes"), []byte(c.attrs), 0o644))
+			}
+
+			if c.env[0] != "" {
+				t.Setenv(c.env[0], c.env[1])
+			}
+
+			_ = os.Remove(marker)
+
+			for i, set := range states {
+				set()
+				assert.Equal(t, want[i], WorkspaceState(root, ""), "state %d", i)
+			}
+
+			assert.NoFileExists(t, marker, "no external program runs")
+		})
+	}
+}
+
+func TestIndexSeesSecondEditUnderExternalDiff(t *testing.T) {
+	// An external diff prints the same text for every edit. The fast path
+	// must still see a second edit of a dirty file and index the new symbol.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	script, marker := constantDiffScript(t)
+	root := t.TempDir()
+	writeFixture(t, root)
+
+	configGit(t, root, "init", "-q", "-b", "main")
+	configGit(t, root, "add", "-A")
+	configGit(t, root, "commit", "-q", "-m", "initial")
+	configGit(t, root, "config", "diff.external", script)
+
+	tracked := filepath.Join(root, "main.go")
+	require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc main() {}\n\nfunc Delta() {}\n"), 0o644))
+
+	first, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, first.Skipped)
+
+	require.NoError(t, os.WriteFile(tracked, []byte("package main\n\nfunc main() {}\n\nfunc Epsilon() {}\n"), 0o644))
+
+	second, st := runIndex(t, root)
+	assert.False(t, second.Skipped, "a second edit of a dirty file rebuilds")
+	assert.Equal(t, "Epsilon", mustFind(t, st, "Epsilon").Name)
+	assert.NoFileExists(t, marker, "no external program runs")
+}
+
+// gitIndexState is what a write to .git/index changes: the file identity,
+// which a rename over the file replaces, the mtime, and the bytes.
+type gitIndexState struct {
+	info  os.FileInfo
+	bytes []byte
+}
+
+// readGitIndex reads the gitIndexState of the repository at root.
+func readGitIndex(t *testing.T, root string) gitIndexState {
+	t.Helper()
+
+	p := filepath.Join(root, ".git", "index")
+
+	info, err := os.Stat(p)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+
+	return gitIndexState{info: info, bytes: data}
+}
+
+// assertGitIndexKept fails when .git/index differs from before, or when
+// a git process left .git/index.lock behind.
+func assertGitIndexKept(t *testing.T, root string, before gitIndexState, msg string) {
+	t.Helper()
+
+	after := readGitIndex(t, root)
+
+	assert.True(t, os.SameFile(before.info, after.info), "%s: .git/index has a new inode", msg)
+	assert.Equal(t, before.info.ModTime(), after.info.ModTime(), "%s: .git/index has a new mtime", msg)
+	assert.Equal(t, before.bytes, after.bytes, "%s: .git/index has new bytes", msg)
+	assert.NoFileExists(t, filepath.Join(root, ".git", "index.lock"), msg)
+}
+
+// touchOlder gives the file at p an older mtime and keeps its content. A
+// time in the past differs from the stat cache in .git/index, so the
+// test needs no sleep to make git see a touch.
+func touchOlder(t *testing.T, p string, age time.Duration) {
+	t.Helper()
+
+	at := time.Now().Add(-age)
+	require.NoError(t, os.Chtimes(p, at, at))
+}
+
+// clearGitIndexEnv removes the inherited variables that already stop git
+// from writing .git/index, so a plain git command can show the write.
+// t.Setenv restores them after the test.
+func clearGitIndexEnv(t *testing.T) {
+	t.Helper()
+
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "GIT_OPTIONAL_LOCKS" || strings.HasPrefix(k, "GIT_CONFIG_") {
+			t.Setenv(k, "")
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+}
+
+// gitIndexRepo builds a committed repository with a real change in
+// main.go. A plain git status then settles the stat cache, so a later
+// write comes only from a new touch.
+func gitIndexRepo(t *testing.T) string {
+	t.Helper()
+
+	clearGitIndexEnv(t)
+
+	root := t.TempDir()
+	writeFixture(t, root)
+	configGit(t, root, "init", "-q", "-b", "main")
+	configGit(t, root, "add", "-A")
+	configGit(t, root, "commit", "-q", "-m", "initial")
+
+	main := filepath.Join(root, "main.go")
+	require.NoError(t, os.WriteFile(main, []byte("package main\n\nfunc main() {}\n"), 0o644))
+	touchOlder(t, main, 3*time.Hour)
+	configGit(t, root, "status", "--porcelain")
+
+	return root
+}
+
+func TestWorkspaceStateKeepsGitIndex(t *testing.T) {
+	// A touch changes no content. The freshness check must read the
+	// workspace without a rewrite of .git/index, because the rewrite takes
+	// .git/index.lock and a concurrent git command of the user then fails.
+	root := gitIndexRepo(t)
+	touched := filepath.Join(root, "internal", "util", "util.go")
+
+	fingerprint := WorkspaceState(root, "")
+	require.NotEmpty(t, fingerprint)
+
+	touchOlder(t, touched, 2*time.Hour)
+
+	before := readGitIndex(t, root)
+
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a touch changes the fingerprint")
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a second call changes the fingerprint")
+	assertGitIndexKept(t, root, before, "WorkspaceState")
+
+	// A plain git status refreshes the stat cache. The fingerprint stays,
+	// because only the output of git goes into it.
+	configGit(t, root, "status", "--porcelain")
+	assert.Equal(t, fingerprint, WorkspaceState(root, ""), "a refreshed stat cache changes the fingerprint")
+
+	// Controls: each plain command writes the index after a new touch, so
+	// the fixture can show the write that WorkspaceState avoids.
+	touchOlder(t, touched, 4*time.Hour)
+
+	before = readGitIndex(t, root)
+
+	configGit(t, root, "status", "--porcelain")
+	require.NotEqual(t, before.bytes, readGitIndex(t, root).bytes, "a plain git status must write the index")
+
+	touchOlder(t, touched, 5*time.Hour)
+
+	before = readGitIndex(t, root)
+
+	t.Setenv("GIT_OPTIONAL_LOCKS", "0")
+	configGit(t, root, "status", "--porcelain")
+	assertGitIndexKept(t, root, before, "git status with GIT_OPTIONAL_LOCKS=0")
+	configGit(t, root, "diff", "HEAD")
+	require.NotEqual(t, before.bytes, readGitIndex(t, root).bytes,
+		"git diff HEAD must write the index although GIT_OPTIONAL_LOCKS=0")
+}
+
+func TestIndexRunKeepsGitIndex(t *testing.T) {
+	// index.Run reaches WorkspaceState on its fast path and on a build.
+	// Neither path may rewrite .git/index after a touch.
+	t.Run("fast path", func(t *testing.T) {
+		root := gitIndexRepo(t)
+
+		first, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		require.False(t, first.Skipped)
+
+		touchOlder(t, filepath.Join(root, "internal", "util", "util.go"), 2*time.Hour)
+
+		before := readGitIndex(t, root)
+
+		second, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		assert.True(t, second.Skipped, "a touch must keep the fast path")
+		assertGitIndexKept(t, root, before, "the fast path")
+	})
+
+	t.Run("build", func(t *testing.T) {
+		root := gitIndexRepo(t)
+
+		touchOlder(t, filepath.Join(root, "internal", "util", "util.go"), 2*time.Hour)
+
+		before := readGitIndex(t, root)
+
+		sum, err := Run(Options{Root: root})
+		require.NoError(t, err)
+		assert.False(t, sum.Skipped)
+		assertGitIndexKept(t, root, before, "the build")
+	})
+}
+
+// TestGoGuessSkipRulesDropSomeRealCalls pins the real calls that the Go skip
+// rules of the name-match tier drop. Each lost call compiles and reaches a
+// file write, yet gets no edge and no effect. The docs and the changelog list
+// these calls as a known limit. A change that restores one must update that
+// list, so this test fails until it does.
+func TestGoGuessSkipRulesDropSomeRealCalls(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"pin/pin.go": `package pin
+
+import "os"
+
+type Writer struct{}
+
+func (Writer) Replace(s string) { _ = os.WriteFile(s, nil, 0o600) }
+
+func (Writer) Render() { _ = os.WriteFile("r", nil, 0o600) }
+
+func Open() Writer { return Writer{} }
+
+type Level int
+
+func (Level) Describe() string { _ = os.WriteFile("d", nil, 0o600); return "" }
+
+type Flag struct{}
+
+func (*Flag) Set(v string) error { return os.WriteFile(v, nil, 0o600) }
+
+func (*Flag) String() string { return "" }
+
+type Sink struct{}
+
+func (Sink) Write(p []byte) (int, error) { return len(p), os.WriteFile("w", p, 0o600) }
+
+type Fault struct{}
+
+func (Fault) Error() string { _ = os.WriteFile("e", nil, 0o600); return "" }
+`,
+		"mk/mk.go": `package mk
+
+import "example.com/m/pin"
+
+func Writer() pin.Writer { return pin.Open() }
+`,
+		"field/types.go": `package field
+
+import "example.com/m/pin"
+
+type App struct{ W pin.Writer }
+`,
+		"field/run.go": `package field
+
+func (a App) RunM() { a.W.Replace("x") }
+`,
+		"promo/types.go": `package promo
+
+import "example.com/m/pin"
+
+type App struct{ pin.Writer }
+`,
+		"promo/run.go": `package promo
+
+func (a App) RunM() { a.Replace("x") }
+
+func RunF(a App) { a.Replace("x") }
+
+func Draw(a App) { a.Render() }
+`,
+		"local/run.go": `package local
+
+import "example.com/m/mk"
+
+func Var() { w := mk.Writer(); w.Replace("x") }
+
+func Chain() { mk.Writer().Replace("x") }
+`,
+		"local2/run.go": `package local2
+
+import (
+	"example.com/m/mk"
+	"example.com/m/pin"
+)
+
+var _ pin.Writer
+
+func Chain() { mk.Writer().Replace("x") }
+`,
+		"iface/run.go": `package iface
+
+func Run(r interface{ Replace(string) }) { r.Replace("x") }
+`,
+		"gen/run.go": `package gen
+
+import (
+	"cmp"
+	"slices"
+	"sync"
+
+	"example.com/m/pin"
+)
+
+func Or(p, q pin.Writer) { cmp.Or(p, q).Render() }
+
+func OrVar(p, q pin.Writer) { r := cmp.Or(p, q); r.Render() }
+
+func Max(ls []pin.Level) string { return slices.Max(ls).Describe() }
+
+func Once(load func() pin.Writer) { sync.OnceValue(load)().Render() }
+
+func Direct() { pin.Open().Render() }
+`,
+		"flagx/run.go": `package flagx
+
+import (
+	"flag"
+
+	"example.com/m/pin"
+)
+
+var _ pin.Flag
+
+func Set() { _ = flag.Lookup("x").Value.Set("v") }
+`,
+		"conv/run.go": `package conv
+
+import (
+	"errors"
+	"io"
+
+	"example.com/m/pin"
+)
+
+func Write(w pin.Sink, p []byte) { _, _ = io.Writer(w).Write(p) }
+
+func Text(err error) string { return errors.Unwrap(err).Error() }
+
+func Direct(w pin.Sink, p []byte) { _, _ = w.Write(p) }
+
+func Message(f pin.Fault) string { return f.Error() }
+`,
+	})
+
+	_, st := runIndex(t, root)
+
+	// The common-name rule drops a call from a file that neither shares the
+	// method's directory nor imports its package. The outside-package rule
+	// drops a chain that starts at a standard-library package, also when
+	// the chain returns a repository value. The conv file imports pin, so
+	// only the outside-package rule can drop its calls.
+	lost := []string{
+		"field.App.RunM", "promo.App.RunM", "promo.RunF", "local.Var", "local.Chain", "iface.Run",
+		"gen.Or", "gen.Max", "gen.Once", "flagx.Set", "conv.Write", "conv.Text",
+	}
+
+	for _, caller := range lost {
+		for callee := range calleeFQNs(t, st, caller) {
+			assert.NotContains(t, callee, "pin.", "%s keeps no edge into pin", caller)
+		}
+
+		assert.NotContains(t, effectTags(t, st, caller), "fs:write", "%s gets no effect of the dropped call", caller)
+	}
+
+	// The controls keep the guess: a name outside the common table, an
+	// import of the method's package, and a chain from a local variable or
+	// a repository package.
+	kept := map[string]string{
+		"promo.Draw":   "pin.Writer.Render",
+		"local2.Chain": "pin.Writer.Replace",
+		"gen.OrVar":    "pin.Writer.Render",
+		"gen.Direct":   "pin.Writer.Render",
+		"conv.Direct":  "pin.Sink.Write",
+		"conv.Message": "pin.Fault.Error",
+	}
+
+	for caller, callee := range kept {
+		assert.Equal(t, model.OriginUniqueName, calleeFQNs(t, st, caller)[callee], "%s keeps its guess", caller)
+		assert.Contains(t, effectTags(t, st, caller), "fs:write", "%s keeps the effect", caller)
+	}
+}
+
+// TestValueInitializerCallsBecomeEdgesAndEffects proves that a call inside
+// a package-level var initializer gives the var a CALLS edge, so the var
+// shows as a caller of the callee, and that effects reach the var both
+// from a sink called in its literal and through the callee. The JS/TS and
+// Python value bindings get their effects the same way.
+func TestValueInitializerCallsBecomeEdgesAndEffects(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/fx\n",
+		"runners.go": `package main
+
+import (
+	"os"
+	"os/exec"
+)
+
+var toolRunners = map[string]func(string) error{
+	"audit": func(p string) error { return audit(p) },
+	"shell": func(p string) error { return exec.Command(p).Run() },
+}
+
+var plain = map[string]int{"a": 1}
+
+func audit(p string) error {
+	return os.WriteFile(p, nil, 0o600)
+}
+
+func main() {}
+`,
+		"handlers.ts": `import * as fs from "fs";
+
+export const handlers = {
+	save: (p: string, d: string) => fs.writeFileSync(p, d),
+};
+`,
+		"jobs.py": `import os
+
+HANDLERS = {"rm": lambda p: os.remove(p)}
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	runners := mustFind(t, st, "toolRunners")
+	require.Equal(t, model.KindVar, runners.Kind)
+
+	audit := mustFind(t, st, "audit")
+	callers, err := st.Callers(audit.ID)
+	require.NoError(t, err)
+	require.Len(t, callers, 1, "the var is the only caller of audit")
+	assert.Equal(t, runners.ID, callers[0].ID)
+	assert.Equal(t, model.OriginSamePackage, callers[0].Origin)
+
+	effs, err := st.EffectsForSymbol(runners.ID)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []store.Effect{
+		{Tag: "proc:exec", Origin: "direct", Depth: 0},
+		{Tag: "fs:write", Origin: "propagated", Depth: 1},
+	}, effs, "a sink in the literal is direct, the callee's sink is one hop away")
+
+	plain := mustFind(t, st, "plain")
+	effs, err = st.EffectsForSymbol(plain.ID)
+	require.NoError(t, err)
+	assert.Empty(t, effs, "a var without a call reaches nothing")
+
+	for _, query := range []string{"handlers.handlers", "jobs.HANDLERS"} {
+		sym := mustFind(t, st, query)
+		effs, err := st.EffectsForSymbol(sym.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []store.Effect{{Tag: "fs:write", Origin: "direct", Depth: 0}}, effs, query)
+	}
+}
+
+// TestFastPathRebuildsAnIndexOfAnOlderParser proves that an unchanged
+// workspace whose index records an older parse cache version is rebuilt
+// by a plain run, so an upgrade gains the new edges without --force, and
+// that the rebuilt index skips again. A file that does not accept writes
+// keeps the skip, because a rebuild there fails on every run.
+func TestFastPathRebuildsAnIndexOfAnOlderParser(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module example.com/fx\n",
+		"main.go": `package main
+
+var runners = map[string]func(){
+	"audit": func() { audit() },
+}
+
+func audit() {}
+
+func main() {}
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	git := func(args ...string) {
+		t.Helper()
+
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+	git("init", "-b", "main")
+	git("add", "-A")
+	git("commit", "-m", "initial")
+
+	first, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	require.False(t, first.Skipped)
+
+	// An older binary left no edge from the var and recorded its own
+	// parse cache version.
+	dbPath := store.DefaultPath(root)
+	ageIndex := func() {
+		t.Helper()
+
+		db, err := sql.Open("sqlite", dbPath)
+		require.NoError(t, err)
+		defer func() { _ = db.Close() }()
+
+		_, err = db.Exec(`DELETE FROM edge WHERE kind = 'CALLS' AND src IN (SELECT id FROM symbol WHERE kind = 'var')`)
+		require.NoError(t, err)
+		_, err = db.Exec(`UPDATE meta SET value = '2' WHERE key = ?`, store.MetaParseCacheVersion)
+		require.NoError(t, err)
+	}
+
+	varCallers := func() int {
+		t.Helper()
+
+		st, err := store.OpenReadOnly(dbPath)
+		require.NoError(t, err)
+		defer func() { _ = st.Close() }()
+
+		syms, err := st.FindSymbols("audit", 1)
+		require.NoError(t, err)
+		require.NotEmpty(t, syms)
+		callers, err := st.Callers(syms[0].ID)
+		require.NoError(t, err)
+
+		return len(callers)
+	}
+
+	ageIndex()
+	require.Zero(t, varCallers(), "the aged index lacks the edge")
+
+	rebuilt, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.False(t, rebuilt.Skipped, "an older parse cache version must not skip")
+	assert.Equal(t, rebuilt.FilesParsed, rebuilt.FilesReparsed, "the old cache is not reused")
+	assert.Equal(t, 1, varCallers(), "the rebuild gains the edge from the var")
+
+	again, err := Run(Options{Root: root})
+	require.NoError(t, err)
+	assert.True(t, again.Skipped, "a current index still skips")
+
+	if os.Geteuid() == 0 {
+		return // root writes a file with mode 0444
+	}
+
+	ageIndex()
+	require.NoError(t, os.Chmod(dbPath, 0o444))
+	t.Cleanup(func() { _ = os.Chmod(dbPath, 0o644) })
+
+	readOnly, err := Run(Options{Root: root})
+	require.NoError(t, err, "a file that does not accept writes must not fail every run")
+	assert.True(t, readOnly.Skipped)
+	assert.True(t, readOnly.ReadOnly)
+}
+
+// TestOtherVersionReadsTheStoredParseCacheVersion proves the rule that
+// the readers which never rebuild share: an index of this version is not
+// another version, an aged one is, an index with a run and no stored
+// version (from before the version) is, and a database that no run
+// completed is not. A failed read is an error, not a current index.
+func TestOtherVersionReadsTheStoredParseCacheVersion(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root)
+	sum, st := runIndex(t, root)
+
+	other, err := OtherVersion(st)
+	require.NoError(t, err)
+	assert.False(t, other, "a run of this binary")
+
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "2"))
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.True(t, other, "an index of an older parser")
+
+	db, err := sql.Open("sqlite", sum.DBPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM meta WHERE key = ?`, store.MetaParseCacheVersion)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.True(t, other, "a run from before the version was stored")
+
+	_, err = Run(Options{Root: root, Logf: t.Logf})
+	require.NoError(t, err)
+
+	other, err = OtherVersion(st)
+	require.NoError(t, err)
+	assert.False(t, other, "the rebuild records this version")
+
+	empty, err := store.Open(filepath.Join(t.TempDir(), "index.db"))
+	require.NoError(t, err)
+
+	other, err = OtherVersion(empty)
+	require.NoError(t, err)
+	assert.False(t, other, "no completed run, nothing to compare")
+
+	require.NoError(t, empty.Close())
+
+	_, err = OtherVersion(empty)
+	assert.Error(t, err, "a failed read is not a current index")
+}
+
+// TestClassBodyCallsBelongToTheClassOnly proves that a call in a class body
+// outside the methods gives the class its edge and effect, and that a
+// method's call stays on the method: the callee lists the method, not the
+// class, in JS/TS and in Python.
+func TestClassBodyCallsBelongToTheClassOnly(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"store.ts": `import * as fs from "fs";
+
+export class Store {
+	save = (p: string, d: string) => fs.writeFileSync(p, d);
+
+	load(p: string) {
+		return audit(p);
+	}
+}
+
+export function audit(p: string) {
+	return p;
+}
+`,
+		"jobs.py": `import os
+
+
+class Jobs:
+    HANDLERS = {"rm": lambda p: os.remove(p)}
+
+    def run(self, p):
+        return audit(p)
+
+
+def audit(p):
+    return p
+`,
+	}
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	for _, tc := range []struct{ class, method, callee string }{
+		{"store.Store", "store.Store.load", "store.audit"},
+		{"jobs.Jobs", "jobs.Jobs.run", "jobs.audit"},
+	} {
+		class := mustFind(t, st, tc.class)
+		require.Equal(t, model.KindType, class.Kind, tc.class)
+
+		effs, err := st.EffectsForSymbol(class.ID)
+		require.NoError(t, err)
+		assert.Equal(t, []store.Effect{{Tag: "fs:write", Origin: "direct", Depth: 0}}, effs, tc.class)
+
+		callers, err := st.Callers(mustFind(t, st, tc.callee).ID)
+		require.NoError(t, err)
+		require.Len(t, callers, 1, "callers of %s", tc.callee)
+		assert.Equal(t, tc.method, callers[0].FQN, "the method's call is not copied onto the class")
+	}
+}
+
+// TestClassBodyReceiverCallResolvesToItsOwnClass proves that this.save()
+// in a class body resolves through the same-class tier to the save method
+// of that class. The caller is the class symbol, which carries the calls
+// of a field arrow function and of a method with a computed name. Another
+// class with a save method makes the unique-name guess abstain, so only
+// the same-class tier can give the edge and the fs:write effect. A private
+// (#m) method is a method symbol, and this.#flush() resolves to it. The
+// class also holds an edge to its private method #flush. A nested class
+// that extends Kit inherits save, so its this.save() calls the save method
+// of Kit. A computed member key of a nested class keeps the this of Kit.
+// Both calls resolve to Kit through the same-class tier.
+func TestClassBodyReceiverCallResolvesToItsOwnClass(t *testing.T) {
+	for _, withOther := range []bool{false, true} {
+		root := t.TempDir()
+		files := map[string]string{
+			"panel.ts": `import * as fs from "fs";
+
+export class Panel {
+	onClick = () => { this.save(); };
+
+	save() { fs.writeFileSync("a", "b"); }
+
+	handle() { this.save(); }
+}
+`,
+			"board.ts": `import * as fs from "fs";
+
+export class Board {
+	[Symbol.dispose]() {
+		this.store();
+	}
+
+	#flush() {
+		this.store();
+	}
+
+	close() {
+		this.#flush();
+	}
+
+	store() { fs.writeFileSync("a", "b"); }
+}
+`,
+			"kit.ts": `import * as fs from "fs";
+
+export class Kit {
+	Sub = class extends Kit {
+		f = () => this.save();
+	};
+	Keyed = class { [this.store()] = 1; };
+
+	save() { fs.writeFileSync("a", "b"); }
+
+	store() { fs.writeFileSync("k", "v"); return "k"; }
+}
+`,
+		}
+
+		if withOther {
+			files["other.ts"] = "export class Other {\n\tsave() { return 2; }\n\n\tstore() { return 3; }\n}\n"
+		}
+
+		for rel, content := range files {
+			require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+		}
+
+		_, st := runIndex(t, root)
+
+		for _, tc := range []struct {
+			caller  string
+			callees []string
+			depth   int
+		}{
+			{"panel.Panel", []string{"panel.Panel.save"}, 1},
+			{"panel.Panel.handle", []string{"panel.Panel.save"}, 1},
+			{"board.Board", []string{"board.Board.#flush", "board.Board.store"}, 1},
+			{"board.Board.#flush", []string{"board.Board.store"}, 1},
+			{"board.Board.close", []string{"board.Board.#flush"}, 2},
+			{"kit.Kit", []string{"kit.Kit.save", "kit.Kit.store"}, 1},
+		} {
+			caller := mustFind(t, st, tc.caller)
+
+			callees, err := st.Callees(caller.ID)
+			require.NoError(t, err)
+			require.Len(t, callees, len(tc.callees), "%s, other class %v", tc.caller, withOther)
+
+			for i, want := range tc.callees {
+				assert.Equal(t, want, callees[i].FQN, "%s, other class %v", tc.caller, withOther)
+				assert.Equal(t, model.OriginSameClass, callees[i].Origin, "%s, other class %v", tc.caller, withOther)
+			}
+
+			effs, err := st.EffectsForSymbol(caller.ID)
+			require.NoError(t, err)
+			assert.Equal(t, []store.Effect{{Tag: "fs:write", Origin: "propagated", Depth: tc.depth}}, effs,
+				"%s, other class %v", tc.caller, withOther)
+		}
+	}
+}
+
+// TestPrivateMemberReferenceResolvesInItsClass proves that every access
+// X.#name in a class resolves to the private member of that class through
+// the same-class tier, and never through a guess. Another file declares
+// #persist, #log and #run, so a guess would abstain or pick the wrong
+// class. A value, a bind operand, an alias call, a call through the class
+// name, a getter read and a setter write reach the private method or
+// accessor. A get and set pair gives an edge to both. A private field
+// resolves to the class, which carries the field initializer, and a class
+// that carries nothing gives no edge. A private field #run of A gives no
+// edge to the #run method of Other. The class holds an edge to each
+// private method and accessor, so the callers of #persist list it.
+func TestPrivateMemberReferenceResolvesInItsClass(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"store.ts": `import * as fs from "fs";
+
+export class Store {
+	#persist(p: string) { fs.writeFileSync(p, ""); }
+	get #data() { fs.writeFileSync("d", ""); return 1; }
+	set #value(v: number) { fs.writeFileSync("v", ""); }
+	get #state() { return 1; }
+	set #state(v: number) { fs.writeFileSync("s", ""); }
+	#onChange = (p: string) => fs.writeFileSync(p, "");
+	static #log(p: string) { fs.writeFileSync(p, ""); }
+
+	direct(p: string) { this.#persist(p); }
+	value(ps: string[]) { ps.forEach(this.#persist); }
+	bound(p: string) { setTimeout(this.#persist.bind(this, p), 0); }
+	alias(p: string) { const self = this; return function () { self.#persist(p); }; }
+	read() { return this.#data; }
+	write(p: number) { this.#value = p; }
+	toggle() { this.#state = 1; }
+	handler(em: any) { em.on("change", this.#onChange); }
+	viaName(p: string) { Store.#log(p); }
+	pure(p: string) { return p.trim(); }
+}
+`,
+		"a.ts": `export class A {
+	#run = (p: string) => p.trim();
+
+	go(p: string) { return this.#run(p); }
+}
+
+export class Empty {
+	#n = 1;
+
+	peek() { return this.#n; }
+}
+`,
+		"other.ts": `import * as fs from "fs";
+
+export class Other {
+	#persist(p: string) { return p; }
+	static #log(p: string) { return p; }
+	#run(p: string) { fs.writeFileSync(p, ""); }
+
+	start(p: string) { this.#run(p); this.#persist(p); Other.#log(p); }
+}
+`,
+	}
+
+	for rel, content := range files {
+		require.NoError(t, os.WriteFile(filepath.Join(root, rel), []byte(content), 0o644))
+	}
+
+	_, st := runIndex(t, root)
+
+	write1 := []store.Effect{{Tag: "fs:write", Origin: "propagated", Depth: 1}}
+
+	for _, tc := range []struct {
+		caller  string
+		callees []string
+		effects []store.Effect
+	}{
+		{"store.Store.direct", []string{"store.Store.#persist"}, write1},
+		{"store.Store.value", []string{"store.Store.#persist"}, write1},
+		{"store.Store.bound", []string{"store.Store.#persist"}, write1},
+		{"store.Store.alias", []string{"store.Store.#persist"}, write1},
+		{"store.Store.read", []string{"store.Store.#data"}, write1},
+		{"store.Store.write", []string{"store.Store.#value"}, write1},
+		{"store.Store.toggle", []string{"store.Store.#state", "store.Store.#state"}, write1},
+		{"store.Store.handler", []string{"store.Store"}, write1},
+		{"store.Store.viaName", []string{"store.Store.#log"}, write1},
+		{"store.Store.pure", nil, nil},
+		{"a.A.go", []string{"a.A"}, nil},
+		{"a.Empty.peek", nil, nil},
+		{"other.Other.start", []string{"other.Other.#log", "other.Other.#persist", "other.Other.#run"}, write1},
+	} {
+		caller := mustFind(t, st, tc.caller)
+
+		callees, err := st.Callees(caller.ID)
+		require.NoError(t, err)
+
+		var got []string
+
+		for _, c := range callees {
+			got = append(got, c.FQN)
+			assert.Equal(t, model.OriginSameClass, c.Origin, "%s -> %s", tc.caller, c.FQN)
+		}
+
+		assert.Equal(t, tc.callees, got, tc.caller)
+
+		effs, err := st.EffectsForSymbol(caller.ID)
+		require.NoError(t, err)
+		assert.Equal(t, tc.effects, effs, tc.caller)
+	}
+
+	class := mustFind(t, st, "store.Store")
+
+	callees, err := st.Callees(class.ID)
+	require.NoError(t, err)
+
+	var got []string
+	for _, c := range callees {
+		got = append(got, c.FQN)
+	}
+
+	assert.Equal(t, []string{
+		"store.Store.#data", "store.Store.#log", "store.Store.#persist",
+		"store.Store.#state", "store.Store.#state", "store.Store.#value",
+	}, got, "the class reaches each private method and accessor, not its field")
+
+	callers, err := st.Callers(mustFind(t, st, "store.Store.#persist").ID)
+	require.NoError(t, err)
+
+	got = nil
+	for _, c := range callers {
+		got = append(got, c.FQN)
+	}
+
+	assert.Equal(t, []string{
+		"store.Store", "store.Store.alias", "store.Store.bound", "store.Store.direct", "store.Store.value",
+	}, got, "the callers of #persist stay in its class")
 }

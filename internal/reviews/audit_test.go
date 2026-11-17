@@ -467,6 +467,81 @@ func TestExposureSurvivesCosmeticPinEdits(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestExposureClockStartsAtTheFirstFiringOfAnySurface(t *testing.T) {
+	// Preparation, change_set, and check return a lesson and name no
+	// receiver, so their records carry no delivery status. The lessons
+	// guide says that such a firing starts the exposure clock, although
+	// no agent may read it.
+	lessons := []model.Lesson{{Region: "api", Symptom: "regenerate the client"}}
+	identity := FiredLesson{Region: "api", Symptom: "regenerate the client"}.canonicalIdentity()
+	returnedAt := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+
+	for _, surface := range []string{"check", "prepare", "change_set"} {
+		t.Run(surface, func(t *testing.T) {
+			root := t.TempDir()
+
+			// The surfaces write their records with these fields.
+			_, err := RecordEvent(AuditEvent{
+				Root: root, Surface: surface, Files: []string{"api/client.go"},
+				Records:  []EventRecord{{Lessons: lessons}},
+				Emission: "returned", Now: returnedAt,
+			})
+			require.NoError(t, err)
+
+			firings, err := ReadFirings(root)
+			require.NoError(t, err)
+
+			exp, ok := FirstFirings(firings)[identity]
+			require.True(t, ok, "a firing of %s alone starts the clock", surface)
+			assert.True(t, exp.First.Equal(returnedAt))
+			assert.Equal(t, 1, exp.Count)
+
+			// A later edit-hook delivery adds to the count and keeps the clock.
+			hook := Firing{
+				TS: returnedAt.Add(24 * time.Hour).Format(time.RFC3339), Delivery: DeliveryInjected,
+				Fired: []FiredLesson{identity},
+			}
+
+			exp = FirstFirings(append(firings, hook))[identity]
+			assert.True(t, exp.First.Equal(returnedAt))
+			assert.Equal(t, 2, exp.Count, "the count adds the firings of every surface")
+		})
+	}
+}
+
+func TestNeverFiredCountsTheFiringsOfEverySurface(t *testing.T) {
+	// The first line of --stats splits the firings by surface. The ranking
+	// and the never-fired list count them together, so a lesson that only
+	// check or a preparation returned is not a candidate to remove.
+	returned := func(surface, symptom string) Firing {
+		return Firing{
+			TS: "2026-08-01T10:00:00Z", Surface: surface,
+			Fired: []FiredLesson{{Region: "api", Symptom: symptom}},
+		}
+	}
+
+	firings := []Firing{
+		returned("check", "returned by check"),
+		returned("prepare", "returned by a preparation"),
+		returned("change_set", "returned by change_set"),
+	}
+
+	surfaced := []model.Lesson{
+		{Region: "api", Symptom: "returned by check"},
+		{Region: "api", Symptom: "returned by a preparation"},
+		{Region: "api", Symptom: "returned by change_set"},
+		{Region: "api", Symptom: "never returned"},
+	}
+
+	s := Summarize(firings, surfaced)
+
+	assert.Equal(t, map[string]int{"check": 1, "prepare": 1, "change_set": 1}, s.BySurface)
+	assert.Len(t, s.Ranked, 3)
+
+	require.Len(t, s.NeverFired, 1)
+	assert.Equal(t, "never returned", s.NeverFired[0].Symptom)
+}
+
 func TestAuditLogPathIsTheReaderAndWriterLocation(t *testing.T) {
 	root := t.TempDir()
 

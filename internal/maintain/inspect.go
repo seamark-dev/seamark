@@ -3,10 +3,13 @@ package maintain
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"time"
 
 	"github.com/seamark-dev/seamark/internal/confidence"
 	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -43,8 +46,15 @@ type Inspection struct {
 	LedgerErr, ReadingsErr error
 	// Index is the index probe that the readings used.
 	Index workspace.IndexProbe
+	// Database holds the answers of the console service about the index
+	// database. Inspect leaves it zero, and the service fills it, because
+	// the answers compare the database with the workspace.
+	Database workspace.DatabaseFacts
 	// At is the time that the readings used.
 	At time.Time
+	// Checks is the lesson-check reading of the pin file. It is zero when
+	// the file gives no listing.
+	Checks ChecksReading
 }
 
 // Pin is one live entry with its link and readings.
@@ -52,6 +62,71 @@ type Pin struct {
 	Entry    pinfile.Entry
 	Link     pinfile.EntryLink
 	Readings Readings
+	// Check is the lesson-check reading of the entry.
+	Check PinCheck
+}
+
+// ChecksReading is the lesson-check reading of the pin file. Inspect
+// decodes the bytes that it listed, so the console shows the mode and
+// the predicate of each pin without a second read of the file. The
+// definitions and the error texts hold file data, so a caller sanitizes
+// them before display.
+type ChecksReading struct {
+	// Uses is true when the file uses a lesson-check key: a checks map,
+	// a check or enforce mode, or a check reference. Doctor and status
+	// print their lesson-check lines only then, and the console follows
+	// the same rule.
+	Uses bool
+	// SHA256 is the hex digest of the decoded bytes. The capability
+	// report carries the digest of its own read, so a caller can tell a
+	// report of other bytes.
+	SHA256 string
+	// Defs holds the check definitions by ID, as the file holds them.
+	Defs map[string]reviews.CheckDef
+	// Errors are the semantic errors of the file (tier 2).
+	Errors []lessoncheck.ConfigError
+}
+
+// IDs returns the check IDs that the file defines, in sorted order.
+func (c ChecksReading) IDs() []string {
+	ids := make([]string, 0, len(c.Defs))
+	for id := range c.Defs {
+		ids = append(ids, id)
+	}
+
+	slices.Sort(ids)
+
+	return ids
+}
+
+// PinCheck is the lesson-check reading of one entry. It holds what the
+// pin requests and the predicate of its check. What the installed hooks
+// make of that request is the capability report, which the console
+// joins by Ref.
+type PinCheck struct {
+	// Known is false when the entry does not pair with the decoded pin
+	// list. A caller then shows no lesson-check fact of the entry.
+	Known bool
+	// Ref and Version are the pin-ref and the pin version.
+	Ref, Version string
+	// Mode is the normalized mode. An unknown mode reads advisory, and
+	// Errors then holds its error.
+	Mode lessoncheck.Mode
+	// Check is the bound check, or nil without one. Its Kind and Version
+	// are empty when the ID names no definition.
+	Check *lessoncheck.CheckRef
+	// Predicate is the lessoncheck.Describe text of the check, or "" when
+	// no checker can describe it.
+	Predicate string
+	// Scope is the checker scope (AllRegions, sorted). Empty means
+	// repository-wide.
+	Scope []string
+	// Listing is the listing of an advisory pin: not-checkable without a
+	// check, advisory-with-check with one. It is "" for a check or an
+	// enforce pin.
+	Listing lessoncheck.Listing
+	// Errors are the semantic errors of this entry.
+	Errors []lessoncheck.ConfigError
 }
 
 // Readings are the derived readings of one pin. Each one says whether it
@@ -168,6 +243,8 @@ func Inspect(root string, st *store.Store, probe workspace.IndexProbe, now time.
 		in.Pins[i].Entry = e
 	}
 
+	in.readChecks()
+
 	rows, err := readLedger(st)
 	if err != nil {
 		in.LedgerErr = err
@@ -213,6 +290,73 @@ func Inspect(root string, st *store.Store, probe workspace.IndexProbe, now time.
 	in.ReadingsErr = errors.Join(errs...)
 
 	return in
+}
+
+// readChecks decodes the listed bytes with the strict check tier and
+// fills the lesson-check readings. A file without a reliable listing
+// gives no reading, because no entry is then known to pair with a pin.
+//
+// An entry pairs with the pin at the same position: the listing skips
+// null items, as the decoder does (checkImpact). The key must match too,
+// so a listing that differs from the decode never shows the facts of
+// another pin.
+func (in *Inspection) readChecks() {
+	if in.Doc.Unreadable() {
+		return
+	}
+
+	cfg, errs, err := lessoncheck.Parse(in.Doc.Bytes)
+	if err != nil {
+		return
+	}
+
+	in.Checks = ChecksReading{
+		Uses: lessoncheck.UsesLessonChecks(cfg, errs), SHA256: cfg.SHA256, Defs: cfg.Raw.Checks, Errors: errs,
+	}
+
+	for i := range in.Pins {
+		if i < len(cfg.Pins) && cfg.Pins[i].Key == in.Pins[i].Entry.Key {
+			in.Pins[i].Check = pinCheckOf(cfg, cfg.Pins[i], errs)
+		}
+	}
+}
+
+// pinCheckOf builds the reading of one decoded pin. The check reference
+// copies the definition version (reviews.CheckVersion), so it names the
+// same version as the verification and the capability report.
+func pinCheckOf(cfg *lessoncheck.Config, pin lessoncheck.Pin, errs []lessoncheck.ConfigError) PinCheck {
+	c := PinCheck{Known: true, Ref: pin.Ref, Version: pin.Version, Mode: pin.Mode, Scope: pin.Scope}
+
+	subject := "pin " + strconv.Itoa(pin.Entry)
+	for _, e := range errs {
+		if e.Subject == subject {
+			c.Errors = append(c.Errors, e)
+		}
+	}
+
+	if pin.CheckID != "" {
+		ref := lessoncheck.CheckRef{ID: pin.CheckID}
+
+		if def, ok := cfg.Raw.Checks[pin.CheckID]; ok {
+			ref.Kind, ref.Version = lessoncheck.Kind(def.Kind), reviews.CheckVersion(def)
+
+			if text, err := lessoncheck.Describe(def); err == nil {
+				c.Predicate = text
+			}
+		}
+
+		c.Check = &ref
+	}
+
+	switch {
+	case pin.Mode != lessoncheck.ModeAdvisory:
+	case pin.CheckID == "":
+		c.Listing = lessoncheck.ListingNotCheckable
+	default:
+		c.Listing = lessoncheck.ListingAdvisoryWithCheck
+	}
+
+	return c
 }
 
 // unknown marks every proposal reading of r unknown for reason. The
@@ -326,7 +470,7 @@ func (in *Inspection) readOne(r *Readings, root string, st *store.Store, row mod
 	r.Scope = ScopeReading{Known: true, Advice: advice}
 
 	for _, f := range advice.Facts {
-		if f.BlockedLine() != "" {
+		if f.BlockedLine(row.Status) != "" {
 			r.Trigger.Blocked = append(r.Trigger.Blocked, f)
 		}
 	}
@@ -351,14 +495,14 @@ func (in *Inspection) readOutcomes(st *store.Store, linked []int, rows []model.P
 		return nil
 	}
 
-	// The parse cannot fail here: pinfile parses the same bytes into
-	// Doc.ReaderErr, and the linked readings run only when it is nil.
-	// The check keeps a change of that rule from giving a zero outcome.
-	cfg, err := reviews.ParseConfig(in.Doc.Bytes)
-	if err != nil {
+	// Config is set here: pinfile leaves it nil only with Doc.ReaderErr,
+	// and the linked readings run only when that error is nil. The check
+	// keeps a change of that rule from giving a zero outcome.
+	cfg := in.Doc.Config
+	if cfg == nil {
 		unknown(pinfile.ErrUnreadable.Error())
 
-		return []error{err}
+		return []error{in.Doc.ReaderErr}
 	}
 
 	readings, err := outcome.Gather(st, cfg, rows, audit.firings)

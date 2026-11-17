@@ -5,9 +5,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/render"
 )
 
 // cluster groups comments into lessons, and keeps each accepted comment
@@ -120,16 +120,7 @@ func findingBody(body string) string {
 	s = htmlNoteRe.ReplaceAllString(s, " ")
 	s = strings.TrimSpace(s)
 
-	if len(s) > findingBodyCap {
-		cut := findingBodyCap
-		for cut > 0 && !utf8.RuneStart(s[cut]) {
-			cut--
-		}
-
-		s = strings.TrimSpace(s[:cut])
-	}
-
-	return s
+	return strings.TrimSpace(render.CutBytes(s, findingBodyCap))
 }
 
 // mergeAcrossFiles widens un-coded lessons whose fingerprint recurs in

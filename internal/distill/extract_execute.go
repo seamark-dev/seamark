@@ -786,6 +786,10 @@ func (x *ExtractExecution) tallyItem(res *ExtractResult, item ExtractItemOutcome
 
 		if item.Proposal.Status == model.ProposalApplied {
 			res.AppliedStored++
+
+			if item.Proposal.ScopeChosen > 0 {
+				res.AppliedChosen++
+			}
 		}
 
 		x.Persisted = append(x.Persisted, id)

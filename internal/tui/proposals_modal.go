@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -212,6 +213,8 @@ func (p *propView) applyModal(d *propDecision, w int) ui.ModalOpts {
 			"write " + target + ": pins already exist for " + pinned,
 			"change the ledger until you press c to record " + pinned + " as applied",
 		}, w)...)
+	case pv.RootBlock != nil:
+		// The lead names the refusal, and y writes nothing.
 	case pv.Write:
 		file := target
 		if !pv.Lessons.Exists {
@@ -432,6 +435,8 @@ func (p *propView) previewLead(d *propDecision, target string, w int) []string {
 			"as applied in the ledger only; the pin file stays unchanged.", w)
 	case len(pv.AlreadyPinned) > 0:
 		return p.pinnedLead(pv, target, w)
+	case pv.RootBlock != nil:
+		return propNote(t, ui.ToneAttention, propRootText(pv.RootBlock, target), w)
 	case !pv.Write && pv.LessonsErr != nil:
 		// The gate-off preview still shows the block, but apply can never
 		// write through a linked or unsafe pin file, so enabling the gate
@@ -450,6 +455,24 @@ func (p *propView) previewLead(d *propDecision, target string, w int) []string {
 		return propLines(t.Body, "Seamark adds the pin block below under pin: in "+target+", then records the "+
 			"proposals as applied. distill.write is on. Nothing changes before you press y.", w)
 	}
+}
+
+// propRootText names the refusal of an apply under another recorded root
+// in the words of a retarget preview, so one refusal reads alike.
+func propRootText(err error, target string) string {
+	var foreign *services.ForeignRootError
+	if !errors.As(err, &foreign) {
+		return ovSentenceEnd(ui.ErrText(err))
+	}
+
+	route := pinForeignBuild
+	if foreign.OtherDB {
+		route = ovSentenceEnd(openRootRoute(foreign.Root, foreign.CustomDB, foreign.RootRoute))
+	}
+
+	return "The index of this workspace records another repository, " + ui.OneLine(foreign.Root) + ", so y is off. " +
+		"A commit would write " + ui.OneLine(filepath.Join(foreign.Root, target)) + " and the ledger of this " +
+		"workspace, not " + ui.OneLine(filepath.Join(foreign.Workspace, target)) + ". " + route
 }
 
 // pinnedLead explains an apply preview that found existing pins. It
@@ -790,6 +813,8 @@ func propRefusal(err error, t *ui.Theme) string {
 		return "No pending proposal was selected."
 	case errors.Is(err, services.ErrBusy):
 		return "Another operation is running, so this one did not start."
+	case errors.Is(err, services.ErrForeignRoot):
+		return foreignRefusal(err, "preview")
 	case errors.Is(err, services.ErrNoLedger):
 		return "The index database is not readable, so the ledger was not changed."
 	default:

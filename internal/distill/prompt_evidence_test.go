@@ -33,6 +33,21 @@ func TestTruncatePromptTextHonorsByteCapAndUTF8(t *testing.T) {
 	assert.Empty(t, truncatePromptText("must not leak", 0))
 }
 
+// TestTruncatePromptTextKeepsItsSuffixPolicy pins the suffix inside the
+// limit, the trim before the suffix, and the cut on invalid UTF-8. A
+// limit without room for the suffix gives a cut without the suffix.
+func TestTruncatePromptTextKeepsItsSuffixPolicy(t *testing.T) {
+	const suffix = " …[truncated]"
+
+	roomy := len(suffix) + 4
+
+	assert.Equal(t, "abc"+suffix, truncatePromptText("abc defghijklmnopqrstuvwxyz", roomy),
+		"the trim removes the space at the cut")
+	assert.Equal(t, suffix, truncatePromptText(strings.Repeat("\x80", 40), roomy),
+		"no rune start leaves only the suffix")
+	assert.Empty(t, truncatePromptText(strings.Repeat("\x80", 40), 5), "no room and no rune start leave nothing")
+}
+
 func TestPromptFindingEvidenceSharesPathsAndBodyBudget(t *testing.T) {
 	var footprint []string
 	for i := range 20 {

@@ -14,12 +14,15 @@ import (
 	"strconv"
 
 	"github.com/seamark-dev/seamark/internal/history"
+	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
 // ErrNotDirectory reports a workspace path that does not name a
 // directory. The console checks this before it enters full-screen mode.
-var ErrNotDirectory = errors.New("workspace is not a directory")
+// Resolve prints it after the path, as it prints a missing path, so the
+// two causes read alike.
+var ErrNotDirectory = errors.New("not a directory")
 
 // Workspace is a resolved repository root and its index database path.
 type Workspace struct {
@@ -33,7 +36,9 @@ type Workspace struct {
 }
 
 // Resolve validates dir and derives the database path. It creates
-// nothing and runs only `git rev-parse`.
+// nothing and runs only `git rev-parse`. The error names the path after
+// render.Sanitize, because the path comes from the command line and
+// reaches a terminal or an MCP client.
 func Resolve(dir, dbFlag string) (Workspace, error) {
 	if dir == "" {
 		dir = "."
@@ -41,41 +46,37 @@ func Resolve(dir, dbFlag string) (Workspace, error) {
 
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("workspace %s: %w", dir, err)
+		return Workspace{}, fmt.Errorf("workspace %s: %w", render.Sanitize(dir), err)
 	}
 
 	// Locate ignores a missing directory, because git fails and the
 	// root falls back to the path. This check makes the error visible.
 	info, err := os.Stat(abs)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("workspace %s: %w", abs, statCause(err))
+		return Workspace{}, fmt.Errorf("workspace %s: %w", render.Sanitize(abs), statCause(err))
 	}
 
 	if !info.IsDir() {
-		return Workspace{}, fmt.Errorf("%w: %s", ErrNotDirectory, abs)
+		return Workspace{}, fmt.Errorf("workspace %s: %w", render.Sanitize(abs), ErrNotDirectory)
 	}
 
 	ws, err := Locate(abs, dbFlag)
 	if err != nil {
-		return Workspace{}, fmt.Errorf("workspace %s: %w", abs, err)
+		return Workspace{}, fmt.Errorf("workspace %s: %w", render.Sanitize(abs), err)
 	}
 
 	// index.Run opens a relative --db against the process directory.
 	// The absolute form names the same file and stays valid in messages.
 	if dbFlag != "" {
-		ws.DBPath, err = filepath.Abs(dbFlag)
-		if err != nil {
-			return Workspace{}, fmt.Errorf("index database %s: %w", dbFlag, err)
-		}
+		ws.DBPath = store.AbsolutePath(dbFlag)
 	}
 
 	return ws, nil
 }
 
 // Locate derives the root and the database path without the checks of
-// Resolve. A missing dir is no error, and a relative dbFlag stays as
-// given. The CLI commands use it, because they report a missing
-// workspace in their own words and print --db as the user wrote it.
+// Resolve. A missing dir is no error. The CLI commands use it, because
+// they report a missing workspace in their own words.
 // It returns the resolver error unchanged for the same reason.
 func Locate(dir, dbFlag string) (Workspace, error) {
 	// history.ResolveRoot is the resolver that index.Run uses. The same
@@ -171,6 +172,41 @@ type IndexProbe struct {
 	// Err holds the probe failure for IndexUnreadable, IndexNewer and
 	// IndexOlder. It is nil for the other states.
 	Err error
+}
+
+// AbsoluteDB returns the database path in absolute form. The commands
+// pass that form already, and this method holds for any other caller.
+// store.ClassifyDatabase cannot walk the parent directories of a relative
+// path, and a route in another directory needs a path that stays valid
+// there.
+func (ws Workspace) AbsoluteDB() string {
+	return store.AbsolutePath(ws.DBPath)
+}
+
+// DatabaseFacts holds the answers about the index database that need the
+// disk. The console service fills them at read time, because a view must
+// not read the disk. The zero value describes the default database of a
+// workspace whose index records that workspace.
+type DatabaseFacts struct {
+	// Kind relates the database file to the workspace root.
+	Kind store.DatabaseKind
+	// ForeignRoot is the recorded root when it names another directory
+	// than the workspace root, else "". A link spelling of the workspace
+	// root names the same directory, so it is no foreign root.
+	ForeignRoot string
+	// CustomDB reports a database that the console of ForeignRoot must
+	// name, because the default database of that root is another ledger.
+	CustomDB bool
+	// RootRoute replaces the console of ForeignRoot in a route, else "".
+	// That console cannot run for such a root or such a file.
+	RootRoute string
+	// WriteBlock says why a write to the pin file and the ledger must not
+	// run, or nil. The maintenance commits and a proposal apply refuse it.
+	WriteBlock error
+	// BuildBlock says why an index build must not run, with the next
+	// route, or nil. It holds for every schema, because it reads the
+	// recorded root without the probe.
+	BuildBlock error
 }
 
 // Probe classifies the index database of ws without writing to it.

@@ -1,8 +1,9 @@
 // Package delivery is the shared advisory-delivery transaction of the
 // edit hooks. One edit event from any client runs one sequence:
 // normalize the paths, select the lessons, lease the once-per-context
-// state, emit, commit, and audit. The package owns that order, so a
-// client adapter cannot mark advice delivered before the client has it.
+// state, remove what the receiver already has, emit, commit, and audit.
+// The package owns that order, so a client adapter cannot mark advice
+// delivered before the client has it.
 //
 // The package does not know a native payload. A client adapter decodes
 // the event before Deliver and encodes the advice inside the emit
@@ -24,8 +25,14 @@ import (
 
 // Request is one edit event to advise on.
 type Request struct {
-	// Root is the canonical workspace root.
+	// Root is the canonical workspace root. Path normalization and the
+	// suppression state use it.
 	Root string
+	// IdentityRoot is the root of the firing log: every identity digest
+	// hashes over it, and the records go under it. Empty means Root. The
+	// CLI passes cli.hookIdentityRoot, so the edit and reset records of
+	// one receiver carry one digest.
+	IdentityRoot string
 	// ClientID is the resolved registry ID of the client. It comes from
 	// the CLI selection and never from the hook payload, so a payload
 	// cannot claim the state of another client.
@@ -39,6 +46,17 @@ type Request struct {
 	// Config is the lessons configuration of the workspace. Nil means
 	// the defaults.
 	Config *reviews.Config
+	// ConfigErr is the error of the configuration read. Config then
+	// holds the defaults, and the firing log names the guidance invalid.
+	ConfigErr error
+	// RecordEvaluations is true when the hook runs with the recording
+	// switch on. Only then does the firing log get the evaluation records
+	// of an event that emitted nothing. The CLI reads the switch, because
+	// this package reads no environment.
+	RecordEvaluations bool
+	// EventID is the event_id of the records. Empty means a new random
+	// ID. Tests set it to get fixed records.
+	EventID string
 }
 
 // Emit encodes the advisory text for the client and writes it. Deliver
@@ -97,7 +115,8 @@ type Outcome struct {
 	Rejected      []RejectedPath
 	RejectedCount int
 	// Emitted and Suppressed count lessons. HeldBackPins counts the
-	// applicable pins that the budget left out of the advice.
+	// applicable pins that the collapse or the budget left out of the
+	// advice. A pin that the receiver already has is not in that count.
 	Emitted      int
 	Suppressed   int
 	HeldBackPins int
@@ -127,9 +146,21 @@ func (e *EmitError) Unwrap() error { return e.Err }
 // Deliver runs the delivery sequence for one edit event. st must be an
 // open index: Deliver does not index, mine, or create a database.
 //
+// Under a lease, the pins that the receiver already has leave the
+// selection before the budget, so a later matching edit reaches the next
+// pin. The lock covers that step, the emit, and the commit, so the
+// delivered set cannot change between them. No store read runs under the
+// lock, because a longer hold makes more hooks fail the lock and repeat
+// advice.
+//
 // The error is an *EmitError when the emit callback fails. It is a
 // plain error when the lesson lookup fails or ctx ends. In both cases
 // Deliver marks no lesson delivered and records no injection.
+//
+// The firing log gets one event of record version 2. An event that
+// emitted nothing gets an evaluation record only when
+// req.RecordEvaluations is true. So with the recording switch off, the
+// log gets only the record kinds of the version 1 writer.
 func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outcome, error) {
 	out := Outcome{Status: StatusSilent, Suppression: SuppressionOff}
 
@@ -147,31 +178,57 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 	out.Rejected, out.RejectedCount = normalized.Rejected, normalized.RejectedCount
 
 	if len(out.Files) == 0 {
+		// Every input path is rejected. An event without a path evaluates
+		// nothing, so it gets no record.
+		if len(req.Event.Paths) > 0 {
+			out.record(req, cfg, evaluationRecord(), nil, emissionNotNeeded, evaluationComplete)
+		}
+
 		return out, nil
 	}
 
-	lessons, heldBack, err := report.LessonsForFilesBudget(st, cfg, out.Files, report.HookBudget(cfg))
+	sel, err := hookSelection(st, cfg, out.Files)
 	if err != nil {
+		out.record(req, cfg, evaluationRecord(), nil, emissionNotNeeded, EvaluationFailed)
+
 		return out, fmt.Errorf("select lessons: %w", err)
 	}
 
-	out.HeldBackPins = heldBack
+	if len(sel.Lessons) == 0 {
+		out.record(req, cfg, evaluationRecord(), sel.FiringPins(cfg, nil), emissionNotNeeded, evaluationComplete)
 
-	if len(lessons) == 0 {
 		return out, nil
 	}
 
-	lease, suppression := beginLease(req, cfg, lessons)
+	// The lease opens only here, after the store reads. An event with no
+	// lesson then creates no state, and the lock never covers a store read.
+	lease, suppression := beginLease(req, cfg)
 	out.Suppression = suppression
-
-	selected, suppressed := lessons, []model.Lesson(nil)
 
 	if lease != nil {
 		// Close is safe after the explicit Close calls below. The defer
 		// releases the lock on every early return.
 		defer func() { _ = lease.Close() }()
 
-		selected, suppressed = lease.Inject(), lease.Suppressed()
+		sel = sel.WithoutDelivered(report.HookBudget(cfg), func(sp reviews.SurfacedPin) bool {
+			return lease.PinDelivered(cfg.PinVersion(sp.Pin))
+		})
+	}
+
+	// Both values read the final selection, so the reminder never counts
+	// a pin that the receiver already has.
+	out.HeldBackPins = sel.HeldBack
+	versions := selectedVersions(cfg, sel)
+
+	// Without a lease, the event sends every lesson and every pin.
+	selected, suppressed, sentPins := sel.Lessons, []model.Lesson(nil), versions
+
+	if lease != nil {
+		lease.Select(deliveryItems(sel, versions))
+
+		selected = lease.Inject()
+		suppressed = append(pinLessons(sel.AlreadyDelivered), lease.Suppressed()...)
+		sentPins = lease.InjectedPinVersions()
 		out.Generation = lease.Generation()
 	}
 
@@ -185,14 +242,17 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 		}
 
 		out.Status = StatusSuppressed
-		out.record(req, suppressed, reviews.DeliverySuppressedRepeat, 0)
+		out.record(req, cfg,
+			[]reviews.EventRecord{{Status: reviews.DeliverySuppressedRepeat, Lessons: suppressed}},
+			sel.FiringPins(cfg, pinDeliveries(versions, sentPins, reviews.PinInjected)),
+			emissionNotNeeded, evaluationComplete)
 
 		return out, nil
 	}
 
 	var advice strings.Builder
 
-	_ = report.PrintEditReminder(&advice, out.Files, selected, heldBack)
+	_ = report.PrintEditReminder(&advice, out.Files, selected, sel.HeldBack)
 
 	if err := ctx.Err(); err != nil {
 		return out, err
@@ -202,6 +262,16 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 	// reply must not mark a lesson delivered, and the client must never
 	// wait for a log append.
 	if err := emit(advice.String()); err != nil {
+		// The lease commits nothing, so the advice stays eligible. The
+		// lock goes before the log append, as on the emit path below.
+		if lease != nil {
+			_ = lease.Close()
+		}
+
+		out.record(req, cfg, evaluationRecord(),
+			sel.FiringPins(cfg, pinDeliveries(versions, sentPins, reviews.PinEmitFailed)),
+			emissionFailed, evaluationComplete)
+
 		return out, &EmitError{Err: err}
 	}
 
@@ -221,20 +291,103 @@ func Deliver(ctx context.Context, st *store.Store, req Request, emit Emit) (Outc
 		_ = lease.Close()
 	}
 
-	out.record(req, selected, reviews.DeliveryInjected, out.ContextBytes)
-	out.record(req, suppressed, reviews.DeliverySuppressedRepeat, 0)
+	// One event holds both records, so a reader counts the edit once.
+	records := []reviews.EventRecord{
+		{Status: reviews.DeliveryInjected, Lessons: selected, ContextBytes: out.ContextBytes},
+	}
+	if len(suppressed) > 0 {
+		records = append(records, reviews.EventRecord{Status: reviews.DeliverySuppressedRepeat, Lessons: suppressed})
+	}
+
+	out.record(req, cfg, records,
+		sel.FiringPins(cfg, pinDeliveries(versions, sentPins, reviews.PinInjected)),
+		emissionEmitted, evaluationComplete)
 
 	return out, nil
 }
 
+// hookSelection reads the evidence of files once and folds it with the
+// hook budget of cfg. The lessons and the held-back count equal those
+// of report.LessonsForFilesBudget, and the selection also names each
+// held-back pin for the firing log.
+func hookSelection(st *store.Store, cfg *reviews.Config, files []string) (report.Selection, error) {
+	// HookSelection refuses a config that ReadEvidence did not read for,
+	// so both calls take the same pointer.
+	ev, err := report.ReadEvidence(st, files, cfg)
+	if err != nil {
+		return report.Selection{}, err
+	}
+
+	return ev.HookSelection(cfg)
+}
+
+// pinDeliveries returns the delivery of each selected pin. versions holds
+// the version of each selected pin, and sentPins holds the versions that
+// the event sends. A pin with such a version gets sent, and every other
+// selected pin gets suppressed-repeat. A delivered pin is not a selected
+// pin here, because WithoutDelivered already moved it, so FiringPins names
+// it. Only a version that repeats inside the event reaches that branch.
+//
+// The walk matches on the version, the key of the delivered set, and never
+// on a lesson. Two entries with one text render one lesson and can hold
+// two versions. The hook budget does not always collapse them. A rule
+// without a Latin letter has an empty label, so the restatement check
+// cannot compare the two.
+//
+// The lease sends one version once. Without a lease, every pin is sent,
+// also a repeated version, so the count keeps each one.
+func pinDeliveries(versions, sentPins []string, sent reviews.PinDelivery) []reviews.PinDelivery {
+	pending := make(map[string]int, len(sentPins))
+
+	for _, version := range sentPins {
+		pending[version]++
+	}
+
+	deliveries := make([]reviews.PinDelivery, len(versions))
+
+	for i, version := range versions {
+		if pending[version] > 0 {
+			deliveries[i] = sent
+			pending[version]--
+
+			continue
+		}
+
+		deliveries[i] = reviews.PinSuppressedRepeat
+	}
+
+	return deliveries
+}
+
+// selectedVersions returns the pin version of each selected pin, in the
+// order of sel.Pins. The hook already holds cfg, so one version costs one
+// hash and no file read.
+func selectedVersions(cfg *reviews.Config, sel report.Selection) []string {
+	versions := make([]string, len(sel.Pins))
+	for i, sp := range sel.Pins {
+		versions[i] = cfg.PinVersion(sp.Pin)
+	}
+
+	return versions
+}
+
 // ResetRequest is one context-reset event.
 type ResetRequest struct {
-	// Root is the canonical workspace root.
+	// Root is the canonical workspace root of the suppression state.
 	Root string
+	// IdentityRoot is the root of the firing log, by the rule of
+	// Request.IdentityRoot. Empty means Root.
+	IdentityRoot string
 	// ClientID is the resolved registry ID of the client.
 	ClientID string
 	// Event is the decoded native reset event.
 	Event integration.ResetEvent
+	// RecordEvaluations is true when the hook runs with the recording
+	// switch on. Only then does the firing log get the reset record.
+	RecordEvaluations bool
+	// EventID is the event_id of the reset record. Empty means a new
+	// random ID.
+	EventID string
 }
 
 // Reset starts a new delivery generation for the receiving context of
@@ -242,12 +395,56 @@ type ResetRequest struct {
 // names no resettable context resets nothing: a missing identity must
 // not reset an unrelated context. Reset never creates state: it is a
 // no-op until once-per-context delivery has been used.
+//
+// The reset starts a new generation in the edit hook state and in the
+// exploration state. The two resets are independent: a failure of one
+// never stops the other, and neither creates its file.
+//
+// With req.RecordEvaluations, the firing log gets one reset record for
+// every reset of a named context, also when no state exists yet. A
+// reader takes a missing reset record as proof that the context kept
+// its earlier advice, so the record must not depend on the edit state.
+// The error is the first error of the two state writes; the log is best
+// effort.
 func Reset(req ResetRequest) error {
-	if !req.Event.Context.Resettable {
+	receiving := req.Event.Context
+	if !receiving.Resettable || req.ClientID == "" || receiving.ID == "" {
 		return nil
 	}
 
-	return reviews.ResetContextDelivery(req.Root, deliveryContext(req.ClientID, &req.Event.Context))
+	dc := deliveryContext(req.ClientID, &receiving)
+	generation, err := reviews.ResetContextGeneration(req.Root, dc)
+	exploreGeneration, exploreErr := reviews.ResetExploreDelivery(req.Root, dc)
+
+	if req.RecordEvaluations {
+		recordReset(req, generation, exploreGeneration)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	return exploreErr
+}
+
+// recordReset appends the reset record of a context. A generation is
+// zero when its state was not reset, and the record then has no key for
+// it.
+func recordReset(req ResetRequest, generation, exploreGeneration uint64) {
+	receiving := req.Event.Context
+	resettable := receiving.Resettable
+
+	_, _ = reviews.RecordEvent(reviews.AuditEvent{
+		Root:      identityRoot(req.IdentityRoot, req.Root),
+		ClientID:  req.ClientID,
+		SessionID: req.Event.SessionID, Turn: req.Event.Turn, ReceiverID: receiving.ID,
+		Lane: laneOf(&receiving), Resettable: &resettable,
+		Records:           []reviews.EventRecord{{Status: reviews.DeliveryReset}},
+		RecordEvaluations: true,
+		Generation:        generation,
+		ExploreGeneration: exploreGeneration,
+		EventID:           req.EventID,
+	})
 }
 
 // deliveryContext maps the client and its receiving context to the
@@ -268,7 +465,10 @@ func deliveryContext(clientID string, receiving *integration.ReceivingContext) r
 // and the Suppression value says why. Suppression needs a receiver that
 // the client names and can reset. A parent session id is not a receiver:
 // it hides advice from a subagent that never got it.
-func beginLease(req Request, cfg *reviews.Config, lessons []model.Lesson) (*reviews.HookDeliveryLease, Suppression) {
+//
+// The lease selects nothing yet: the caller reads the delivered set
+// first, and it gives the lease the result of the second budget cut.
+func beginLease(req Request, cfg *reviews.Config) (*reviews.HookDeliveryLease, Suppression) {
 	if cfg.HookDelivery() != reviews.HookDeliveryOncePerContext {
 		return nil, SuppressionOff
 	}
@@ -282,7 +482,7 @@ func beginLease(req Request, cfg *reviews.Config, lessons []model.Lesson) (*revi
 		return nil, SuppressionNotResettable
 	}
 
-	lease, err := reviews.BeginContextDelivery(req.Root, deliveryContext(req.ClientID, receiving), lessons)
+	lease, err := reviews.OpenContextDelivery(req.Root, deliveryContext(req.ClientID, receiving))
 	if err != nil {
 		// The state is an optimization, never permission to hide advice.
 		return nil, SuppressionStateUnavailable
@@ -291,21 +491,126 @@ func beginLease(req Request, cfg *reviews.Config, lessons []model.Lesson) (*revi
 	return lease, SuppressionActive
 }
 
-// record appends one firing record for the event. It is best effort:
-// the result only sets AuditFailed.
-func (o *Outcome) record(req Request, lessons []model.Lesson, status reviews.DeliveryStatus, contextBytes int) {
+// deliveryItems maps a selection to the items of the edit state, in the
+// order of sel.Lessons, where the pins come first. versions holds the
+// version of each selected pin, so a change of meaning reaches the
+// receiver again.
+func deliveryItems(sel report.Selection, versions []string) []reviews.DeliveryItem {
+	items := make([]reviews.DeliveryItem, len(sel.Lessons))
+
+	for i, lesson := range sel.Lessons {
+		items[i].Lesson = lesson
+
+		if i < len(versions) {
+			items[i].PinVersion = versions[i]
+		}
+	}
+
+	return items
+}
+
+// pinLessons returns the lesson of each pin, in order. The lease reads
+// only the selected items, so these pins join the suppressed lessons here.
+func pinLessons(pins []reviews.SurfacedPin) []model.Lesson {
+	lessons := make([]model.Lesson, len(pins))
+	for i, sp := range pins {
+		lessons[i] = sp.Lesson()
+	}
+
+	return lessons
+}
+
+// The emission values of a firing record. The list is closed;
+// preparation adds "returned".
+const (
+	emissionEmitted   = "emitted"
+	emissionNotNeeded = "not-needed"
+	emissionFailed    = "failed"
+)
+
+// The evaluation values of a firing record. The list is closed. The
+// MCP change_set runner writes EvaluationFailed on the fallback record
+// of a failed preparation, so it is exported.
+const (
+	evaluationComplete = "complete"
+	EvaluationFailed   = "failed"
+)
+
+// laneUnknown is the lane of a record without a receiving context. The
+// adapters name the known lanes (integration.LaneRoot, LaneChild).
+const laneUnknown = "unknown"
+
+// evaluationRecord is the one record of an event that emitted nothing.
+// Its fired list is empty: the pins of the event say what matched.
+func evaluationRecord() []reviews.EventRecord {
+	return []reviews.EventRecord{{Status: reviews.DeliveryEvaluation}}
+}
+
+// record appends the records of one edit event to the firing log. It
+// is best effort: the result only sets AuditFailed. An evaluation needs
+// the recording switch, so with the switch off record writes nothing
+// for one.
+func (o *Outcome) record(req Request, cfg *reviews.Config, records []reviews.EventRecord,
+	pins []reviews.FiringPin, emission, evaluation string,
+) {
+	if records[0].Status == reviews.DeliveryEvaluation && !req.RecordEvaluations {
+		return
+	}
+
+	// The config came from Root, so the guidance status reads there.
+	digest, status := report.GuidanceOf(req.Root, cfg, req.ConfigErr)
+
+	ev := reviews.AuditEvent{
+		Root:      identityRoot(req.IdentityRoot, req.Root),
+		Tool:      req.Event.NativeTool,
+		ClientID:  req.ClientID,
+		Mechanism: req.Mechanism,
+		Files:     o.Files,
+		SessionID: req.Event.SessionID, MatchID: req.Event.MatchID, Turn: req.Event.Turn,
+		Lane:              laneOf(req.Event.Context),
+		Records:           records,
+		Pins:              pins,
+		Emission:          emission,
+		Evaluation:        evaluation,
+		GuidanceSHA:       digest,
+		GuidanceStatus:    status,
+		PathsComplete:     o.RejectedCount == 0,
+		RejectedPaths:     o.RejectedCount,
+		RecordEvaluations: req.RecordEvaluations,
+		Generation:        o.Generation,
+		EventID:           req.EventID,
+	}
+
 	// The log gets the receiving context whenever the client names one,
 	// also when suppression is off. It gets no context otherwise: the log
 	// never holds an identity that the client did not report.
-	receiving := deliveryContext(req.ClientID, req.Event.Context)
+	if receiving := req.Event.Context; receiving != nil && receiving.ID != "" {
+		resettable := receiving.Resettable
+		ev.ReceiverID, ev.Resettable = receiving.ID, &resettable
+	}
 
-	err := reviews.RecordHookDeliveryFiles(req.Root, o.Files, req.Event.NativeTool, lessons,
-		reviews.HookDelivery{
-			Status: status, SessionID: req.Event.SessionID, MatchID: req.Event.MatchID,
-			Generation: o.Generation, ContextBytes: contextBytes,
-			ClientID: req.ClientID, Mechanism: req.Mechanism, ReceiverID: receiving.ReceiverID,
-		})
-	if err != nil {
+	if _, err := reviews.RecordEvent(ev); err != nil {
 		o.AuditFailed = true
 	}
+}
+
+// identityRoot returns the root of the firing log: the identity root
+// when the caller names one, else the workspace root.
+func identityRoot(identity, root string) string {
+	if identity != "" {
+		return identity
+	}
+
+	return root
+}
+
+// laneOf returns the lane of a receiving context for the firing log.
+// A context without a lane comes from no adapter rule, so its lane is
+// unknown too.
+func laneOf(receiving *integration.ReceivingContext) string {
+	if receiving == nil || receiving.Lane == "" {
+		return laneUnknown
+	}
+
+	return receiving.Lane
 }

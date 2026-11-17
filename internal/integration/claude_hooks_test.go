@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,7 +48,8 @@ func TestClaudeEditsDecodeTheNativeFixtures(t *testing.T) {
 			// The main conversation is the session, and PostCompact
 			// reports the same id, so the context is resettable.
 			require.NotNil(t, event.Context)
-			assert.Equal(t, ReceivingContext{ID: "29:synthetic-claude-session-0001", Resettable: true}, *event.Context)
+			assert.Equal(t, ReceivingContext{ID: "29:synthetic-claude-session-0001", Resettable: true, Lane: LaneRoot},
+				*event.Context)
 		})
 	}
 }
@@ -69,6 +71,8 @@ func TestClaudeEditsGiveASubagentItsOwnReceivingContext(t *testing.T) {
 	assert.NotEqual(t, parent.Context.ID, child.Context.ID)
 	assert.False(t, child.Context.Resettable,
 		"no documented reset event reaches a subagent, so suppression stays off there")
+	assert.Equal(t, LaneChild, child.Context.Lane)
+	assert.Equal(t, LaneRoot, parent.Context.Lane)
 
 	// An agent id without a session names no receiver at all.
 	orphan, err := claudeEdits{}.DecodeEdit([]byte(`{"agent_id":"a1","tool_input":{"file_path":"a.go"}}`))
@@ -127,7 +131,8 @@ func TestClaudeEditsEncodeTheHistoricalReply(t *testing.T) {
 func TestClaudeResetsDecodeTheCompactedContext(t *testing.T) {
 	event, err := claudeResets{}.DecodeReset(claudeFixture(t, "post_compact.json"))
 	require.NoError(t, err)
-	assert.Equal(t, ReceivingContext{ID: "29:synthetic-claude-session-0001", Resettable: true}, event.Context)
+	assert.Equal(t, ReceivingContext{ID: "29:synthetic-claude-session-0001", Resettable: true, Lane: LaneRoot},
+		event.Context)
 
 	// The reset names the context that the edit event names.
 	edit, err := claudeEdits{}.DecodeEdit(claudeFixture(t, "pre_tool_use_edit.json"))
@@ -146,13 +151,126 @@ func TestClaudeResetsDecodeTheCompactedContext(t *testing.T) {
 	assert.NotEqual(t, event.Context.ID, childReset.Context.ID, "a child reset never names the parent")
 	assert.False(t, childReset.Context.Resettable)
 
-	// No session id is valid and resets nothing.
-	event, err = claudeResets{}.DecodeReset([]byte(`{}`))
+	// A PostCompact without a session id is valid and resets nothing.
+	event, err = claudeResets{}.DecodeReset([]byte(`{"hook_event_name":"PostCompact"}`))
 	require.NoError(t, err)
 	assert.Empty(t, event.Context.ID)
 
 	_, err = claudeResets{}.DecodeReset([]byte(`{not json`))
 	require.ErrorIs(t, err, ErrMalformedEvent)
+}
+
+// TestClaudeResetsRequirePostCompact proves that the reset decoder acts
+// only on PostCompact, the event that setup installs the reset hook for.
+// Before this rule, any payload with a session id named a context. So a
+// stray SessionStart reset both delivery states.
+func TestClaudeResetsRequirePostCompact(t *testing.T) {
+	for name, payload := range map[string]string{
+		"SessionStart after compaction": `{"session_id":"s-1","hook_event_name":"SessionStart","source":"compact"}`,
+		"PreCompact":                    `{"session_id":"s-1","hook_event_name":"PreCompact","trigger":"auto"}`,
+		"an edit event":                 `{"session_id":"s-1","hook_event_name":"PreToolUse","tool_name":"Edit"}`,
+		"a lower-case name":             `{"session_id":"s-1","hook_event_name":"postcompact"}`,
+		"an empty name":                 `{"session_id":"s-1","hook_event_name":""}`,
+		"no name":                       `{"session_id":"s-1"}`,
+	} {
+		event, err := claudeResets{}.DecodeReset([]byte(payload))
+		assert.ErrorIs(t, err, ErrNotApplicable, name)
+		assert.Equal(t, ResetEvent{}, event, "%s: names no context", name)
+	}
+
+	// Positive control: every PostCompact payload still names a context,
+	// so the refusals above can fail.
+	for _, fixture := range []string{"post_compact.json", "post_compact_subagent.json"} {
+		event, err := claudeResets{}.DecodeReset(claudeFixture(t, fixture))
+		require.NoError(t, err, fixture)
+		assert.NotEmpty(t, event.Context.ID, fixture)
+	}
+
+	native, err := os.ReadFile(filepath.Join("testdata", "claude", "native", "hooks", "019-PostCompact.json"))
+	require.NoError(t, err)
+
+	event, err := claudeResets{}.DecodeReset(native)
+	require.NoError(t, err)
+	assert.True(t, event.Context.Resettable, "the native PostCompact names the root context")
+}
+
+func TestClaudeEditsReadTheTurn(t *testing.T) {
+	// The synthetic edit fixtures carry no prompt_id, as an event before
+	// the first user input. The turn is then empty, never a guess.
+	event, err := claudeEdits{}.DecodeEdit(claudeFixture(t, "pre_tool_use_edit.json"))
+	require.NoError(t, err)
+	assert.Empty(t, event.Turn)
+
+	// prompt_id names the prompt in progress, in the root and in a
+	// subagent. The turn is identity only: the paths and the receiver
+	// are the ones of the same event without it.
+	for _, fixture := range []string{"pre_tool_use_edit.json", "pre_tool_use_edit_subagent.json"} {
+		t.Run(fixture, func(t *testing.T) {
+			without, err := claudeEdits{}.DecodeEdit(claudeFixture(t, fixture))
+			require.NoError(t, err)
+
+			var native map[string]any
+			require.NoError(t, json.Unmarshal(claudeFixture(t, fixture), &native))
+
+			native["prompt_id"] = "synthetic-prompt-0001"
+			payload, err := json.Marshal(native)
+			require.NoError(t, err)
+
+			with, err := claudeEdits{}.DecodeEdit(payload)
+			require.NoError(t, err)
+
+			assert.Equal(t, "synthetic-prompt-0001", with.Turn)
+			assert.Equal(t, without.Paths, with.Paths)
+			assert.Equal(t, without.Context, with.Context, "the turn never changes the receiver")
+			assert.Equal(t, without.SessionID, with.SessionID)
+			assert.Equal(t, without.MatchID, with.MatchID)
+		})
+	}
+}
+
+func TestClaudeResetsReadSessionAndTurn(t *testing.T) {
+	// The native recording of Claude Code 2.1.300 carries prompt_id on
+	// PostCompact. The reset record joins the edit records through the
+	// session and the turn.
+	raw, err := os.ReadFile(filepath.Join("testdata", "claude", "native", "hooks", "019-PostCompact.json"))
+	require.NoError(t, err)
+
+	var native struct {
+		SessionID string `json:"session_id"`
+		PromptID  string `json:"prompt_id"`
+	}
+
+	require.NoError(t, json.Unmarshal(raw, &native))
+	require.NotEmpty(t, native.SessionID)
+	require.NotEmpty(t, native.PromptID, "the native PostCompact carries prompt_id")
+
+	event, err := claudeResets{}.DecodeReset(raw)
+	require.NoError(t, err)
+
+	assert.Equal(t, native.SessionID, event.SessionID)
+	assert.Equal(t, native.PromptID, event.Turn)
+	assert.Equal(t, ReceivingContext{ID: receiverID(native.SessionID), Resettable: true, Lane: LaneRoot}, event.Context)
+
+	// The synthetic fixtures carry no prompt_id: the session stays, and
+	// the turn is empty.
+	synthetic, err := claudeResets{}.DecodeReset(claudeFixture(t, "post_compact.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "synthetic-claude-session-0001", synthetic.SessionID)
+	assert.Empty(t, synthetic.Turn)
+
+	// A reset inside a subagent reports the parent session and names the
+	// child lane. The session joins the records; it never resets the parent.
+	child, err := claudeResets{}.DecodeReset(claudeFixture(t, "post_compact_subagent.json"))
+	require.NoError(t, err)
+	assert.Equal(t, "synthetic-claude-session-0001", child.SessionID)
+	assert.Equal(t, LaneChild, child.Context.Lane)
+	assert.False(t, child.Context.Resettable)
+
+	// A PostCompact without a session id is valid: it names no session
+	// and no context.
+	empty, err := claudeResets{}.DecodeReset([]byte(`{"prompt_id":"p-1","hook_event_name":"PostCompact"}`))
+	require.NoError(t, err)
+	assert.Equal(t, ResetEvent{Turn: "p-1"}, empty)
 }
 
 func TestReadHookPayloadRefusesAnOversizedPayload(t *testing.T) {

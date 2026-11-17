@@ -1,0 +1,656 @@
+{
+  "client": "claude",
+  "client_version": "2.1.319",
+  "placeholders": {
+    "workspace": "/workspace/native",
+    "home": "/home/native",
+    "user": "native",
+    "seamark": "/opt/seamark/bin/seamark",
+    "instrumentation": "/opt/instrumentation",
+    "claude_tasks": "/tmp/claude-tasks",
+    "account": "native-account",
+    "attachment_bytes": "c2FuaXRpemVk",
+    "scratch": "native-scratch"
+  },
+  "synthetic_ids": {
+    "session": 6,
+    "prompt": 10,
+    "agent": 2,
+    "tool_use": 13,
+    "record": 256,
+    "message": 22,
+    "request": 22,
+    "run": 1,
+    "task": 0
+  },
+  "hooks": [
+    {
+      "file": "hooks/001-SessionStart.json",
+      "run": 1,
+      "event": "SessionStart",
+      "bytes": 344,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 0
+    },
+    {
+      "file": "hooks/002-UserPromptSubmit.json",
+      "run": 1,
+      "event": "UserPromptSubmit",
+      "bytes": 570,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 332
+    },
+    {
+      "file": "hooks/003-PreToolUse.json",
+      "run": 1,
+      "event": "PreToolUse",
+      "bytes": 611,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 1390
+    },
+    {
+      "file": "hooks/004-PostToolUse.json",
+      "run": 1,
+      "event": "PostToolUse",
+      "bytes": 830,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 1429
+    },
+    {
+      "file": "hooks/005-Stop.json",
+      "run": 1,
+      "event": "Stop",
+      "bytes": 522,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 2199
+    },
+    {
+      "file": "hooks/006-SessionEnd.json",
+      "run": 1,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 2237
+    },
+    {
+      "file": "hooks/007-SessionStart.json",
+      "run": 2,
+      "event": "SessionStart",
+      "bytes": 469,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 3323
+    },
+    {
+      "file": "hooks/008-UserPromptSubmit.json",
+      "run": 2,
+      "event": "UserPromptSubmit",
+      "bytes": 739,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 3391
+    },
+    {
+      "file": "hooks/009-PreToolUse.json",
+      "run": 2,
+      "event": "PreToolUse",
+      "bytes": 672,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 5335
+    },
+    {
+      "file": "hooks/010-PostToolUse.json",
+      "run": 2,
+      "event": "PostToolUse",
+      "bytes": 1011,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 5408
+    },
+    {
+      "file": "hooks/011-Stop.json",
+      "run": 2,
+      "event": "Stop",
+      "bytes": 522,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 6353
+    },
+    {
+      "file": "hooks/012-SessionEnd.json",
+      "run": 2,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 6392
+    },
+    {
+      "file": "hooks/013-SessionStart.json",
+      "run": 3,
+      "event": "SessionStart",
+      "bytes": 469,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 7287
+    },
+    {
+      "file": "hooks/014-PreCompact.json",
+      "run": 3,
+      "event": "PreCompact",
+      "bytes": 479,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 7349
+    },
+    {
+      "file": "hooks/015-SubagentStop.json",
+      "run": 3,
+      "event": "SubagentStop",
+      "bytes": 1348,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 9908
+    },
+    {
+      "file": "hooks/016-SessionStart.json",
+      "run": 3,
+      "event": "SessionStart",
+      "bytes": 422,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 9946
+    },
+    {
+      "file": "hooks/017-PostCompact.json",
+      "run": 3,
+      "event": "PostCompact",
+      "bytes": 989,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 9976
+    },
+    {
+      "file": "hooks/018-SessionEnd.json",
+      "run": 3,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 10042
+    },
+    {
+      "file": "hooks/019-SessionStart.json",
+      "run": 4,
+      "event": "SessionStart",
+      "bytes": 467,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 10929
+    },
+    {
+      "file": "hooks/020-UserPromptSubmit.json",
+      "run": 4,
+      "event": "UserPromptSubmit",
+      "bytes": 657,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 10995
+    },
+    {
+      "file": "hooks/021-PreToolUse.json",
+      "run": 4,
+      "event": "PreToolUse",
+      "bytes": 611,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 12861
+    },
+    {
+      "file": "hooks/022-PostToolUse.json",
+      "run": 4,
+      "event": "PostToolUse",
+      "bytes": 830,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 12901
+    },
+    {
+      "file": "hooks/023-PreToolUse.json",
+      "run": 4,
+      "event": "PreToolUse",
+      "bytes": 672,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 15793
+    },
+    {
+      "file": "hooks/024-PostToolUse.json",
+      "run": 4,
+      "event": "PostToolUse",
+      "bytes": 1011,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 15863
+    },
+    {
+      "file": "hooks/025-Stop.json",
+      "run": 4,
+      "event": "Stop",
+      "bytes": 522,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 16823
+    },
+    {
+      "file": "hooks/026-SessionEnd.json",
+      "run": 4,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 16862
+    },
+    {
+      "file": "hooks/027-SessionStart.json",
+      "run": 5,
+      "event": "SessionStart",
+      "bytes": 344,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 17715
+    },
+    {
+      "file": "hooks/028-UserPromptSubmit.json",
+      "run": 5,
+      "event": "UserPromptSubmit",
+      "bytes": 658,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 17787
+    },
+    {
+      "file": "hooks/029-PreToolUse.json",
+      "run": 5,
+      "event": "PreToolUse",
+      "bytes": 611,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 19172
+    },
+    {
+      "file": "hooks/030-PostToolUse.json",
+      "run": 5,
+      "event": "PostToolUse",
+      "bytes": 830,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 19212
+    },
+    {
+      "file": "hooks/031-PreToolUse.json",
+      "run": 5,
+      "event": "PreToolUse",
+      "bytes": 672,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 21832
+    },
+    {
+      "file": "hooks/032-PostToolUse.json",
+      "run": 5,
+      "event": "PostToolUse",
+      "bytes": 1011,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 21903
+    },
+    {
+      "file": "hooks/033-Stop.json",
+      "run": 5,
+      "event": "Stop",
+      "bytes": 522,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 22635
+    },
+    {
+      "file": "hooks/034-SessionEnd.json",
+      "run": 5,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 22674
+    },
+    {
+      "file": "hooks/035-SessionStart.json",
+      "run": 6,
+      "event": "SessionStart",
+      "bytes": 344,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 23714
+    },
+    {
+      "file": "hooks/036-UserPromptSubmit.json",
+      "run": 6,
+      "event": "UserPromptSubmit",
+      "bytes": 603,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 23785
+    },
+    {
+      "file": "hooks/037-PreToolUse.json",
+      "run": 6,
+      "event": "PreToolUse",
+      "bytes": 631,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 25122
+    },
+    {
+      "file": "hooks/038-PostToolUse.json",
+      "run": 6,
+      "event": "PostToolUse",
+      "bytes": 862,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 25196
+    },
+    {
+      "file": "hooks/039-Stop.json",
+      "run": 6,
+      "event": "Stop",
+      "bytes": 522,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 27607
+    },
+    {
+      "file": "hooks/040-SessionEnd.json",
+      "run": 6,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 27645
+    },
+    {
+      "file": "hooks/041-SessionStart.json",
+      "run": 7,
+      "event": "SessionStart",
+      "bytes": 344,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 28681
+    },
+    {
+      "file": "hooks/042-UserPromptSubmit.json",
+      "run": 7,
+      "event": "UserPromptSubmit",
+      "bytes": 907,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 28752
+    },
+    {
+      "file": "hooks/043-PreToolUse.json",
+      "run": 7,
+      "event": "PreToolUse",
+      "bytes": 632,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 30251
+    },
+    {
+      "file": "hooks/044-PostToolUse.json",
+      "run": 7,
+      "event": "PostToolUse",
+      "bytes": 864,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 30323
+    },
+    {
+      "file": "hooks/045-PreToolUse.json",
+      "run": 7,
+      "event": "PreToolUse",
+      "bytes": 632,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 30509
+    },
+    {
+      "file": "hooks/046-PostToolUse.json",
+      "run": 7,
+      "event": "PostToolUse",
+      "bytes": 864,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 30567
+    },
+    {
+      "file": "hooks/047-PreToolUse.json",
+      "run": 7,
+      "event": "PreToolUse",
+      "bytes": 741,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 32907
+    },
+    {
+      "file": "hooks/048-PostToolUse.json",
+      "run": 7,
+      "event": "PostToolUse",
+      "bytes": 2250,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 33812
+    },
+    {
+      "file": "hooks/049-Stop.json",
+      "run": 7,
+      "event": "Stop",
+      "bytes": 522,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 34580
+    },
+    {
+      "file": "hooks/050-SessionEnd.json",
+      "run": 7,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 34618
+    },
+    {
+      "file": "hooks/051-SessionStart.json",
+      "run": 8,
+      "event": "SessionStart",
+      "bytes": 344,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 35466
+    },
+    {
+      "file": "hooks/052-UserPromptSubmit.json",
+      "run": 8,
+      "event": "UserPromptSubmit",
+      "bytes": 758,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 35540
+    },
+    {
+      "file": "hooks/053-PreToolUse.json",
+      "run": 8,
+      "event": "PreToolUse",
+      "bytes": 613,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 37281
+    },
+    {
+      "file": "hooks/054-PostToolUseFailure.json",
+      "run": 8,
+      "event": "PostToolUseFailure",
+      "bytes": 799,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 37321
+    },
+    {
+      "file": "hooks/055-Stop.json",
+      "run": 8,
+      "event": "Stop",
+      "bytes": 536,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 40530
+    },
+    {
+      "file": "hooks/056-SessionEnd.json",
+      "run": 8,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 40569
+    },
+    {
+      "file": "hooks/057-SessionStart.json",
+      "run": 9,
+      "event": "SessionStart",
+      "bytes": 344,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 41572
+    },
+    {
+      "file": "hooks/058-UserPromptSubmit.json",
+      "run": 9,
+      "event": "UserPromptSubmit",
+      "bytes": 647,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 41642
+    },
+    {
+      "file": "hooks/059-PreToolUse.json",
+      "run": 9,
+      "event": "PreToolUse",
+      "bytes": 752,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 42942
+    },
+    {
+      "file": "hooks/060-PostToolUse.json",
+      "run": 9,
+      "event": "PostToolUse",
+      "bytes": 1308,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 42981
+    },
+    {
+      "file": "hooks/061-SubagentStart.json",
+      "run": 9,
+      "event": "SubagentStart",
+      "bytes": 430,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 42981
+    },
+    {
+      "file": "hooks/062-Stop.json",
+      "run": 9,
+      "event": "Stop",
+      "bytes": 645,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 43809
+    },
+    {
+      "file": "hooks/063-PreToolUse.json",
+      "run": 9,
+      "event": "PreToolUse",
+      "bytes": 664,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 44043
+    },
+    {
+      "file": "hooks/064-PostToolUse.json",
+      "run": 9,
+      "event": "PostToolUse",
+      "bytes": 883,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 44082
+    },
+    {
+      "file": "hooks/065-SubagentStop.json",
+      "run": 9,
+      "event": "SubagentStop",
+      "bytes": 1122,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 46286
+    },
+    {
+      "file": "hooks/066-UserPromptSubmit.json",
+      "run": 9,
+      "event": "UserPromptSubmit",
+      "bytes": 1396,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 46341
+    },
+    {
+      "file": "hooks/067-Stop.json",
+      "run": 9,
+      "event": "Stop",
+      "bytes": 770,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 49300
+    },
+    {
+      "file": "hooks/068-SessionEnd.json",
+      "run": 9,
+      "event": "SessionEnd",
+      "bytes": 391,
+      "process_cwd": "/workspace/native",
+      "project_dir": "/workspace/native",
+      "offset_ms": 49337
+    }
+  ],
+  "transcripts": [
+    "projects/-workspace-native/10000000-0000-4000-8000-000000000001.jsonl",
+    "projects/-workspace-native/10000000-0000-4000-8000-000000000002.jsonl",
+    "projects/-workspace-native/10000000-0000-4000-8000-000000000003.jsonl",
+    "projects/-workspace-native/10000000-0000-4000-8000-000000000004.jsonl",
+    "projects/-workspace-native/10000000-0000-4000-8000-000000000005.jsonl",
+    "projects/-workspace-native/10000000-0000-4000-8000-000000000006.jsonl",
+    "projects/-workspace-native/10000000-0000-4000-8000-000000000006/subagents/agent-a0000000000000002.jsonl",
+    "projects/-workspace-native/10000000-0000-4000-8000-000000000006/subagents/agent-a0000000000000002.meta.json"
+  ],
+  "extras": [
+    "advisor.jsonl",
+    "hook-context.jsonl",
+    "lessons-audit.jsonl",
+    "timing-cases.jsonl"
+  ]
+}

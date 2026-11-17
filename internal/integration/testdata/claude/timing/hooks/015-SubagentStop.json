@@ -1,0 +1,18 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000003",
+  "permission_mode": "default",
+  "agent_id": "a0000000000000001",
+  "agent_type": "",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001/subagents/agent-a0000000000000001.jsonl",
+  "last_assistant_message": "<analysis>\nTwo user turns. First: read timing/prior.txt, reply \"done\". Second: write the seamark code word before any tool call (I wrote cobalt-heron), then replace \"alpha\" with \"beta\" using Edit, and reply \"done\". The Edit succeeded. I'm answering this summary request in text only, as instructed.\n</analysis>\n\n<summary>\nThe user asked me to read a timing file, record the seamark code word, change its single line from \"alpha\" to \"beta\", and reply \"done\" each time; the Read, the code-word line (cobalt-heron), and the Edit are all complete.\n</summary>",
+  "background_tasks": [],
+  "session_crons": []
+}

@@ -301,6 +301,13 @@ func (s *settingsScreen) tailItems(w int) []settingsTail {
 		out = append(out, s.blockTail(settingsGroupTitle(group), snap.Editable(group), group.Document(), w))
 	}
 
+	// Settings reads the files of the recorded root, so the screen says
+	// that these values are not the files of this workspace.
+	if root := settingsShownRoot(snap); root != "" {
+		warn("These values come from " + ui.OneLine(root) + ", the root that the index records, not from this " +
+			"workspace.")
+	}
+
 	if n := s.draftTotal(); n > 0 {
 		if s.st.busy() {
 			warn("Saving waits for the running operation: " + ui.OneLine(s.st.mutation) + ".")
@@ -397,9 +404,9 @@ func settingsBlock(err error, doc string) settingsBlocked {
 
 	// The index of another repository blocks a lessons group without a
 	// fault in the file. A fix by hand would edit the file of the other
-	// repository, so the route is the index build (P4-16).
+	// repository, so the route leaves the file alone.
 	if errors.Is(err, services.ErrForeignRoot) {
-		out.route = settingsForeignRootRoute
+		out.route = settingsForeignRoute(err)
 	}
 
 	var b *settings.BlockedError

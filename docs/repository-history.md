@@ -11,9 +11,11 @@ seamark index       # ~seconds; parse + mine history + propagate effects
 seamark orient      # the one-screen overview
 ```
 
-`orient` shows scale, module layout, the most-called production API,
-the change hubs (files whose edits rarely travel alone), and the recent
-decision trail. Then interrogate anything that looks load-bearing:
+`orient` shows scale, an index health header (index time and age,
+freshness, file coverage, and call-edge origin shares), module layout,
+the most-called production API, the change hubs (files whose edits
+rarely travel alone), and the recent decision trail. Then interrogate
+anything that looks load-bearing:
 
 Example output (counts and paths depend on the indexed checkout):
 
@@ -24,31 +26,91 @@ internal/gate.EvalCommand  (function)
   sig      func EvalCommand(p *Policy, catalog *effects.Catalog, root, commandLine string) (*Decision, error)
   effects  proc:exec [depth 1]
 
-callers (4)
+callers (4)  — can be incomplete: a call through a function value or a shared method name gets no edge
   [qualified]     internal/cli.newGateCmd                      internal/cli/gate.go:21
   (+3 in tests)
 
 calls (8)  — 3 resolved by name match only
-  [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
   [same-package]  internal/gate.gitPush                        internal/gate/gate.go:388
+  [unique-name]   internal/effects.Catalog.MatchCommand        internal/effects/effects.go:140
   ...
 
-usually changed with  (empirical, lift > 1 means beyond chance)
+usually changed with  (whole file internal/gate/gate.go; empirical, lift > 1 means beyond chance)
    6/58  commits  lift 4.1   internal/effects/effects.go  · mostly MatchCommand, Load
-recent decisions
+
+recent decisions  (whole file internal/gate/gate.go)
   2026-07-26  ...  Implement Python parser
 ```
 
 Read it top to bottom: this function _can ultimately spawn a process_
 (one hop away), here is its production surface (test callers collapse to
-a count instead of burying it), and here is the commit trail. Every call
+a count instead of burying it), and here is the commit trail. The
+history sections (`usually changed with`, `fix density`, and `recent
+decisions`) describe the whole file that defines the symbol, and each
+header names that file: commits touch files, so every symbol of
+`internal/gate/gate.go` shows the same history. Every call
 edge declares how it was derived (`[qualified]`, `[same-package]`,
 `[same-class]`, or the low-confidence `[unique-name]`), so you always
-know how much to trust an edge. The `usually changed with` lines carry
-**function grain**: `· mostly …` names the functions git's hunk headers
-show actually moved in the shared commits — a factual report, not a
-statistical claim. On a repo with real history, this section is where
-the surprises live.
+know how much to trust an edge. Edges of the `[qualified]`,
+`[same-package]`, and `[same-class]` tiers lead each list, and
+`[unique-name]` guesses follow, so the 15-line cut drops guesses first.
+The `sig` line is cut at 200 characters with `…`: a JS/TS binding or a
+Python module-level value keeps its whole initializer as its signature,
+and the MCP `expand` tool gives the source. The CLI has no `expand`
+command, so read the file at the `defined` line directly.
+A function or method with no caller edge prints
+`callers (0)  — none resolved` and a note: a call by a method name that
+several methods share, or through a function value, gets no edge, and,
+for a symbol in a Go file only, in Go neither does a common method name (`Close`, `Err`, …) from a file
+that neither shares the method's directory nor imports its package, a
+call whose operand
+starts at a package outside the repository, or an unexported method of
+another directory. The same rules can drop a real caller from a list
+that is not empty, for example a function assigned to a package-level
+variable and called through it. So the header of a non-empty caller
+list of a function or a method ends with `can be incomplete: a call
+through a function value or a shared method name gets no edge`. When
+every caller edge is a guess, `why` lists them under
+`callers (N)  — N resolved by name match only; can be incomplete: …`. The
+`usually changed with` lines carry **function grain**: `· mostly …`
+names the functions git's hunk headers show actually moved in the shared
+commits — a factual report, not a statistical claim. Hunk headers
+describe each old commit, so `mostly` leaves out a name that a parsed
+partner no longer defines. `seamark check` lists the partners that the
+diff leaves out; when it lists none, one `companions` line says why:
+every partner is in the diff, the index holds no partner, or the read
+failed. On a repo with real history, this section is where the
+surprises live.
+
+`why` reads a query as a file path first, then as a symbol: an exact
+FQN or name, then an FQN suffix, then a prefix search. It reports the
+first match and lists up to four others under `also matched`; `expand`
+takes the same first match. Among exact matches a symbol defined in the
+repository comes before a package grouping symbol, and an exact FQN
+before a name; among suffix matches one at a component boundary (`.` or
+`/` before the query) comes before a raw string suffix. When definitions
+of the same name fill the list, a package of exactly that name takes its
+last line, so it is never cut. A package of
+this repository prints `defined  (package of this repository; …)` and
+`(package)` in lists; only a package the code imports from outside
+prints `(external)`.
+
+`change_set` prints each partner once. A partner that the plan leaves
+out and that the closing `history suggests also reviewing` list shows
+prints only there, with the planned file that it shares the most
+commits with, its `mostly` functions, and its last fix. A file block
+keeps the other partners as `usually changes with` lines: a planned
+file, and a partner past the six that the closing list shows.
+
+In a `usually changed with` line of `why`, and in a `usually changes
+with` line or a closing line of `change_set`, `6/58  commits` means that 6 commits
+changed both files, out of the 58 commits that co-change counts in the
+mined window. That count is the same on every line, and it is not the
+commit count of either file. The window is the latest 5000 commits by
+default (`--max-commits`). Lockfiles, generated files, and vendored and
+build output do not count as changed files. A commit with no other
+changed file, a commit with more than 30 other changed files
+(`--max-files-per-commit`), and a merge do not count.
 
 ### Languages
 
@@ -62,6 +124,47 @@ the surprises live.
 The history layer (co-change, decisions) is language-agnostic — it works
 on every file git tracks.
 
+History mining, the `mostly` names, fix mining, and the index freshness
+check run git with fixed options: no color, no external diff, no
+textconv, no signature lines, no rename following, a fixed rename
+detection, the diff of the root commit, the `a/` and `b/` path
+prefixes, raw non-ASCII paths, paths from the top of the work tree, the
+short submodule form, the listing of untracked files, and basic regular
+expressions for the revert search. A setting such as `color.ui=always`,
+`diff.external`, `diff.renames`, `log.showRoot=false`,
+`log.showSignature`, `grep.patternType`, or
+`status.showUntrackedFiles=no` therefore cannot change what seamark
+reads.
+
+The rename detection differs by reader:
+
+- History mining and the `mostly` names read history without rename
+  detection. A rename is a deletion of the old path and an addition of
+  the new path, so a renamed file starts new history at its new path.
+- Fix mining reads the file list of a fix without rename detection, so
+  a finding lists a renamed file under its old and its new path. It
+  reads the patch of a fix, and the patch identity that drops a
+  duplicate fix, with git's default rename detection.
+- The index freshness check reads `git diff HEAD` with git's default
+  rename detection.
+
+The index freshness check, the `check` fallback, the console
+(`seamark tui`), and the LSP server run git so that it does not rewrite
+`.git/index`. A change to file metadata
+only, such as `touch`, then leaves the git index as it was, so a
+concurrent git command does not meet `.git/index.lock`.
+
+An index run observes the workspace state before it reads any file and
+again after its last read. When the two states are equal, the run
+records that state in the same transaction as the graph. When they
+differ, the run records a mark that equals no workspace state. So a
+file that changes between the two observations makes `status` call the
+index stale, and the next run, `check`, or MCP call rebuilds. This
+holds also when the file goes back to its first content later, as after
+`git stash` and `git stash pop`. The run compares only these two
+states, so a change that goes back before the second observation is not
+seen.
+
 ## How much can the answers be trusted?
 
 ```bash
@@ -71,9 +174,9 @@ seamark status          # or --json; also served as MCP resource seamark://statu
 Example status output:
 
 ```text
-workspace      current (schema v3)
-parsed         703 of 832 seen files (98 skipped by config)
-symbols        1221, 2931 edges — call resolution 71% qualified · 24% same-package · 5% unique-name (1796 calls)
+workspace      current (schema v8)
+parsed         703 of 832 seen files (98 skipped by config, 31 with no language extractor)
+symbols        1221, 2931 edges — call resolution 71.3% qualified · 23.9% same-package · 4.8% unique-name (1796 calls)
 effects        83 direct-sink symbols, 692 by propagation
 history        3814 decisions; evidence median age 74d (oldest 1042d)
 reviews        3 lessons from 120 review findings; last mined 9d ago
@@ -86,6 +189,14 @@ clients        claude  gate (warn) + lessons hooks installed; registered in .mcp
                codex   no hooks installed; MCP registration not registered
 ```
 
+A seen file that is not parsed, not skipped by config, and not a parse
+error has no language extractor, for example a Markdown or YAML file.
+The `parsed` line counts those files, `--json` carries the count as
+`coverage.files_unsupported`, and the coverage line of `orient` adds
+`· 31 with no language extractor` when the count is above zero. The
+count comes from the counts that the index already stores, so an index
+from an older seamark shows it too.
+
 When git tracks files that the working tree no longer has, and the
 deletions are not staged, a `deleted` line after `parsed` says, for
 example, `47 tracked files in the working tree (deletions not staged)`.
@@ -94,6 +205,71 @@ the seen count and are not parse errors, because no file exists to
 parse. `--json` carries the count as
 `coverage.files_deleted`, and `seamark index` adds
 `(47 deleted in the working tree)` after the seen count.
+
+When the index records another root than the workspace, as in a copied
+or moved checkout, a `root` line comes first. It names that root, says
+that the report describes it, and names the `seamark index` run that
+records this workspace. `--json` carries the root as `recorded_root`.
+The `workspace` line then compares the index with that root, not with
+this workspace, so an edit in this workspace alone leaves it current.
+The MCP resource `seamark://status` prints the same `root` and
+`workspace` lines for the same workspace and database, with one
+difference. While the index still matches the workspace of the server,
+the server skips its refresh, its answers open with a note that says so,
+and its `workspace` line reads current, also after an edit in the
+recorded root or when that root is gone. A run in that root would make
+the index differ from the code that the server serves. An index that
+another seamark version built stays stale. The `orient` resource and the
+`orient` tool measure freshness against the workspace of the server, not
+against the recorded root. After an edit in that workspace alone, where
+the server refuses to refresh, `seamark://status` reads current, as
+`seamark status` does, while `orient` reads `freshness stale`. When the index
+is stale and a plain `seamark index` in this workspace would be
+refused, because the database belongs to another repository, the
+`workspace` line names the route of that state instead, for example
+``STALE — run `seamark index` in <root>``. The stale note of `seamark why`,
+`seamark orient`, and `seamark report` does the same. A database of
+this workspace keeps ``STALE — run `seamark index` ``.
+
+An index that another seamark version built can lack facts that this
+version records, such as the calls inside package-level values, also
+when the workspace is unchanged. `seamark index`, `seamark check`, and
+every MCP call rebuild it once. The readers that never rebuild call it
+stale and say why: the `workspace` line reads
+``STALE — this index was built by another seamark version; run `seamark index` ``,
+`--json` keeps `"freshness": "stale"` and adds
+`"stale_reason": "other-version"` (a changed workspace gives
+`"workspace-changed"`; any other freshness has no key), the `orient`
+health line reads `freshness stale (this index was built by another
+seamark version)`, and `why`, `orient`, and `report` print
+``note: this index was built by another seamark version — run `seamark index` to rebuild it``.
+The HTML report and the console overview say the same, and
+`lessons --prepare` qualifies its mined lessons with it. A database that
+records another repository keeps the route of that state on both lines.
+An index from before seamark stored its parser version counts as
+another version.
+
+The MCP server never rebuilds an index that records another repository.
+Every read answer (`orient`, `why`, `expand`, `change_set` with its
+`change_set_report` key, and both resources) then opens with one note
+that names that root:
+
+- When the workspace fingerprint matches the index, as in a sibling
+  worktree at the same commit, the note is
+  `note: this index records another repository (<root>); it matches this workspace now, and this answer describes <root>.`
+  A copied or moved checkout whose database file does not accept writes
+  gets the same note: the server keeps the skip there, because a rebuild
+  would fail. `check` keeps its verdict and opens with the same note,
+  also with `lesson_checks`, where the `combined:` line follows the note.
+- When the fingerprints differ, the refresh is refused, and the note is
+  `note: seamark did not refresh this index, because it records another repository (<root>) and a rebuild here would move its root; this answer describes <root> and can differ from this workspace.`
+  The answer can hold symbols and effects that this workspace does not
+  have. `check` refuses, because a verdict needs a current graph.
+
+A recorded root that no longer exists reads `records a directory that
+no longer exists (<root>)` in both notes. The `orient` title names the
+recorded root, as `seamark orient` does. A server on a database of its
+own workspace prints none of these notes.
 
 The `clients` block is the per-agent view: which hooks and which MCP
 registration each agent has, the native evidence behind them (a
@@ -110,10 +286,16 @@ whose exit status the wrapper discards (`… || true`) reads
 
 Every safety-sensitive answer needs this context: **"no effects found"
 from a half-parsed index is not "no effects."** The same honesty runs
-through the other surfaces — `orient` warns when files failed to parse,
-and `seamark check` attaches a note when changed files have no indexed
-symbols, so absence of evidence never silently reads as evidence of
-safety.
+through the other surfaces — `orient` opens with the index health and
+warns when files failed to parse, and `seamark check` attaches a note
+when a changed file has changes outside every indexed symbol, so absence of evidence never silently reads as evidence of
+safety. A change inside a package-level value initializer or a class
+field lies in the symbol of that value or class, and the symbol carries
+the calls there, so the change reports their effects instead of reading
+as reaching nothing. A change to a value or type with no effects of its
+own, such as a constant that a function passes to a sink, gets a second
+note: seamark does not track readers of a value, so its reach is
+unknown, not clean.
 
 Installation health is the other half:
 
@@ -160,14 +342,104 @@ table in [Data flow](data-flow.md).
 
 - Call resolution is syntactic, not type-checked. gopls will always be
   better at _find references_ within one language — that is not the
-  game. Low-confidence edges are labeled `[unique-name]` and test
-  doubles are excluded from that tier.
+  game. Low-confidence edges are labeled `[unique-name]`. A production
+  caller never resolves into a test file in that tier, and a Go test
+  caller resolves into a test file only in its own directory. In Go,
+  that tier also skips a call whose operand starts at a package outside
+  the repository (`strings.NewReplacer(…).Replace`), an unexported
+  method of another directory, and a common standard-library method
+  name (`Err`, `Replace`, `Close`, …) when the calling file neither
+  shares the method's directory nor imports its package. An index built
+  before these Go rules keeps its old edges until an index run rebuilds
+  it; on an unchanged workspace, `seamark index --force` rebuilds it at
+  once.
+- A method call whose name several methods share, a call that these Go
+  rules skip, and a call through a function value get no edge. `why`
+  then can print `callers (0)  — none resolved` for a method that has
+  real callers, so read the call sites before you treat it as unused.
+  Two of these Go rules also drop real calls. The common-name rule drops
+  one from a file that neither shares the method's directory nor imports
+  its package: an interface call, or a call on a field, a promoted
+  method, a local variable, or a call result
+  (`pair.Data.WriteString(…)`, `mk.Writer().Replace(…)`). The
+  outside-package rule drops a chain that returns a repository value: a
+  generic helper (`cmp.Or(p, q).Render()`, `slices.Max(…)`,
+  `sync.OnceValue(…)()`), a conversion to an outside interface type
+  (`io.Writer(w).Write(p)`), or an interface value that the outside
+  package holds or returns (`flag.Lookup(…).Value.Set(…)`,
+  `errors.Unwrap(err).Error()`). Go compiles no call that the
+  unexported-method rule drops. Effects never cross a dropped edge, so
+  the callee's effects do not reach the caller. `why` names these rules
+  in full only under `callers (0)`. A non-empty caller list says on its
+  header only that it can be incomplete, so it does not show which
+  caller was dropped.
+- A package-level Go `var`, a module-level JS/TS `const`/`let`/`var`,
+  and a module-level Python assignment carry the calls of their
+  initializer, function literals and lambdas in it included. Such a value
+  is listed as a caller, `why <value>` shows its calls and effects, and
+  `check` reports the effects of a change inside it. Every name of a Go
+  spec with several names (`var a, b = f(), g()`) carries every call of
+  that spec. A Go `const` initializer is not mined, and a function value
+  without a call (`var prepare = delivery.Prepare`) still gets no edge.
+  No edge records that a function reads a value, so a change to a value
+  reaches none of the effects of its readers; `check` names such a value
+  in a note when it has no effects of its own.
+  A JS/TS or Python class carries the calls of its body outside its
+  methods: field initializers, static blocks, class attributes, and a
+  method decorator that the grammar places outside the method (TypeScript
+  and Python; a JavaScript method decorator stays with its method). A
+  method keeps its own calls, and the class does not repeat them. A
+  private JS/TS method (`#m`) is a method symbol. Each access `X.#m`,
+  called or not (a value passed on, a `bind` operand, a getter read, a
+  setter write, the class name as operand), gives a `[same-class]` edge
+  to the private method or accessor of the class that declares the
+  name, or to the class for a private field when the class carries
+  calls. It never takes the `[unique-name]` guess, because JavaScript
+  allows no access to the private member of another class. The class
+  has a `[same-class]` edge to each of its private methods and
+  accessors, so `why` lists it as a caller and the class keeps their
+  effects. A method that is no symbol, such as a JS/TS method with a
+  computed name (`[Symbol.iterator]()`) or a Python `def` inside an `if`
+  of the class body, is code of its class: the class carries its calls.
+  `check` counts a changed line for every symbol whose span covers it,
+  so an edit inside a method also reports the effects of the class
+  body, a known over-report. A JS/TS `this.save()` in a class body,
+  such as in a field arrow function or a computed method, resolves to
+  the `save` method of that class as `[same-class]`, as it does in a
+  method. A `this` call outside the methods of a nested class, such as
+  in a field arrow function, also resolves to the outer class, a known
+  over-report: the nested class can extend the outer class, and a
+  computed key there keeps the outer `this`. A Go type declares no call,
+  so a struct needs no such rule.
+  An index built before this rule is rebuilt once by the next index run
+  or MCP call, also on an unchanged workspace; a database file that does
+  not accept writes keeps its old edges. A workspace that reads the
+  database of another repository, such as a sibling worktree started
+  with `--db`, does not rebuild it: `seamark check` refuses with
+  ``this database records another repository … run `seamark index` in <root>``,
+  and MCP reads open with the `did not refresh` note, until that root has
+  been indexed once with the new version. Run `seamark index` in the
+  recorded root once.
 - A local variable shadowing an import alias can produce a wrong edge
   (declared as such via its origin label). Scope tracking is future work.
 - Python's DB-API has no syntactic read/write split, so `cursor.execute`
   tags conservatively as `db:write`.
 - Co-change needs history: on a young repo the empirical layer is thin
   until commits accumulate.
+- From the next index run, a deleted or renamed-away file is never
+  named as a partner or a hub, and its commits still count in lift. It
+  keeps its live partners. `why` and `change_set` list them when you
+  ask for the old path. `check` and the MCP `check` tool list them for
+  a diff that deletes the file or renames it away, also as part of a
+  directory rename, in a piped diff and in the `git diff HEAD`
+  fallback, because check reads the old path of a rename record as a
+  changed file. A directory rename moves the partners inside that
+  directory too, so the old paths keep only the partners outside it,
+  and a live file whose partners all moved shows none. A file that
+  comes back is a partner again at the next index run. A renamed file
+  starts new history at its new path (see the rename detection of
+  history mining above), so it has no partners until commits
+  accumulate there.
 - Seamark is a navigator, not an oracle. It tells you where to look and
   what usually travels together; "usually changes with" is empirical
   evidence, never a guarantee that _your_ edit is safe or complete. For

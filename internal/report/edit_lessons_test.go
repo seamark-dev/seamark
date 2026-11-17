@@ -123,6 +123,7 @@ func TestLessonsForFilesBudgetMatchesSingleFileSelector(t *testing.T) {
 		{"pin cap above the total cap", aboveTotal, "scripts/task.py", aboveTotal.HookPinBudget()},
 		{"muted mined lesson", muted, "scripts/task.py", 3},
 		{"deliberate view", restated, "scripts/task.py", 0},
+		{"deliberate view above the total cap", aboveTotal, "scripts/task.py", 0},
 		{"repeated pin identity", repeated, "scripts/task.py", 3},
 		{"repeated pin identity above the pin cap", repeated, "scripts/task.py", 1},
 		{"repeated pin identity in the deliberate view", repeated, "scripts/task.py", 0},
@@ -138,6 +139,65 @@ func TestLessonsForFilesBudgetMatchesSingleFileSelector(t *testing.T) {
 
 			got, gotHeld, err := LessonsForFilesBudget(st, tc.cfg, []string{tc.file},
 				LessonBudget{Total: HookLessonTotal, Pins: tc.pins})
+			require.NoError(t, err)
+
+			assert.Equal(t, want, got)
+			assert.Equal(t, wantHeld, gotHeld)
+		})
+	}
+}
+
+// TestSelectorsCountOnlyThePinsTheLimitCuts holds the held-back count
+// when the total cap cuts a list with mined lessons. The count holds
+// only the pins that the cut removes, so mined lessons never make it
+// negative. A muted mined lesson is not in the list, so it does not
+// change the pin count. Both selectors must give the same lessons and
+// the same count, as in the parity test above.
+func TestSelectorsCountOnlyThePinsTheLimitCuts(t *testing.T) {
+	// minedLessons returns n mined lessons on region scripts that pass
+	// the default threshold, strongest first.
+	minedLessons := func(n int) []model.Lesson {
+		out := make([]model.Lesson, n)
+		for i := range out {
+			out[i] = model.Lesson{
+				ClusterKey: fmt.Sprintf("scripts\x00M%d", i), Region: "scripts", Reviewer: "coderabbit",
+				Symptom: fmt.Sprintf("M%d", i), Occurrences: 20 - i, LastTS: int64(100 - i),
+			}
+		}
+
+		return out
+	}
+
+	cases := []struct {
+		name   string
+		pins   int
+		mined  int
+		mute   []reviews.MuteRule
+		budget int
+		held   int
+	}{
+		{"few pins, mined lessons above the total cap", 3, 10, nil, 0, 0},
+		{"few pins under a pin cap, mined lessons above the total cap", 3, 10, nil, 3, 0},
+		{"muted mined lesson, pins above the total cap", 10, 2, []reviews.MuteRule{{Rule: "M0"}}, 0, 2},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st, _ := seedStore(t)
+			require.NoError(t, st.ReplaceLessons(minedLessons(tc.mined), nil))
+
+			cfg := reviews.DefaultConfig()
+			cfg.Pin = distinctPins("scripts", tc.pins)
+			cfg.Mute = tc.mute
+
+			want, wantHeld, err := LessonsForScopeBudget(st, cfg, "scripts/task.py", HookLessonTotal, tc.budget)
+			require.NoError(t, err)
+
+			assert.Len(t, want, HookLessonTotal)
+			assert.Equal(t, tc.held, wantHeld)
+
+			got, gotHeld, err := LessonsForFilesBudget(st, cfg, []string{"scripts/task.py"},
+				LessonBudget{Total: HookLessonTotal, Pins: tc.budget})
 			require.NoError(t, err)
 
 			assert.Equal(t, want, got)
@@ -280,8 +340,8 @@ func TestLessonsForFilesBudgetCountsHeldBackPinsExactly(t *testing.T) {
 	assert.Len(t, lessons, 4, "three pins and the mined lesson")
 	assert.Equal(t, 2, heldBack, "one restatement and one pin above the cap")
 
-	// A pin cap above the total cap is clamped, so the total cap never
-	// removes an uncounted pin.
+	// A pin cap above the total cap leaves the total cut as the limit.
+	// The count includes the pins of that cut, so no pin goes uncounted.
 	cfg.Pin = distinctPins("*", 10)
 
 	lessons, heldBack, err = LessonsForFilesBudget(st, cfg,
@@ -390,6 +450,26 @@ func TestReminderForOneFileEqualsTheSingleFileReminder(t *testing.T) {
 	assert.Empty(t, edit.String())
 }
 
+// TestReminderReadsANoteLineBreakAsASpace covers a pin note with line
+// breaks, as a YAML block note gives. The hook prints one line, so the
+// two note lines must not run together, and the end break adds no space.
+func TestReminderReadsANoteLineBreakAsASpace(t *testing.T) {
+	cfg := &reviews.Config{Pin: []reviews.PinRule{
+		{Rule: "two-line", Region: "api", Note: "First line.\nSecond line.\n"},
+	}}
+
+	lessons := cfg.Surface(nil, "api/a.go")
+	require.Len(t, lessons, 1)
+
+	var single strings.Builder
+	require.NoError(t, PrintLessonReminder(&single, "api/a.go", lessons, 0))
+	assert.Contains(t, single.String(), "\n- [pin] two-line — First line. Second line.\n")
+
+	var several strings.Builder
+	require.NoError(t, PrintEditReminder(&several, []string{"api/a.go", "api/b.go"}, lessons, 0))
+	assert.Contains(t, several.String(), "\n- [pin · api] two-line — First line. Second line.\n")
+}
+
 func TestReminderForSeveralFilesNamesRegions(t *testing.T) {
 	lessons := []model.Lesson{
 		{Region: "db", Reviewer: "pinned", Symptom: "wrap dependent writes", Occurrences: 1 << 30},
@@ -403,6 +483,7 @@ func TestReminderForSeveralFilesNamesRegions(t *testing.T) {
 		"- [pin · db] wrap dependent writes\n" +
 		"- [×4 · api] RUF001 (weak evidence: 1 event)\n" +
 		"(+2 more pins for these files: `seamark lessons --file <path>` shows the full view of one file)\n" +
+		"(inspect the pins in `seamark tui`, Lessons › Pins, from a terminal; or read .seamark/lessons.yaml)\n" +
 		"(all raw findings: `seamark lessons --region <dir>` for a touched directory — a repeated mistake " +
 		"not covered above is worth proposing as a pin in .seamark/lessons.yaml)\n"
 	assert.Equal(t, want, b.String())

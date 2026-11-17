@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,11 +21,14 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/lessonreport"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/store"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -49,6 +53,9 @@ type fakeServices struct {
 	mu sync.Mutex
 
 	root, dbPath, version string
+	// database replaces the answers about the database that Pins derives
+	// from the paths of the fake.
+	database *workspace.DatabaseFacts
 
 	fresh    bool
 	freshErr error
@@ -61,6 +68,10 @@ type fakeServices struct {
 	ledgerErr    error
 	stats        lessonstats.Snapshot
 	agentsOnPath []string
+
+	// delivery answers the delivery reading; nil gives the fixed fields and
+	// lists no pins, so existing scenes need no delivery fixture.
+	delivery func(lessonreport.Request) (lessonreport.Report, error)
 
 	planSetup       func([]integration.ClientSetup) (*services.SetupPreview, error)
 	applySetup      func(*services.SetupPreview) (integration.SetupResult, error)
@@ -89,6 +100,7 @@ type fakeServices struct {
 	pins *maintain.Inspection
 
 	planMaintenance   func(maintain.Request) (*maintain.Plan, error)
+	planScope         func(maintain.ScopeRequest) (*maintain.Plan, error)
 	commitMaintenance func(*maintain.Plan) (maintain.Result, error)
 	planRecovery      func(*maintain.Recovery) (*maintain.Plan, error)
 	commitRecovery    func(*maintain.Plan) (maintain.Result, error)
@@ -96,6 +108,21 @@ type fakeServices struct {
 	runExtract        func(context.Context, *learning.ExtractPreview, func(distill.ExtractEvent)) (*distill.ExtractExecution, error)
 	planAuthor        func(maintain.AuthorRequest) (*maintain.AuthorPlan, error)
 	commitAuthor      func(*maintain.AuthorPlan) (maintain.AuthorResult, error)
+
+	// planCheckDef and commitCheckDef answer the check-definition
+	// authoring; nil answers with an empty plan and an empty result.
+	planCheckDef   func(maintain.CheckDefRequest) (*maintain.CheckDefPlan, error)
+	commitCheckDef func(*maintain.CheckDefPlan) (maintain.AuthorResult, error)
+
+	// lessonCapability is the lesson-capability/1 report. The zero value
+	// lists no client and no pin.
+	lessonCapability lessoncheck.CapabilityReport
+	// verifyLessons answers a verification. nil answers with an error, so
+	// no test reads an unscripted result as a pass.
+	verifyLessons func(context.Context, []string) (*lessoncheck.Verification, error)
+	// revalidateLessons answers a revalidation. nil answers stale, so no
+	// test reads an unscripted result as fresh.
+	revalidateLessons func(context.Context, *lessoncheck.Verification) (lessoncheck.Freshness, error)
 
 	// sample answers a selection sample. nil answers with an unavailable
 	// view, so no test reads an unscripted sample as zero lessons.
@@ -122,6 +149,7 @@ var (
 	_ services.Learning    = (*fakeServices)(nil)
 	_ services.Maintenance = (*fakeServices)(nil)
 	_ services.Settings    = (*fakeServices)(nil)
+	_ services.Checks      = (*fakeServices)(nil)
 )
 
 func newFake() *fakeServices {
@@ -253,6 +281,16 @@ func (f *fakeServices) Learning() learning.Snapshot {
 	return f.learning
 }
 
+func (f *fakeServices) Delivery(req lessonreport.Request) (lessonreport.Report, error) {
+	f.count("Delivery")
+
+	if f.delivery == nil {
+		return lessonreport.Build(lessonreport.Inputs{}, "")
+	}
+
+	return f.delivery(req)
+}
+
 func (f *fakeServices) Settings() (*settings.Snapshot, error) {
 	f.count("Settings")
 
@@ -344,7 +382,44 @@ func (f *fakeServices) Pins() *maintain.Inspection {
 		return fakePins()
 	}
 
-	return f.pins
+	return f.answered(f.pins)
+}
+
+// answered fills in the answers of the engine about the database. A test
+// can set them in f.database. Otherwise the plain paths of the fake
+// decide, because the fake has no disk.
+func (f *fakeServices) answered(in *maintain.Inspection) *maintain.Inspection {
+	if f.database != nil {
+		in.Database = *f.database
+
+		return in
+	}
+
+	in.Database = workspace.DatabaseFacts{}
+
+	if f.dbPath != store.DefaultPath(f.root) {
+		in.Database.Kind = store.DatabaseOther
+	}
+
+	if in.Index.Root != "" && f.root != "" && filepath.Clean(in.Index.Root) != filepath.Clean(f.root) {
+		in.Database.ForeignRoot = in.Index.Root
+
+		if in.Database.Kind == store.DatabaseDefault {
+			in.Database.WriteBlock = services.ErrForeignRoot
+		}
+	}
+
+	return in
+}
+
+func (f *fakeServices) PlanScope(req maintain.ScopeRequest) (*maintain.Plan, error) {
+	f.record("PlanScope")
+
+	if f.planScope == nil {
+		return &maintain.Plan{Action: maintain.ActionScope, PlannedAt: time.Now()}, nil
+	}
+
+	return f.planScope(req)
 }
 
 func (f *fakeServices) PlanMaintenance(req maintain.Request) (*maintain.Plan, error) {
@@ -448,6 +523,57 @@ func (f *fakeServices) CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResu
 	}
 
 	return f.commitAuthor(p)
+}
+
+func (f *fakeServices) PlanCheckDef(req maintain.CheckDefRequest) (*maintain.CheckDefPlan, error) {
+	f.record("PlanCheckDef")
+
+	if f.planCheckDef == nil {
+		return &maintain.CheckDefPlan{Request: req, Root: f.root}, nil
+	}
+
+	return f.planCheckDef(req)
+}
+
+func (f *fakeServices) CommitCheckDef(p *maintain.CheckDefPlan) (maintain.AuthorResult, error) {
+	f.record("CommitCheckDef")
+
+	if f.commitCheckDef == nil {
+		return maintain.AuthorResult{}, nil
+	}
+
+	return f.commitCheckDef(p)
+}
+
+// LessonCapability is a read: it counts the call and returns the field.
+func (f *fakeServices) LessonCapability([]integration.Inspection) lessoncheck.CapabilityReport {
+	f.count("LessonCapability")
+
+	return f.lessonCapability
+}
+
+// VerifyLessons appends an audit record in the engine, so the fake
+// records it as a call, not as a read.
+func (f *fakeServices) VerifyLessons(ctx context.Context, paths []string) (*lessoncheck.Verification, error) {
+	f.record("VerifyLessons")
+
+	if f.verifyLessons == nil {
+		return nil, errors.New("fake: no scripted verification")
+	}
+
+	return f.verifyLessons(ctx, paths)
+}
+
+// RevalidateLessons writes nothing in the engine, so the fake counts it
+// as a read.
+func (f *fakeServices) RevalidateLessons(ctx context.Context, v *lessoncheck.Verification) (lessoncheck.Freshness, error) {
+	f.count("RevalidateLessons")
+
+	if f.revalidateLessons == nil {
+		return lessoncheck.FreshnessStale, nil
+	}
+
+	return f.revalidateLessons(ctx, v)
 }
 
 func (f *fakeServices) Sample(req services.SampleRequest) services.SampleView {

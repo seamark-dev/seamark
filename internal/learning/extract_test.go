@@ -277,7 +277,7 @@ func TestPlanExtractWritesNothingAndRunsNoAgent(t *testing.T) {
 	assert.Equal(t, rows[0].ID, p.Request.IDs[0])
 }
 
-// Every console exclusion of D-17 names its reason. The link exclusions
+// Every console exclusion names its reason. The link exclusions
 // come from pinfile.Classify, the status, answer, and evidence exclusions
 // from the shared plan rules, and the disagreeing region fields of a row
 // in any status from pinfile.FieldsAgree.
@@ -486,6 +486,17 @@ func TestPlanExtractBlocksOnConfigurationErrors(t *testing.T) {
 	}
 }
 
+func TestRunExtractNamesEveryBlockerInPreviewOrder(t *testing.T) {
+	p := &ExtractPreview{Plan: &distill.ExtractPlan{}, Blockers: []ExtractBlocker{
+		{Kind: ExtractBlockWorkDir, Reason: "first reason"},
+		{Kind: ExtractBlockAgent, Reason: "second reason"},
+	}}
+
+	_, err := RunExtract(context.Background(), workspace.Workspace{}, nil, p, &extAgent{}, nil)
+	require.ErrorIs(t, err, ErrExtractBlocked)
+	assert.EqualError(t, err, ErrExtractBlocked.Error()+": first reason; second reason")
+}
+
 func TestPlanExtractNeedsAReadyIndex(t *testing.T) {
 	root := t.TempDir()
 
@@ -513,7 +524,8 @@ func TestPlanExtractBlocksAMissingAgentAndRunRefusesIt(t *testing.T) {
 
 	p := extPlan(t, ws, ExtractRequest{IDs: extIDs(rows...)})
 	require.Len(t, p.Blockers, 1)
-	assert.Contains(t, p.Blockers[0], `agent cli "no-such-agent-binary-for-tests" not found on PATH`)
+	assert.Equal(t, ExtractBlockAgent, p.Blockers[0].Kind)
+	assert.Contains(t, p.Blockers[0].Reason, `agent cli "no-such-agent-binary-for-tests" not found on PATH`)
 	assert.Len(t, p.Plan.Batches, 1, "a blocked preview still discloses the plan")
 
 	agent := &extAgent{}
@@ -537,7 +549,6 @@ func TestExtractPreviewWorkDirFollowsTheCommand(t *testing.T) {
 		assert.Empty(t, p.Invocation.Dir)
 		assert.Equal(t, "/console/dir", p.WorkDir)
 		assert.Empty(t, p.Blockers)
-		assert.NoError(t, p.WorkDirErr)
 	})
 
 	t.Run("codex preset", func(t *testing.T) {
@@ -559,17 +570,11 @@ func TestExtractPreviewWorkDirFollowsTheCommand(t *testing.T) {
 		p := extPlan(t, ws, ExtractRequest{IDs: extIDs(rows...)})
 		assert.Empty(t, p.WorkDir)
 		require.Len(t, p.Blockers, 1, "an undisclosed directory blocks the run")
-		assert.Contains(t, p.Blockers[0], "the agent's working directory is unknown")
-		assert.NotContains(t, p.Blockers[0], "\x1b", "a blocker is a safe display line")
+		assert.Contains(t, p.Blockers[0].Reason, "the agent's working directory is unknown")
+		assert.NotContains(t, p.Blockers[0].Reason, "\x1b", "a blocker is a safe display line")
 
-		// The typed signal marks the line, so a surface never parses it.
-		require.Error(t, p.WorkDirErr)
-		assert.True(t, p.IsWorkDirBlocker(p.Blockers[0]))
-		assert.False(t, p.IsWorkDirBlocker(`agent cli "claude" not found on PATH`))
-
-		same := *p
-		same.WorkDirErr = nil
-		assert.False(t, same.IsWorkDirBlocker(p.Blockers[0]), "the text alone never marks a blocker")
+		// The kind marks the blocker, so a surface never parses the line.
+		assert.Equal(t, ExtractBlockWorkDir, p.Blockers[0].Kind)
 
 		agent := &extAgent{}
 

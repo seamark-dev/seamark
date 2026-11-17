@@ -120,11 +120,11 @@ func (g *GoExtractor) Extract(relPath string, src []byte) (*FileResult, error) {
 			recv := goReceiverType(caps["method.decl"], src)
 			g.addFuncLike(res, src, pkg, caps["method.decl"], caps["method.name"], recv, model.KindMethod)
 		case caps["type.spec"] != nil:
-			g.addValueDecl(res, src, pkg, caps["type.spec"], caps["type.name"], model.KindType)
+			g.addValueDecl(res, src, pkg, caps["type.spec"], caps["type.name"], model.KindType, false)
 		case caps["const.spec"] != nil:
-			g.addValueDecl(res, src, pkg, caps["const.spec"], caps["const.name"], model.KindConst)
+			g.addValueDecl(res, src, pkg, caps["const.spec"], caps["const.name"], model.KindConst, false)
 		case caps["var.spec"] != nil:
-			g.addValueDecl(res, src, pkg, caps["var.spec"], caps["var.name"], model.KindVar)
+			g.addValueDecl(res, src, pkg, caps["var.spec"], caps["var.name"], model.KindVar, true)
 		case caps["import.spec"] != nil:
 			if imp, ok := goImport(caps["import.spec"], src); ok {
 				res.Imports = append(res.Imports, imp)
@@ -167,10 +167,19 @@ func (g *GoExtractor) addFuncLike(res *FileResult, src []byte, pkg string,
 	res.Symbols = append(res.Symbols, SymbolDecl{Symbol: sym, Calls: g.callsIn(decl, src, selfName)})
 }
 
-// addValueDecl records a type/const/var spec (no body mining — initializer
-// calls are rarely useful edges and often noise).
+// addValueDecl records a type/const/var spec. With mineCalls, the calls
+// in the spec become calls of the symbol, as for a function body. The
+// span of the symbol covers its initializer, so a change there counts as
+// attributed, and unmined calls would read as reaching nothing. A var
+// initializer can hold function literals that do real work (a table of
+// handlers). Const initializers are constant expressions, so they hold no
+// call worth an edge, and type specs hold none at all.
+//
+// A spec with several names (var a, b = f(), g()) gives every name all
+// calls of the spec: the grammar matches each name with the whole spec,
+// and the span of each symbol covers every initializer.
 func (g *GoExtractor) addValueDecl(res *FileResult, src []byte, pkg string,
-	spec, nameNode *tree_sitter.Node, kind model.SymbolKind,
+	spec, nameNode *tree_sitter.Node, kind model.SymbolKind, mineCalls bool,
 ) {
 	if nameNode == nil {
 		return
@@ -190,7 +199,7 @@ func (g *GoExtractor) addValueDecl(res *FileResult, src []byte, pkg string,
 
 	name := nameNode.Utf8Text(src)
 
-	res.Symbols = append(res.Symbols, SymbolDecl{Symbol: model.Symbol{
+	sd := SymbolDecl{Symbol: model.Symbol{
 		FQN:     joinFQN(pkg, "", name),
 		Name:    name,
 		Kind:    kind,
@@ -198,7 +207,12 @@ func (g *GoExtractor) addValueDecl(res *FileResult, src []byte, pkg string,
 		Span:    spanOf(spec),
 		Sig:     firstLine(spec.Utf8Text(src)),
 		DocHash: docHash(spec, src),
-	}})
+	}}
+	if mineCalls {
+		sd.Calls = g.callsIn(spec, src, "")
+	}
+
+	res.Symbols = append(res.Symbols, sd)
 }
 
 // callsIn runs the call query inside one declaration. selfName is the
@@ -231,9 +245,13 @@ func (g *GoExtractor) callsIn(decl *tree_sitter.Node, src []byte, selfName strin
 					Line:     uint32(node.StartPosition().Row) + 1,
 					Selector: true,
 				}
-				if op := node.ChildByFieldName("operand"); op != nil && op.Kind() == "identifier" {
-					ref.Qualifier = op.Utf8Text(src)
-					ref.Receiver = selfName != "" && ref.Qualifier == selfName
+				if op := node.ChildByFieldName("operand"); op != nil {
+					if op.Kind() == "identifier" {
+						ref.Qualifier = op.Utf8Text(src)
+						ref.Receiver = selfName != "" && ref.Qualifier == selfName
+					} else {
+						ref.Root = goOperandRoot(op, src)
+					}
 				}
 				out = append(out, ref)
 			}
@@ -241,6 +259,35 @@ func (g *GoExtractor) callsIn(decl *tree_sitter.Node, src []byte, selfName strin
 	}
 
 	return out
+}
+
+// goOperandRoot returns the identifier at the start of a selector operand:
+// "strings" in strings.NewReplacer(…), "os" in os.Stdout. It follows call
+// functions and selector operands only. Any other node, such as a type
+// assertion, an index, a type instantiation, or a parenthesized operand,
+// gives "". The value of such a node can have any type, so its start
+// says nothing about the package of the method.
+func goOperandRoot(n *tree_sitter.Node, src []byte) string {
+	for n != nil {
+		switch n.Kind() {
+		case "identifier":
+			return n.Utf8Text(src)
+		case "call_expression":
+			// pkg.F[T]() instantiates a generic function, so its result
+			// type depends on T and not only on pkg.
+			if n.ChildByFieldName("type_arguments") != nil {
+				return ""
+			}
+
+			n = n.ChildByFieldName("function")
+		case "selector_expression":
+			n = n.ChildByFieldName("operand")
+		default:
+			return ""
+		}
+	}
+
+	return ""
 }
 
 // goReceiverName extracts the receiver's identifier: "s" in (s *Store).

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -17,7 +18,9 @@ import (
 	"github.com/seamark-dev/seamark/internal/proposals"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/store"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
+	"github.com/seamark-dev/seamark/internal/workspace"
 )
 
 // This file holds the state and the key handling of Lessons › Pins. The
@@ -37,10 +40,14 @@ import (
 // pinKeys are the bindings that only the Pins sub-view uses. The shared
 // keys (space, x, f, /, t) keep their meaning from Proposals. n, i and
 // d open the authoring of pins_author.go; they act on the cursor row
-// only, never on the marks.
+// only, never on the marks. M and V open the check-definition form and
+// the verification view of the lesson checks (pins_checkdef.go,
+// pins_checks.go). They show only in a repository that uses lesson
+// checks (pinsCheckShown).
 var pinKeys = struct {
 	Search, Compare, Retarget, Prune key.Binding
 	New, Edit, Remove                key.Binding
+	Define, Verify                   key.Binding
 }{
 	Search:   key.NewBinding(key.WithKeys("z"), key.WithHelp("z", "search")),
 	Compare:  key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "compare")),
@@ -49,6 +56,8 @@ var pinKeys = struct {
 	New:      key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new pin")),
 	Edit:     key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "edit")),
 	Remove:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
+	Define:   key.NewBinding(key.WithKeys("M"), key.WithHelp("M", "check definition")),
+	Verify:   key.NewBinding(key.WithKeys("V"), key.WithHelp("V", "verify checks")),
 }
 
 // pinFilter is the list filter of the Pins sub-view. The installed pins
@@ -142,6 +151,8 @@ type pinsView struct {
 	// that the user saw when marking. A refresh keeps an entry only while
 	// its content and its link stay the same.
 	selected pinMarks
+	// tail remembers the last answer of tailRefused.
+	tail pinTailGate
 	// acted holds the entries that the last maintenance commit changed.
 	// The next refresh does not report them as lost, because the user
 	// caused the change.
@@ -152,6 +163,10 @@ type pinsView struct {
 
 	// compare is the open comparison of two similar pins, or nil.
 	compare *pinCompare
+	// checkDef is the open check-definition form of M, or nil.
+	checkDef *checkDefModal
+	// verify is the open verification view of V, or nil.
+	verify *pinVerify
 }
 
 // newPinsView builds the Pins sub-view over the shared state. The list
@@ -209,27 +224,327 @@ func pinLinked(pin *maintain.Pin) bool {
 	return pin.Link.Link == pinfile.LinkLinked && len(pin.Link.Applied) == 1
 }
 
+// The next actions of a pin that offers no retarget. Each one names a
+// route that works in its state. replaceGate and unlinkedNext ask the
+// gates of the form and of the engine, not only the gate of the first key.
+// A hand edit stays the last route for a linked pin, because it unlinks
+// the proposal. pinHandRoute gives its words, because they follow the
+// recorded root.
+const (
+	// pinRouteRetarget is the route while w offers a retarget.
+	pinRouteRetarget = "change the scope with w Retarget"
+	// pinGoalReplace and pinGoalForm open a route that names its goal.
+	pinGoalReplace = "to choose other regions"
+	pinGoalForm    = "to edit its regions"
+	// pinRouteReplace is the route while w offers none, the form cannot
+	// hold the stored regions, and replaceGate passes.
+	pinRouteReplace = pinGoalReplace + ", use - Prune and add a new pin with n"
+	// pinRouteRule is pinRouteReplace for the locked rule of a linked pin.
+	pinRouteRule   = "to change the rule, use - Prune and add a new pin with n"
+	pinRouteRead   = "press r to read it again"
+	pinRouteRecord = "record the proposal as applied: press p, select it, then press c"
+	pinRouteForm   = "use i to edit its regions"
+	// pinRouteIndex builds the index that a copied checkout needs for a
+	// pin write. It is never a route under the database of another
+	// repository: see pinOpenRoot.
+	pinRouteIndex     = "build the index of this checkout from Overview (press 1, then b)"
+	pinRouteFormIndex = pinGoalForm + ", first " + pinRouteIndex
+)
+
+// pinOpenRoot is the route of a pin write under --db of another
+// repository. A build is no route there. It writes this workspace into
+// the database of that repository and moves its recorded root, so that
+// checkout loses its maintenance. The pin is in the file of the recorded
+// root, and a save works in a console that runs there.
+func pinOpenRoot(st *state, root string) string {
+	d := pinsDatabase(st)
+
+	return openRootRoute(root, d.CustomDB, d.RootRoute)
+}
+
+// openRootRoute names the console of root. custom keeps the --db of this
+// console, because the default database of root is another ledger.
+// replace is a step that takes the place of that console, or "".
+func openRootRoute(root string, custom bool, replace string) string {
+	if replace != "" {
+		return ui.OneLine(replace)
+	}
+
+	return "open the console in " + ui.OneLine(root) + pinKeepDB(custom)
+}
+
+// pinSaveRoute is the route of a pin save under a database of another
+// repository. A text with no root of its own uses it (pinBlockerLine).
+func pinSaveRoute(st *state) string {
+	d := pinsDatabase(st)
+	if d.RootRoute != "" {
+		return ui.OneLine(d.RootRoute)
+	}
+
+	return "open the console in that repository" + pinKeepDB(d.CustomDB) + ", because a save works there"
+}
+
+// pinKeepDB is the clause of a route that keeps the --db of this console.
+func pinKeepDB(custom bool) string {
+	if custom {
+		return " with this --db"
+	}
+
+	return ""
+}
+
+// pinForeignRoute is the route of a write that pinsForeignRoot stops. A
+// build ends the state of a copied checkout. A default path that links to
+// the database of another worktree refuses the build, so its route is
+// the console of the recorded root.
+func pinForeignRoute(st *state) string {
+	if root := pinsDBRoot(st); root != "" {
+		return pinOpenRoot(st, root)
+	}
+
+	return pinRouteIndex
+}
+
+// pinHandPlace decides where a hand edit of a pin goes, so every surface
+// agrees. The Pins list reads the file under the recorded root, so the
+// relative name is true only when that root is the workspace. step is ""
+// or a step that comes first, and file is the words for the pin file. With
+// a step, the file of the recorded root belongs to another repository or is
+// gone. One decision changes one repository, also by hand. After the step
+// the recorded root is the workspace, so the relative name is true.
+func pinHandPlace(st *state) (step, file string) {
+	root := authorForeignRoot(st)
+
+	switch {
+	case root == "":
+		return "", pinfile.File
+	case pinsDBRoot(st) != "" && pinsDatabase(st).RootRoute == "":
+		// A root is untrusted text in a terminal.
+		return "", ui.OneLine(filepath.Join(root, pinfile.File))
+	}
+
+	return pinForeignRoute(st), pinfile.File
+}
+
+// pinHandAfter puts the step of pinHandPlace before clause.
+func pinHandAfter(step, clause string) string {
+	if step == "" {
+		return clause
+	}
+
+	return step + ", then " + clause
+}
+
+// pinHandRoute returns a hand edit as a phrase. The caller keeps its own
+// words in lead and tail, and only the location or the first step changes.
+func pinHandRoute(st *state, lead, tail string) string {
+	step, file := pinHandPlace(st)
+
+	return pinHandAfter(step, lead+file+tail)
+}
+
+// pinRouteByHand is the next action that sends the user to a hand edit.
+func pinRouteByHand(st *state) string {
+	return pinHandRoute(st, "edit the pin by hand in ", "")
+}
+
+// pinFileBlockNote is the note of a preview whose pin file the console
+// cannot change.
+func pinFileBlockNote(st *state, block string) string {
+	step, file := pinHandPlace(st)
+
+	return "The console cannot change " + file + ": " + ui.OneLine(block) + ". " +
+		ovSentenceEnd(pinHandAfter(step, "edit the file by hand"))
+}
+
+// pinForeignBuild is the sentence of a preview when a build ends the
+// state. It also names the shell command.
+const pinForeignBuild = "Run seamark index in this checkout, or build the index from Overview (press 1, then b)."
+
+// pinForeignSentence is pinForeignRoute for a preview, which also names
+// the shell command when a build is the route.
+func pinForeignSentence(st *state) string {
+	if root := pinsDBRoot(st); root != "" {
+		return ovSentenceEnd(pinOpenRoot(st, root))
+	}
+
+	return pinForeignBuild
+}
+
+// pinGateBlocked reports that Settings refuses the save that turns on
+// pin writing. config.yaml follows the rule of a pin write, so a route
+// to the gate names the way out of that state first.
+func pinGateBlocked(st *state) bool {
+	return pinsForeignRoot(st) != ""
+}
+
+// foreignRefusal is the refusal of a commit that another recorded root
+// stops. The service marks an error whose build refuses too, so the words
+// need no read of the disk. noun names what the user confirmed.
+func foreignRefusal(err error, noun string) string {
+	const lead = "The index records another repository root, so nothing was written. "
+
+	var foreign *services.ForeignRootError
+	if errors.As(err, &foreign) && foreign.OtherDB {
+		return lead + ovSentenceEnd(openRootRoute(foreign.Root, foreign.CustomDB, foreign.RootRoute))
+	}
+
+	return lead + "Build the index of this workspace in Overview, then " + noun + " again."
+}
+
 // editBlock returns why the file editor cannot change pin, or "" when it
 // can. A retarget and a prune both need a linked pin whose entry and file
 // pass the editing gate (D-4, D-6). A copied checkout also stops both,
 // because one write would then change two repositories (pinsForeignRoot).
 func (p *pinsView) editBlock(pin *maintain.Pin) string {
+	why, _ := p.editGate(pin)
+
+	return why
+}
+
+// editGate returns the reason of editBlock and the next action for that
+// reason. One function decides both, so the two cannot disagree. Both are
+// "" when the editor can change pin.
+func (p *pinsView) editGate(pin *maintain.Pin) (why, next string) {
 	in := p.inspection()
 
 	switch {
 	case !pinLinked(pin):
-		return "it has " + pinLinkNoun(pin.Link.Link)
+		return "it has " + pinLinkNoun(pin.Link.Link), p.unlinkedNext(pin)
 	case pin.Entry.Block != "":
-		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + ")"
+		return "the entry cannot be edited safely (" + ui.Diag(pin.Entry.Block) + ")", pinRouteByHand(p.st)
 	case in == nil || in.Doc == nil:
-		return "the pin file is not read"
+		return "the pin file is not read", pinRouteRead
 	case pinsForeignRoot(p.st) != "":
-		return "the index records another repository, " + ui.OneLine(pinsForeignRoot(p.st))
+		return "the index records another repository, " + ui.OneLine(pinsForeignRoot(p.st)), pinForeignRoute(p.st)
 	case in.Doc.FileBlock != "":
-		return "the pin file cannot be edited (" + ui.Diag(in.Doc.FileBlock) + ")"
+		return "the pin file cannot be edited (" + ui.Diag(in.Doc.FileBlock) + ")", pinRouteByHand(p.st)
 	}
 
-	return ""
+	return "", ""
+}
+
+// unlinkedNext returns the next action for a pin without one linked
+// proposal. The form opens in states where it cannot change the regions,
+// so this asks the gates of the form and of the engine. Only a pin with no
+// proposal has regions that the form can save. A region that the form
+// refuses stays read-only with any index, so that test comes first. A save
+// needs an index of this workspace, also with --db. A record of a pending
+// proposal has no such refusal. Its preview reads the pin file of the
+// recorded root, so a copied checkout needs the index first. --db makes
+// that root normal: the record reads the pin that the list shows.
+func (p *pinsView) unlinkedNext(pin *maintain.Pin) string {
+	in := p.inspection()
+
+	switch {
+	case pin.Link.Link == pinfile.LinkPendingMatch && pinsForeignRoot(p.st) != "":
+		return pinForeignRoute(p.st)
+	case pin.Link.Link == pinfile.LinkPendingMatch:
+		return pinRouteRecord
+	case pin.Link.Link != pinfile.LinkNoProposal, in == nil, in.Doc == nil,
+		pinAuthorBlock(p.st, in, pin, maintain.AuthorEdit, p.authorKnown(in)) != "",
+		in.Doc.FileBlock != "", pinRegionLock(pinEntryRegions(pin.Entry)) != "":
+		return pinRouteByHand(p.st)
+	case pinsDBRoot(p.st) != "":
+		return pinGoalForm + ", " + pinOpenRoot(p.st, pinsDBRoot(p.st))
+	case pinsForeignRoot(p.st) != "":
+		return pinRouteFormIndex
+	}
+
+	return pinRouteForm
+}
+
+// replaceGate returns why the route "prune, then a new pin" cannot finish
+// for pin, and the next action, or two empty strings when it can. A prune
+// cannot be undone, so the route stands only when both steps can finish.
+func (p *pinsView) replaceGate(pin *maintain.Pin) (why, next string) {
+	if why, next = p.saveGate(pin); why != "" {
+		return why, next
+	}
+
+	if p.tailRefused(pin) {
+		return "the pin file takes no new pin after this prune", pinRouteByHand(p.st)
+	}
+
+	return "", ""
+}
+
+// saveGate returns why this console can save no pin write for pin, and
+// the next action, or two empty strings when it can. A prune still runs
+// under --db, and the authoring engine refuses what follows it.
+func (p *pinsView) saveGate(pin *maintain.Pin) (why, next string) {
+	if why, next = p.editGate(pin); why != "" {
+		return why, next
+	}
+
+	if root := pinsDBRoot(p.st); root != "" {
+		return "the index records another repository, " + ui.OneLine(root), pinGoalReplace + ", " + pinOpenRoot(p.st, root)
+	}
+
+	return "", ""
+}
+
+// pinTailGate remembers the answer of pinTailRefused for one pin of one
+// read. The detail asks on every frame. The answer costs two YAML parses
+// and changes only with a new read or another pin.
+type pinTailGate struct {
+	doc     *pinfile.Document
+	ref     pinfile.EntryRef
+	refused bool
+}
+
+// tailRefused is pinTailRefused for pin in the current inspection.
+func (p *pinsView) tailRefused(pin *maintain.Pin) bool {
+	doc, ref := p.inspection().Doc, pin.Entry.Ref()
+
+	if p.tail.doc != doc || p.tail.ref != ref {
+		p.tail = pinTailGate{doc: doc, ref: ref, refused: pinTailRefused(doc, ref)}
+	}
+
+	return p.tail.refused
+}
+
+// pinTailRefused reports whether the planner of a new pin refuses the pin
+// file after a prune of ref. It runs the planners of the two steps, so it
+// agrees with the engine. A block that keeps its line breaks (|+) refuses
+// a new entry only at the end of the file. A prune can move it there.
+// A prune that its planner refuses blocks in its preview and loses
+// nothing, so the question then reads the file as it is.
+func pinTailRefused(doc *pinfile.Document, ref pinfile.EntryRef) bool {
+	block, err := pinfile.RenderPin(reviews.PinForRegions("probe", "Probe.", nil))
+	if err != nil {
+		return true
+	}
+
+	after := doc
+	if change, err := pinfile.Plan(doc, []pinfile.Edit{{Ref: ref, Delete: true}}, nil); err == nil {
+		after = pinfile.Parse(change.After)
+	}
+
+	_, err = pinfile.PlanAppend(after, block, pinfile.Placement{Tail: true})
+
+	return err != nil
+}
+
+// pinsDatabase returns the answers of the service about the index
+// database. Update and View must not read the disk, so the service
+// decides at read time and the console keeps the answer.
+func pinsDatabase(st *state) workspace.DatabaseFacts {
+	if !st.pins.loaded || st.pins.value == nil {
+		return workspace.DatabaseFacts{}
+	}
+
+	return st.pins.value.Database
+}
+
+// pinsBuildRefusal is buildRefusal for the read of Pins, so a route agrees
+// with the index state that the same screen shows.
+func pinsBuildRefusal(st *state) string {
+	if !st.pins.loaded || st.pins.value == nil {
+		return ""
+	}
+
+	return buildRefusal(st.pins.value.Index, st.pins.value.Database)
 }
 
 // pinsForeignRoot returns the repository root that the index records
@@ -238,10 +553,28 @@ func (p *pinsView) editBlock(pin *maintain.Pin) string {
 // pin file under the recorded root, as the CLI does. In a copied
 // checkout that root names the original repository, but the ledger is
 // the database of the copy. So one operation would change two
-// repositories. A --db flag makes another root normal, so the check
-// applies only to the default database path (services ownRoot).
+// repositories. A database that the recorded root owns makes that root
+// normal, so the service reports no refusal (services ownRoot).
 func pinsForeignRoot(st *state) string {
-	if st.svc.DBPath() != store.DefaultPath(st.svc.Root()) {
+	d := pinsDatabase(st)
+	if d.WriteBlock == nil {
+		return ""
+	}
+
+	return d.ForeignRoot
+}
+
+// pinsOtherDB reports a database that is not the default database of the
+// workspace. No route may then name an index build, because a build
+// moves the recorded root of the other repository.
+func pinsOtherDB(st *state) bool {
+	return pinsDatabase(st).Kind != store.DatabaseDefault
+}
+
+// pinsDBRoot returns the recorded root under a database of another
+// repository, else "". The route of that state is pinOpenRoot.
+func pinsDBRoot(st *state) string {
+	if !pinsOtherDB(st) {
 		return ""
 	}
 
@@ -251,21 +584,10 @@ func pinsForeignRoot(st *state) string {
 // authorForeignRoot returns the repository root that the index records
 // when it is not the workspace root, else "". It is the rule of the pin
 // authoring engine, which refuses another root also with --db (services
-// foreignRoot, P4-16). So the form and the engine agree. The comparison
-// does no I/O, because Update and View must not read the disk. So,
-// unlike the engine, it does not resolve a symbolic link.
+// foreignRoot). So the form and the engine agree, also for a link
+// spelling of the workspace root.
 func authorForeignRoot(st *state) string {
-	if !st.pins.loaded || st.pins.value == nil {
-		return ""
-	}
-
-	root, ws := st.pins.value.Index.Root, st.svc.Root()
-
-	if root == "" || ws == "" || filepath.Clean(root) == filepath.Clean(ws) {
-		return ""
-	}
-
-	return root
+	return pinsDatabase(st).ForeignRoot
 }
 
 // retargetBlock returns why a retarget of pin is not offered, or "" when
@@ -301,6 +623,66 @@ func (p *pinsView) retargetBlock(pin *maintain.Pin) string {
 	}
 
 	return ""
+}
+
+// retargetNext returns the next action for the retargetBlock reason of
+// pin. The form edits every region set that it can hold, so that is the
+// route after the gates of a save. Only stored regions that the form
+// cannot hold reach the prune. A prune has the gate of editBlock, so
+// pinRouteReplace holds only when replaceGate says that the new pin can
+// follow.
+func (p *pinsView) retargetNext(pin *maintain.Pin) string {
+	if _, next := p.saveGate(pin); next != "" {
+		return next
+	}
+
+	if pinRegionLock(pinEntryRegions(pin.Entry)) == "" {
+		return pinRouteForm
+	}
+
+	if _, next := p.replaceGate(pin); next != "" {
+		return next
+	}
+
+	return pinRouteReplace
+}
+
+// scopeRoute returns the words for the locked scope of a linked pin: the
+// retarget while w offers it, else the reason and the next action. The
+// pin form and the note of a dropped edit read it, so neither of them
+// points at a key that reads n/a.
+func (p *pinsView) scopeRoute(pin *maintain.Pin) string {
+	why := p.retargetBlock(pin)
+	if why == "" {
+		return pinRouteRetarget
+	}
+
+	return "no retarget: " + why + "; " + p.retargetNext(pin)
+}
+
+// ruleRoute returns the words for the locked rule of a linked pin. A new
+// rule is a new pin. The route is a prune and a new pin while both can
+// finish, else the reason and the next action.
+func (p *pinsView) ruleRoute(pin *maintain.Pin) string {
+	why, next := p.replaceGate(pin)
+	if why == "" {
+		return pinRouteRule
+	}
+
+	return why + "; " + next
+}
+
+// pinLockRoutes holds the words for the locked rows of a pin. The form
+// holds no state of the view, so the view gives it these words. rule and
+// scope are for the rows of a linked pin, and hand ends a lock of the
+// stored text (pinStoredHand).
+type pinLockRoutes struct {
+	rule, scope, hand string
+}
+
+// lockRoutes returns the words for the locked rows of a pin.
+func (p *pinsView) lockRoutes(pin *maintain.Pin) pinLockRoutes {
+	return pinLockRoutes{rule: p.ruleRoute(pin), scope: p.scopeRoute(pin), hand: pinStoredHand(p.st)}
 }
 
 // pinTargetOwner returns a clause that names the other pin or the
@@ -493,7 +875,8 @@ func pinMatch(n int, refAt func(int) pinfile.EntryRef, ref pinfile.EntryRef) (in
 // focused input, or an open comparison. Each takes every key, so the
 // Lessons switch keys wait.
 func (p *pinsView) capturing() bool {
-	return p.author.open() || p.host.open() || p.editing != filterNone || p.compare != nil
+	return p.author.open() || p.host.open() || p.editing != filterNone || p.compare != nil || p.checkDef != nil ||
+		p.verify != nil
 }
 
 // modal returns the open pin review or discard question, the open
@@ -505,6 +888,14 @@ func (p *pinsView) modal(w, h int) (string, bool) {
 
 	if p.host.open() {
 		return p.host.view(w, h)
+	}
+
+	if m := p.checkDef; m != nil {
+		return p.st.theme.Modal(m.content(ui.ModalBodyWidth(ui.ModalMinW, w)), m.modalScroll(), w, h), true
+	}
+
+	if v := p.verify; v != nil {
+		return p.st.theme.Modal(v.content(ui.ModalBodyWidth(ui.ModalMinW, w)), &v.scroll, w, h), true
 	}
 
 	if p.compare != nil {
@@ -537,6 +928,13 @@ func (p *pinsView) update(msg tea.Msg) tea.Cmd {
 		p.compare = nil
 	}
 
+	checked, done := p.checkRoute(msg)
+	cmd = tea.Batch(cmd, checked)
+
+	if done {
+		return cmd
+	}
+
 	switch m := msg.(type) {
 	case tea.KeyMsg:
 		switch {
@@ -563,11 +961,16 @@ func (p *pinsView) update(msg tea.Msg) tea.Cmd {
 // markActed drops the entries that a maintenance commit changed from the
 // selection, and keeps them so the next load reports no loss for them.
 // The user caused the change: a prune removes an entry, and a retarget
-// changes its key.
+// changes its key. A scope edit changes its key too, and its draft has
+// landed. So the draft goes, and rebindDrafts never reports it as lost.
 func (p *pinsView) markActed(refs []pinfile.EntryRef) {
 	for _, ref := range refs {
 		delete(p.selected, ref)
 		p.acted[ref] = true
+	}
+
+	if d := p.host.scopeDraft(); d != nil && len(refs) > 0 {
+		p.author.drop(d)
 	}
 }
 
@@ -615,6 +1018,14 @@ func (p *pinsView) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return p.requestMaint(maintain.ActionPrune)
 	case key.Matches(msg, extractKey):
 		return p.extract()
+	case key.Matches(msg, pinKeys.Define) && p.checkShown():
+		return p.openCheckDef()
+	case key.Matches(msg, pinKeys.Verify) && p.checkShown():
+		var cmd tea.Cmd
+
+		p.verify, cmd = newPinVerify(p.st)
+
+		return cmd
 	default:
 		p.navKey(msg, rows)
 	}
@@ -729,13 +1140,13 @@ func (p *pinsView) offers(block func(*maintain.Pin) string) bool {
 }
 
 // actionGate returns the name and the eligibility rule of a maintenance
-// action.
-func (p *pinsView) actionGate(a maintain.Action) (name string, block func(*maintain.Pin) string) {
+// action, and the next action of a refused pin. next can be nil.
+func (p *pinsView) actionGate(a maintain.Action) (name string, block, next func(*maintain.Pin) string) {
 	if a == maintain.ActionRetarget {
-		return "retarget", p.retargetBlock
+		return "retarget", p.retargetBlock, p.retargetNext
 	}
 
-	return "prune", p.editBlock
+	return "prune", p.editBlock, nil
 }
 
 // refusal explains an unavailable action key in one line. It plans
@@ -743,19 +1154,32 @@ func (p *pinsView) actionGate(a maintain.Action) (name string, block func(*maint
 // the notice row cuts a long line at its end, and an 80-column row must
 // still show the reason. Without marks the line names the cursor pin,
 // because that pin is the target (D-15). With marks it names the first
-// selected pin, whose reason it gives.
-func (p *pinsView) refusal(action string, block func(*maintain.Pin) string) tea.Cmd {
+// selected pin, whose reason it gives. next, when it is not nil, gives
+// the next action after the pin, so a cut loses only that sentence. The
+// detail of the pin wraps, so it always shows the next action in full.
+func (p *pinsView) refusal(action string, block, next func(*maintain.Pin) string) tea.Cmd {
 	pins, cursor := p.targets()
 
-	switch {
-	case len(pins) == 0:
+	if len(pins) == 0 {
 		return toast(ui.ToneNeutral, p.noTarget(action))
-	case cursor:
-		return toast(ui.ToneNeutral, pinRefusal(action, block(pins[0]), p.quoteRule(pins[0].Entry.Rule)))
-	default:
-		return toast(ui.ToneNeutral, pinRefusal(action, block(pins[0]), p.quoteRule(pins[0].Entry.Rule)+", "+
-			pinSelectionNoun(len(pins))))
 	}
+
+	who := p.quoteRule(pins[0].Entry.Rule)
+	if !cursor {
+		who += ", " + pinSelectionNoun(len(pins))
+	}
+
+	text := pinRefusal(action, block(pins[0]), who)
+	if next != nil {
+		text += " " + pinRouteSentence(next(pins[0]))
+	}
+
+	return toast(ui.ToneNeutral, text)
+}
+
+// pinRouteSentence returns a next action as a sentence of its own.
+func pinRouteSentence(next string) string {
+	return pinSentence(ovSentence(next))
 }
 
 // pinRefusal returns the line "No <action>: <why> (<who>).", for example
@@ -779,9 +1203,11 @@ func pinSelectionNoun(n int) string {
 // requestMaint sends the preview request of action a over the targets. The
 // request carries every target, also the blocked ones, so the preview
 // lists them and offers no y (D-15). It reads and writes nothing itself.
+// A retarget sets ReplaceChosen, because its preview shows a replaced
+// choice before y.
 func (p *pinsView) requestMaint(a maintain.Action) tea.Cmd {
-	if name, block := p.actionGate(a); !p.offers(block) {
-		return p.refusal(name, block)
+	if name, block, next := p.actionGate(a); !p.offers(block) {
+		return p.refusal(name, block, next)
 	}
 
 	pins, cursor := p.targets()
@@ -791,7 +1217,9 @@ func (p *pinsView) requestMaint(a maintain.Action) tea.Cmd {
 		refs[i] = pin.Entry.Ref()
 	}
 
-	return openMaint(maintain.Request{Action: a, Refs: refs, Cursor: cursor})
+	return openMaint(maintain.Request{
+		Action: a, Refs: refs, Cursor: cursor, ReplaceChosen: a == maintain.ActionRetarget,
+	})
 }
 
 // extract sends the extraction review request of the targets. Linked
@@ -799,7 +1227,7 @@ func (p *pinsView) requestMaint(a maintain.Action) tea.Cmd {
 // its reason, so the review lists it as ineligible (contracts §2.3b).
 func (p *pinsView) extract() tea.Cmd {
 	if !p.offers(pinExtractBlock) {
-		return p.refusal("trigger extraction", pinExtractBlock)
+		return p.refusal("trigger extraction", pinExtractBlock, nil)
 	}
 
 	pins, cursor := p.targets()
@@ -867,7 +1295,7 @@ func (p *pinsView) noTarget(action string) string {
 	case in == nil:
 		return "No " + action + " here. The pins are still loading."
 	case !pinLinksKnown(in):
-		return "No " + action + " here. The pin file or the ledger could not be read."
+		return "No " + action + " here. The pin file or the ledger could not be read. Fix it, then press r."
 	default:
 		return "No " + action + " here. No pin is in the list."
 	}
@@ -1170,6 +1598,10 @@ func (p *pinsView) keys() []key.Binding {
 	}
 
 	switch {
+	case p.checkDef != nil:
+		return p.checkDef.keys()
+	case p.verify != nil:
+		return p.verify.keys()
 	case p.editing != filterNone:
 		return p.editKeys()
 	case p.compare != nil:
@@ -1211,6 +1643,14 @@ func (p *pinsView) keys() []key.Binding {
 		default:
 			off = append(off, ui.Unavailable(a.b))
 		}
+	}
+
+	// M and V need no target: a definition is not a pin, and the
+	// verification reads the whole working tree. They show only in a
+	// repository that uses lesson checks, so every other frame keeps its
+	// bytes.
+	if p.checkShown() {
+		on = append(on, pinKeys.Define, pinKeys.Verify)
 	}
 
 	// The label names what x clears, because the help lists x also when

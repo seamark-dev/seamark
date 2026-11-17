@@ -2,6 +2,7 @@ package integration
 
 import (
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -144,8 +145,8 @@ func TestCodexReRunReportsAnEnforceFlagThatTheMergeRemoves(t *testing.T) {
 }
 
 func TestCodexGateHookInAnotherSourceKeepsItsOwnMode(t *testing.T) {
-	// A wrapped enforcing gate in hooks.json: setup does not own it,
-	// installs no second gate handler, and reports its mode so the
+	// A wrapped enforcing gate in hooks.json: setup does not own it and
+	// installs no second gate handler. Setup reports its mode, so the
 	// gate line of the run cannot say "nothing blocks".
 	root := t.TempDir()
 	writeRel(t, root, ".codex/hooks.json", `{"hooks": {"PreToolUse": [
@@ -493,35 +494,62 @@ func TestCodexHooksStopOnADocumentTheyCannotOwn(t *testing.T) {
 	require.Error(t, err)
 }
 
+// matchersOf returns the matcher of each entry under one event of a
+// parsed hook document, in document order.
+func matchersOf(document map[string]any, event string) []any {
+	hookMap, _ := document["hooks"].(map[string]any)
+	entries, _ := hookMap[event].([]any)
+
+	var out []any
+
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		out = append(out, entry["matcher"])
+	}
+
+	return out
+}
+
 func TestCodexHooksInstallNoSecondHandler(t *testing.T) {
 	// Codex runs every matching handler of every source, and Codex
 	// delivery never suppresses a repeat. A second handler doubles the
 	// advice, the log records, and the budget.
-	inline := `model = "x"
+	inlineUnder := func(matcher string) string {
+		return `model = "x"
 
 [[hooks.PreToolUse]]
-matcher = "apply_patch"
+matcher = "` + matcher + `"
 
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = "/usr/local/bin/seamark lessons --hook --client codex"
 `
-	hooksWith := func(command string) string {
-		return `{"hooks": {"PreToolUse": [{"matcher": "apply_patch", "hooks": [{"type": "command", "command": "` + command + `"}]}]}}`
+	}
+	hooksWith := func(matcher, command string) string {
+		return `{"hooks": {"PreToolUse": [{"matcher": "` + matcher + `", "hooks": [{"type": "command", "command": "` + command + `"}]}]}}`
 	}
 
+	// Codex also tests a matcher against the aliases Edit and Write of
+	// apply_patch, so a definition under one of them runs for each edit.
 	cases := []struct {
 		name    string
+		matcher string
 		wrapped string // the unmanaged lessons hook command in hooks.json
 		config  string
 		source  string
 	}{
-		{"an exec prefix in hooks.json", "timeout 5 /usr/local/bin/seamark lessons --hook --client codex", "",
+		{"an exec prefix in hooks.json", "apply_patch", "timeout 5 /usr/local/bin/seamark lessons --hook --client codex", "",
 			".codex/hooks.json: already runs the seamark hook"},
-		{"a shell condition in hooks.json",
+		{"a shell condition in hooks.json", "apply_patch",
 			"test -x /usr/local/bin/seamark && /usr/local/bin/seamark lessons --hook --client codex", "",
 			".codex/hooks.json: already runs the seamark hook"},
-		{"an inline hook in config.toml", "", inline, ".codex/config.toml [hooks]: already runs the seamark hook"},
+		{"an inline hook in config.toml", "", "", inlineUnder("apply_patch"),
+			".codex/config.toml [hooks]: already runs the seamark hook"},
+		{"an inline hook under the Edit alias", "", "", inlineUnder("Edit"),
+			".codex/config.toml [hooks]: already runs the seamark hook"},
+		{"a wrapper under a Claude style edit list", "Edit|Write|MultiEdit",
+			"timeout 5 /usr/local/bin/seamark lessons --hook --client codex", "",
+			".codex/hooks.json: already runs the seamark hook"},
 	}
 
 	for _, tc := range cases {
@@ -529,7 +557,7 @@ command = "/usr/local/bin/seamark lessons --hook --client codex"
 			root := t.TempDir()
 
 			if tc.wrapped != "" {
-				writeRel(t, root, ".codex/hooks.json", hooksWith(tc.wrapped))
+				writeRel(t, root, ".codex/hooks.json", hooksWith(tc.matcher, tc.wrapped))
 			}
 
 			if tc.config != "" {
@@ -714,6 +742,92 @@ func TestCodexHooksReadTheInlineSourceWithoutOwningIt(t *testing.T) {
 	assert.Contains(t, strings.Join(findingReasons(plan, FindingWarning), "\n"), "not checked for inline seamark hooks")
 }
 
+func TestCodexInlineCommandsNameOnlyForeignInlineHooks(t *testing.T) {
+	// One reading with the markers of both hooks decides whether an
+	// inline hook is seamark's. A gate of either mode and the lessons
+	// hook are seamark's, and so is a command that can run one of them.
+	inline := func(command string) *codexConfigRead {
+		return &codexConfigRead{exists: true, data: []byte(
+			"[[hooks.PreToolUse]]\n[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"" + command + "\"\n")}
+	}
+
+	for name, tc := range map[string]struct {
+		command string
+		foreign bool
+	}{
+		"the warn gate":          {"/usr/local/bin/seamark " + hooks.CodexGateMarker(hooks.ModeWarn), false},
+		"the enforce gate":       {"/usr/local/bin/seamark " + hooks.CodexGateMarker(hooks.ModeEnforce), false},
+		"the lessons hook":       {"/usr/local/bin/seamark " + hooks.CodexLessonsMarker, false},
+		"a wrapped lessons hook": {"timeout 5 /usr/local/bin/seamark " + hooks.CodexLessonsMarker, false},
+		"a foreign hook":         {"/opt/notify.sh", true},
+		"printed hook text":      {"echo '/usr/local/bin/seamark " + hooks.CodexLessonsMarker + "'", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var plan ClientPlan
+
+			entries := codexInlineCommands(&plan, inline(tc.command))
+			require.Len(t, entries, 1)
+			assert.Equal(t, tc.command, entries[0].Command)
+			assert.Empty(t, plan.Reads, "the caller owns the read and its guard")
+
+			infos := findingReasons(plan, FindingInfo)
+			if !tc.foreign {
+				assert.Empty(t, infos, "a seamark hook needs no note about inline hooks")
+
+				return
+			}
+
+			require.Len(t, infos, 1)
+			assert.Contains(t, infos[0], "inline [hooks] are present")
+		})
+	}
+
+	// A file that does not parse keeps its error for the lesson sources.
+	broken := &codexConfigRead{exists: true, data: []byte("model = [broken")}
+
+	var plan ClientPlan
+	assert.Nil(t, codexInlineCommands(&plan, broken))
+	require.Error(t, broken.err)
+	assert.Contains(t, strings.Join(findingReasons(plan, FindingWarning), "\n"), "not checked for inline seamark hooks")
+
+	// A read failure gives the same warning. A missing file gives nothing.
+	plan = ClientPlan{}
+	assert.Nil(t, codexInlineCommands(&plan, &codexConfigRead{err: errors.New("permission denied")}))
+	assert.Len(t, findingReasons(plan, FindingWarning), 1)
+
+	plan = ClientPlan{}
+	assert.Nil(t, codexInlineCommands(&plan, &codexConfigRead{}))
+	assert.Empty(t, plan.Findings)
+}
+
+func TestCodexConfigReadReportsHooksTurnedOff(t *testing.T) {
+	for name, tc := range map[string]struct {
+		config   codexConfigRead
+		disabled bool
+	}{
+		"hooks turned off":  {codexConfigRead{exists: true, data: []byte("[features]\nhooks = false\n")}, true},
+		"hooks turned on":   {codexConfigRead{exists: true, data: []byte("[features]\nhooks = true\n")}, false},
+		"no feature flag":   {codexConfigRead{exists: true, data: []byte("model = \"x\"\n")}, false},
+		"a broken file":     {codexConfigRead{exists: true, data: []byte("model = [broken")}, false},
+		"a missing file":    {codexConfigRead{}, false},
+		"an unreadable one": {codexConfigRead{err: errors.New("permission denied")}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			findings := tc.config.hooksDisabledFindings()
+			if !tc.disabled {
+				assert.Empty(t, findings)
+
+				return
+			}
+
+			require.Len(t, findings, 1)
+			assert.Equal(t, FindingWarning, findings[0].Level)
+			assert.Equal(t, ".codex/config.toml", findings[0].Path)
+			assert.Contains(t, findings[0].Reason, "[features] hooks = false turns every Codex hook off")
+		})
+	}
+}
+
 func TestCodexHooksAndRegistrationShareOneReadOfTheConfig(t *testing.T) {
 	// Both parts of the plan need config.toml. Two reads give two guards,
 	// and the coordinator takes two different guards for a changed file.
@@ -786,8 +900,8 @@ func TestCodexGateHookIgnoresADefinitionThatNeverFires(t *testing.T) {
 	}
 
 	// An inline entry in a layout the reader does not know has no
-	// matcher or type to check: it can run the hook, so the managed
-	// hook is installed and the entry is named as uncertain.
+	// matcher or type to check, so it can run the hook. Setup installs
+	// the managed hook and names the entry as uncertain.
 	root := t.TempDir()
 	writeRel(t, root, ".codex/config.toml", "[hooks.PreToolUse]\ncommand = \""+gateCommand+"\"\n")
 
@@ -812,6 +926,80 @@ func TestCodexGateHookIgnoresADefinitionThatNeverFires(t *testing.T) {
 	require.Len(t, plan.Writes, 1)
 	assert.Equal(t, "lessons hook", plan.Writes[0].Detail)
 	assert.Equal(t, []GateHook{{Path: ".codex/config.toml [hooks]", Mode: "enforce"}}, plan.GateHooks)
+
+	// Codex reads a name-only matcher as exact names, so "ash" never
+	// fires for Bash. An enforcing wrapper under it blocks nothing, and
+	// an enforce request gets the managed gate beside it.
+	root = t.TempDir()
+	wrapped := "sh -c '/usr/local/bin/seamark gate --enforce --hook --client codex'"
+	writeRel(t, root, ".codex/hooks.json", `{"hooks":{"PreToolUse":[`+hookEntry("ash", wrapped)+`]}}`)
+
+	plan = planCodex(t, root, ClientSetup{Hooks: true, GateMode: hooks.ModeEnforce})
+	require.Len(t, plan.Writes, 1)
+	assert.Equal(t, "gate + lessons hooks", plan.Writes[0].Detail)
+	assert.Equal(t, []GateHook{{Path: ".codex/hooks.json", Mode: "enforce", Managed: true}}, plan.GateHooks)
+	assert.Empty(t, findingReasons(plan, FindingWarning), "no duplicate: nothing runs twice")
+	assert.Contains(t, strings.Join(findingReasons(plan, FindingInfo), "\n"),
+		"which never runs for PreToolUse Bash; it is not a handler of that hook")
+
+	_, err := ApplySetup(mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary,
+		Clients: []ClientSetup{{ClientID: CodexID, Hooks: true, GateMode: hooks.ModeEnforce}}}), ApplyOptions{})
+	require.NoError(t, err)
+
+	document := parseRel(t, root, ".codex/hooks.json")
+	assert.Equal(t, []any{"ash", "Bash", "apply_patch"}, matchersOf(document, "PreToolUse"), "the ash entry stays as written")
+	assert.Contains(t, readRel(t, root, ".codex/hooks.json"), testBinary+" gate --enforce --hook --client codex")
+	assert.Equal(t, "gate (enforce) + lessons hooks installed", codexSetup{}.Inspect(root).DescribeHooks())
+}
+
+func TestCodexOwnedGateUnderANameThatNeverFiresGatesNothing(t *testing.T) {
+	// Merge keeps the matcher of an owned entry, so an owned gate under
+	// "ash" stays there. Codex reads "ash" as an exact name, so that gate
+	// never runs for Bash, and the plan lists no managed gate hook.
+	root := t.TempDir()
+	writeRel(t, root, ".codex/hooks.json", `{"hooks":{"PreToolUse":[`+
+		hookEntry("ash", testBinary+" "+hooks.CodexGateMarker(hooks.ModeEnforce))+`]}}`)
+
+	plan := planCodex(t, root, ClientSetup{Hooks: true, GateMode: hooks.ModeEnforce})
+	assert.Empty(t, plan.GateHooks, "no gate hook of the run runs for Bash")
+
+	_, err := ApplySetup(mustPlan(t, Builtin(), SetupRequest{Root: root, Binary: testBinary,
+		Clients: []ClientSetup{{ClientID: CodexID, Hooks: true, GateMode: hooks.ModeEnforce}}}), ApplyOptions{})
+	require.NoError(t, err)
+
+	document := parseRel(t, root, ".codex/hooks.json")
+	assert.Equal(t, []any{"ash", "apply_patch"}, matchersOf(document, "PreToolUse"), "the owned entry keeps its matcher")
+
+	commands, ok := codexSetup{}.Inspect(root).Entry(CapabilityCommands)
+	require.True(t, ok)
+	assert.NotEqual(t, StateCurrent, commands.State, "a gate that never runs for Bash is not current")
+}
+
+func TestCodexManagedDefaultsStayByteForByte(t *testing.T) {
+	// Setup writes its hooks under the matchers Bash and apply_patch. The
+	// matcher rule reads both as exact names that fire for the tools of
+	// each hook. So a second run of each setup finds its own entries and
+	// keeps the hook document byte for byte.
+	root := t.TempDir()
+	applyHooks(t, root, CodexID)
+	installLessonHooks(t, root, CodexID, testBinary, hooks.LessonChecksEnforce, "")
+
+	before := readRel(t, root, codexHooksFile)
+
+	applyHooks(t, root, CodexID)
+	installLessonHooks(t, root, CodexID, testBinary, hooks.LessonChecksEnforce, "")
+
+	assert.Equal(t, before, readRel(t, root, codexHooksFile))
+
+	inspection := codexSetup{}.Inspect(root)
+
+	for _, capability := range []Capability{CapabilityEdits, CapabilityCommands} {
+		entry, ok := inspection.Entry(capability)
+		require.True(t, ok, "%s has an entry", capability)
+		assert.Equal(t, StateCurrent, entry.State, "%s", capability)
+	}
+
+	assert.Equal(t, "gate (warn) + lessons hooks installed", inspection.DescribeHooks())
 }
 
 func TestCodexUncertainSourceBesideACertainOneSaysNoHandlerWasInstalled(t *testing.T) {

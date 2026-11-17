@@ -299,10 +299,8 @@ func TestDescribeHooksNamesWhatIsMissingForTheClientOnly(t *testing.T) {
 	// hook, and a gate hook alone misses its lessons hook.
 	root := t.TempDir()
 	writeSettings := func(matcher, marker string) {
-		require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
-			[]byte(`{"hooks":{"PreToolUse":[{"matcher":"`+matcher+`","hooks":[`+
-				`{"type":"command","command":"`+inspecttest.Binary+` `+marker+`"}]}]}}`), 0o644))
+		require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json",
+			inspecttest.PreToolUseDocument(matcher, inspecttest.Binary+" "+marker)))
 	}
 
 	claude := func() integration.Inspection {
@@ -322,24 +320,99 @@ func TestDescribeHooksNamesWhatIsMissingForTheClientOnly(t *testing.T) {
 	insp = claude()
 	edits, _ := insp.Entry(integration.CapabilityEdits)
 	assert.Equal(t, integration.StatePartial, edits.State)
+	assert.False(t, edits.Inert, "the hook runs for Edit")
 	assert.Contains(t, insp.DescribeHooks(), "lessons hook runs for Edit only, not for Write, MultiEdit")
 	assert.Contains(t, edits.Action, `set the hook's matcher to "Edit|Write|MultiEdit"`)
 }
 
+func TestDescribeHooksCountsOnlyRunningHooksAsInstalled(t *testing.T) {
+	// A hook that the client never runs is not installed. Its detail
+	// names it, and only an absent entry is missing.
+	entry := func(matcher, command string) string {
+		return `{"matcher":"` + matcher + `","hooks":[{"type":"command","command":"` + command + `"}]}`
+	}
+	gate := inspecttest.Binary + " gate --hook"
+	lessons := inspecttest.Binary + " lessons --hook"
+	reset := `"PostCompact":[{"hooks":[{"type":"command","command":"` + inspecttest.Binary + ` lessons --hook-reset"}]}]`
+
+	cases := []struct {
+		name     string
+		document string
+		want     string
+	}{
+		{
+			name:     "idle gate beside a running lessons hook",
+			document: `{"hooks":{"PreToolUse":[` + entry("Shell", gate) + `,` + entry("Edit|Write|MultiEdit", lessons) + `],` + reset + `}}`,
+			want:     `lessons hook installed; gate hook never runs from .claude/settings.json: its matcher "Shell" does not fire for Bash`,
+		},
+		{
+			name:     "running gate beside an idle lessons hook",
+			document: `{"hooks":{"PreToolUse":[` + entry("Bash", gate) + `,` + entry("Read", lessons) + `],` + reset + `}}`,
+			want: `gate hook installed (warn); lessons hook never runs from .claude/settings.json: ` +
+				`its matcher "Read" does not fire for Edit, Write, MultiEdit`,
+		},
+		{
+			name:     "idle gate alone",
+			document: `{"hooks":{"PreToolUse":[` + entry("Shell", gate) + `]}}`,
+			want:     `no hook runs, lessons hook missing; gate hook never runs from .claude/settings.json: its matcher "Shell" does not fire for Bash`,
+		},
+		{
+			// Only the lessons hook is inert here. The line still says that
+			// no hook runs, and the absent gate entry is missing.
+			name:     "idle lessons hook alone",
+			document: `{"hooks":{"PreToolUse":[` + entry("Read", lessons) + `]}}`,
+			want: `no hook runs, gate hook missing; lessons hook never runs from .claude/settings.json: ` +
+				`its matcher "Read" does not fire for Edit, Write, MultiEdit`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", tc.document))
+
+			assert.Equal(t, tc.want, integration.Builtin().Inspect(root)[0].DescribeHooks())
+		})
+	}
+}
+
+func TestDescribeHooksCountsOnlyHooksTheClientDeclares(t *testing.T) {
+	// A hook runs only for a capability that the client declares. A
+	// capability that the client does not declare is never missing. The
+	// built-in clients mark each such entry absent, so these inspections
+	// are built by hand.
+	setup := integration.SetupSupport{Hooks: true, GateHook: true}
+	entry := func(capability integration.Capability, supported bool, state integration.CapabilityState) integration.CapabilityInspection {
+		return integration.CapabilityInspection{Capability: capability, Supported: supported, State: state}
+	}
+
+	undeclaredGate := integration.Inspection{Setup: setup, Capabilities: []integration.CapabilityInspection{
+		entry(integration.CapabilityEdits, true, integration.StateCurrent),
+		entry(integration.CapabilityCommands, false, integration.StateCurrent),
+	}}
+	assert.Equal(t, "lessons hook installed", undeclaredGate.DescribeHooks(),
+		"a present entry that the client does not declare is no running gate hook")
+
+	undeclaredLessons := integration.Inspection{Setup: setup, Capabilities: []integration.CapabilityInspection{
+		entry(integration.CapabilityEdits, false, integration.StateAbsent),
+		entry(integration.CapabilityCommands, true, integration.StateCurrent),
+	}}
+	assert.Equal(t, "gate hook installed (warn)", undeclaredLessons.DescribeHooks(),
+		"an absent entry that the client does not declare is not missing")
+}
+
 func TestHookEvidenceCoversBothClaudeFiles(t *testing.T) {
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
 
 	claude := func() integration.Inspection { return integration.Builtin().Inspect(root)[0] }
-	shared := filepath.Join(root, ".claude", "settings.json")
-	local := filepath.Join(root, ".claude", "settings.local.json")
+	shared := ".claude/settings.json"
+	local := ".claude/settings.local.json"
 
-	// A wrapper the shell certainly runs is a running gate that setup
-	// does not manage; its enforce marker sets the mode, and the fact
+	// A wrapper that the shell certainly runs is a running gate that
+	// setup does not manage. Its enforce marker sets the mode. The fact
 	// is a typed finding, not a phrase to parse.
 	wrapped := "test -x /usr/local/bin/seamark && /usr/local/bin/seamark gate --enforce --hook"
-	require.NoError(t, os.WriteFile(shared,
-		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+wrapped+`"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.WriteFile(root, shared, inspecttest.PreToolUseDocument("Bash", wrapped)))
 
 	insp := claude()
 	commands, _ := insp.Entry(integration.CapabilityCommands)
@@ -354,9 +427,8 @@ func TestHookEvidenceCoversBothClaudeFiles(t *testing.T) {
 
 	// The same wrapper in the personal file alone: still a running,
 	// enforcing gate, named by its file.
-	require.NoError(t, os.WriteFile(shared, []byte(`{}`), 0o644))
-	require.NoError(t, os.WriteFile(local,
-		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+wrapped+`"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.WriteFile(root, shared, `{}`))
+	require.NoError(t, inspecttest.WriteFile(root, local, inspecttest.PreToolUseDocument("Bash", wrapped)))
 
 	insp = claude()
 	commands, _ = insp.Entry(integration.CapabilityCommands)
@@ -365,8 +437,8 @@ func TestHookEvidenceCoversBothClaudeFiles(t *testing.T) {
 
 	// A personal lessons hook that matches Edit only covers one tool: the
 	// hook is partial, not current, whatever file runs it.
-	require.NoError(t, os.WriteFile(local,
-		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"/usr/local/bin/seamark lessons --hook"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.WriteFile(root, local,
+		inspecttest.PreToolUseDocument("Edit", "/usr/local/bin/seamark lessons --hook")))
 
 	insp = claude()
 	edits, _ := insp.Entry(integration.CapabilityEdits)
@@ -374,7 +446,8 @@ func TestHookEvidenceCoversBothClaudeFiles(t *testing.T) {
 	assert.Equal(t, "lessons hook runs for Edit only, not for Write, MultiEdit", edits.Detail)
 
 	// The managed hook beside a personal copy for some tools: the hook is
-	// current, and the overlap is a warning that names the tools.
+	// current. The copy has the handler key of the managed hook and no
+	// timeout, so Claude Code runs it once with the fields of one copy.
 	require.NoError(t, inspecttest.Named("current").Write(root))
 
 	insp = claude()
@@ -383,16 +456,32 @@ func TestHookEvidenceCoversBothClaudeFiles(t *testing.T) {
 	assert.Equal(t, "warn", insp.GateMode)
 	assert.Equal(t, "warn", insp.ManagedGateMode)
 
-	var twice []string
+	var warnings []string
 	for _, f := range insp.Findings {
 		if f.Level == integration.FindingWarning {
-			twice = append(twice, f.Reason)
+			warnings = append(warnings, f.Reason)
 		}
 	}
 
-	require.Len(t, twice, 1)
-	assert.Contains(t, twice[0], "also runs `/usr/local/bin/seamark lessons --hook` for Edit")
-	assert.Contains(t, twice[0], "the managed lessons hook runs too, so the hook runs twice")
+	require.Len(t, warnings, 1)
+	assert.Equal(t, "has a copy of the managed lessons hook of .claude/settings.json that differs in timeout; "+
+		"Claude Code runs it once, with the fields of one copy that setup cannot name", warnings[0])
+
+	// A copy with another binary path has another handler key, so Claude
+	// Code runs both, and the overlap is a warning that names the tools.
+	require.NoError(t, inspecttest.WriteFile(root, local,
+		inspecttest.PreToolUseDocument("Edit", "/opt/bin/seamark lessons --hook")))
+
+	warnings = nil
+	for _, f := range claude().Findings {
+		if f.Level == integration.FindingWarning {
+			warnings = append(warnings, f.Reason)
+		}
+	}
+
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "also runs `/opt/bin/seamark lessons --hook` for Edit")
+	assert.Contains(t, warnings[0], "the managed lessons hook runs too, so the hook runs twice")
 }
 
 func TestGateModeCombinesEveryCodexSource(t *testing.T) {
@@ -473,10 +562,8 @@ func TestEnforceWinsInsideOneWrapper(t *testing.T) {
 	// blocks: the second run exits 2. The mode must not depend on which
 	// marker the reader checks first.
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
 	wrapped := "/usr/local/bin/seamark gate --hook; /usr/local/bin/seamark gate --enforce --hook"
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
-		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+wrapped+`"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", inspecttest.PreToolUseDocument("Bash", wrapped)))
 
 	insp := integration.Builtin().Inspect(root)[0]
 	assert.Equal(t, "enforce", insp.GateMode)
@@ -489,9 +576,8 @@ func TestPartialHookActionNamesTheDocumentThatHoldsIt(t *testing.T) {
 	// A lessons hook only in the personal file, for Edit only: the
 	// action names that file, where the matcher is, not the shared file.
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"),
-		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"/usr/local/bin/seamark lessons --hook"}]}]}}`), 0o644))
+	lessons := inspecttest.PreToolUseDocument("Edit", "/usr/local/bin/seamark lessons --hook")
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.local.json", lessons))
 
 	edits, _ := integration.Builtin().Inspect(root)[0].Entry(integration.CapabilityEdits)
 	assert.Equal(t, integration.StatePartial, edits.State)
@@ -501,24 +587,21 @@ func TestPartialHookActionNamesTheDocumentThatHoldsIt(t *testing.T) {
 	// The managed hook under a narrow matcher: the action names the
 	// shared file, as before.
 	require.NoError(t, os.Remove(filepath.Join(root, ".claude", "settings.local.json")))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
-		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"/usr/local/bin/seamark lessons --hook"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json", lessons))
 
 	edits, _ = integration.Builtin().Inspect(root)[0].Entry(integration.CapabilityEdits)
 	assert.Contains(t, edits.Action, "in .claude/settings.json;")
 }
 
 func TestCoverageAcrossSourcesIsComplete(t *testing.T) {
-	// The shared hook covers Edit, a personal wrapper covers the rest:
-	// every tool has a handler, so the hook is current and nothing is
-	// missing, in inspection and in setup alike.
+	// The shared hook covers Edit, and a personal wrapper covers the
+	// rest. Every tool has a handler, so the hook is current and nothing
+	// is missing, in inspection and in setup.
 	root := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
-		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[{"type":"command","command":"`+inspecttest.Binary+` lessons --hook"}]}]}}`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.local.json"),
-		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Write|MultiEdit","hooks":[{"type":"command","command":"test -x `+
-			inspecttest.Binary+` && `+inspecttest.Binary+` lessons --hook"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.json",
+		inspecttest.PreToolUseDocument("Edit", inspecttest.Binary+" lessons --hook")))
+	require.NoError(t, inspecttest.WriteFile(root, ".claude/settings.local.json",
+		inspecttest.PreToolUseDocument("Write|MultiEdit", "test -x "+inspecttest.Binary+" && "+inspecttest.Binary+" lessons --hook")))
 
 	insp := integration.Builtin().Inspect(root)[0]
 	edits, _ := insp.Entry(integration.CapabilityEdits)

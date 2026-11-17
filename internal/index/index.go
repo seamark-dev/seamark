@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/token"
 	"io"
 	"io/fs"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/fixes"
 	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/parse"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
@@ -45,8 +47,15 @@ type Options struct {
 	// History tunes the git mining pass.
 	History history.Options
 	// Force rebuilds even when the workspace fingerprint says the index
-	// is already current.
+	// is already current. It does not pass the guard of MoveRoot.
 	Force bool
+	// MoveRoot allows a build to record this workspace in a database that
+	// records another root. That repository then loses its pins and its
+	// maintenance, so the default is a refusal (ErrRootMove).
+	// The run never skips, because a skip would keep the old root. A root
+	// that does not read stays refused. Only an explicit request of the
+	// user sets it.
+	MoveRoot bool
 	// Logf receives progress and warnings; nil discards them.
 	Logf func(format string, args ...any)
 	// Progress receives phase events for interactive surfaces: a phase
@@ -63,6 +72,19 @@ type Summary struct {
 	// Skipped is true when the workspace fingerprint matched the index
 	// and nothing was rebuilt.
 	Skipped bool
+	// ReadOnly is true on a skip of a file that does not accept writes. A
+	// rebuild there fails, so no surface may offer one.
+	ReadOnly bool
+	// RootRoute names the next step of a rebuild after a skip under a
+	// database of another repository, as for a sibling worktree at one
+	// commit. Root then names that repository, and Force would refuse.
+	// It is "" for every other run.
+	RootRoute string
+	// Ownership holds the facts of the database that a skip read. A
+	// surface uses them to say which repository answers, without a second
+	// probe. It is zero after a build, because a build records this
+	// workspace.
+	Ownership ownership.State
 	// FilesSeen counts the listed files that exist in the working tree.
 	// A deleted path and a path outside a sparse checkout are not in it,
 	// because no file exists to see.
@@ -91,6 +113,84 @@ type Summary struct {
 	Duration        time.Duration
 }
 
+// ErrRootMove matches each refusal of Run under the guard of MoveRoot.
+// The refusal writes nothing. A surface without the flag can answer from
+// the existing index, but it must not open that index with a migration.
+var ErrRootMove = errors.New("a rebuild must not move the recorded root of another repository")
+
+// rootMoveRefusal is one refusal of Run. Its text has the facts and the
+// route, and it matches ErrRootMove. It keeps the facts, so a surface
+// that answers from the old index can name its root without a second
+// probe.
+type rootMoveRefusal struct {
+	text  string
+	state ownership.State
+}
+
+// Error returns the text of the refusal.
+func (r rootMoveRefusal) Error() string { return r.text }
+
+// Unwrap makes the refusal match ErrRootMove.
+func (r rootMoveRefusal) Unwrap() error { return ErrRootMove }
+
+// RefusedState returns the facts of the database that a refusal of Run
+// read. ok is false for any other error.
+func RefusedState(err error) (state ownership.State, ok bool) {
+	var r rootMoveRefusal
+	if !errors.As(err, &r) {
+		return ownership.State{}, false
+	}
+
+	return r.state, true
+}
+
+// buildRefusal returns the refusal of a build in this state, or nil. Its
+// text has the facts and the route of the decision.
+func buildRefusal(s ownership.State, d ownership.Decision) error {
+	if d.Build != ownership.BuildRefused {
+		return nil
+	}
+
+	there, here := render.Sanitize(s.Recorded), render.Sanitize(s.Workspace)
+	route := s.Route(d.Route, ownership.SurfaceBuild)
+	refuse := func(text string) error { return rootMoveRefusal{text: text, state: s} }
+
+	switch {
+	case s.DirRefusesWrites():
+		// No read works in this state, so "run it again" would not help.
+		// The text names the directory instead.
+		return refuse(s.ReadOnlyDirCause() + "; nothing changed; " + route)
+	case s.Root == ownership.RootUnreadable:
+		return refuse(fmt.Sprintf("the recorded root of this database cannot be read (%s: %s), so a "+
+			"rebuild could move the root of another repository; nothing changed; run it again, %s",
+			render.Sanitize(s.DB), render.Sanitize(s.ReadErr.Error()), route))
+	case s.Root == ownership.RootGone:
+		return refuse(fmt.Sprintf("this database records a directory that does not exist now (%s), which "+
+			"can be a moved repository or a detached disk, so a rebuild in %s would replace that root; "+
+			"nothing changed; %s", there, here, route))
+	case s.Owner == ownership.OwnerWorkspace:
+		return refuse(fmt.Sprintf("this database lies in %s but records another repository (%s), so a "+
+			"rebuild here would move its recorded root; nothing changed; %s", here, there, route))
+	default:
+		return refuse(fmt.Sprintf("this database records another repository (%s), so a rebuild in %s would "+
+			"move its recorded root, and that repository would lose its pins and maintenance; nothing changed; %s",
+			there, here, route))
+	}
+}
+
+// afterRead runs after the read loop and before the write when it is
+// not nil. Only tests set it: it is the one point where a test can change
+// a file after its read and before the run observes the workspace again.
+var afterRead func()
+
+// changedDuringRun is the workspace state that a run records when the
+// workspace changed between its two observations. The graph can then
+// hold content that no workspace state describes, also after the files go
+// back to their first content. WorkspaceState returns hex digits or "",
+// so this value never equals a current state. Every reader then calls the
+// index stale, and the next run rebuilds.
+const changedDuringRun = "changed"
+
 // Run executes a full indexing pass.
 func Run(opts Options) (*Summary, error) {
 	start := time.Now()
@@ -105,21 +205,57 @@ func Run(opts Options) (*Summary, error) {
 		return nil, err
 	}
 
-	dbPath := opts.DBPath
+	// The guard and each open use this one path, so they judge one file.
+	dbPath := store.AbsolutePath(opts.DBPath)
 	if dbPath == "" {
 		dbPath = store.DefaultPath(root)
 	}
 
+	// The guard runs before the fast path, because the open of the fast
+	// path migrates an older schema, and a refusal must write nothing.
+	state := ownership.Gather(root, dbPath)
+	state.MoveRoot = opts.MoveRoot
+	decision := ownership.Decide(state.Facts)
+	refusal := buildRefusal(state, decision)
+
+	// The workspace state is observed before any file is read, and the
+	// run records this state when the workspace still has it after the
+	// reads. A state observed only after the reads would mark an older
+	// parse as current. The fast path compares the same observation.
+	observed := WorkspaceState(root, dbPath)
+
 	// Fast path: an unchanged workspace needs no work. This makes
 	// "reindex whenever unsure" free (~30ms) for the CLI, and no-change
 	// saves free for the LSP server.
-	if !opts.Force {
-		if sum := freshSummary(root, dbPath, start); sum != nil {
+	//
+	// A skip moves nothing, so it stays under the guard, as for a sibling
+	// worktree at one commit. There it opens read-only, so an older schema
+	// stays as it is and the run refuses. A run with MoveRoot asks for the
+	// move, so a skip would report success and move nothing.
+	switch {
+	case refusal != nil:
+		if !opts.Force && !opts.MoveRoot {
+			if sum := freshSummary(root, dbPath, observed, start, store.OpenReadOnly, state, decision); sum != nil {
+				sum.Ownership = state
+
+				if sum.Root != "" && !store.SameDirectory(sum.Root, root) {
+					sum.RootRoute = state.Route(decision.Route, ownership.SurfaceBuild)
+				}
+
+				return sum, nil
+			}
+		}
+
+		return nil, refusal
+	case !opts.Force && !opts.MoveRoot:
+		if sum := freshSummary(root, dbPath, observed, start, store.Open, state, decision); sum != nil {
+			sum.Ownership = state
+
 			return sum, nil
 		}
 	}
 
-	files, deleted, err := listFiles(root)
+	files, deleted, present, err := listFiles(root)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +369,10 @@ func Run(opts Options) (*Summary, error) {
 		}
 	}
 
+	if afterRead != nil {
+		afterRead()
+	}
+
 	// History is best-effort: a non-git workspace still gets a structure graph.
 	var decisions []model.Decision
 	var pairs []model.CoChange
@@ -259,41 +399,6 @@ func Run(opts Options) (*Summary, error) {
 		return nil, err
 	}
 
-	progress("write", 0, 0)
-
-	g := buildGraph(results, readGoModules(root, files), catalog)
-
-	err = st.Rebuild(func(tx *store.Tx) error {
-		if err := g.write(tx); err != nil {
-			return err
-		}
-
-		for i := range decisions {
-			if err := tx.InsertDecision(&decisions[i]); err != nil {
-				return err
-			}
-		}
-
-		for _, p := range pairs {
-			if err := tx.InsertCoChange(p); err != nil {
-				return err
-			}
-		}
-
-		// Persist the parse cache in the same transaction as the graph, so
-		// the two never disagree about which file versions were indexed.
-		for rel, ent := range upserts {
-			if err := tx.UpsertParseCache(rel, ent.Hash, ent.Data); err != nil {
-				return err
-			}
-		}
-
-		return tx.PruneParseCache(keep)
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	// The file-coverage summary is persisted so `seamark status` can
 	// report parser coverage long after this run's stdout is gone. A
 	// safety answer without coverage context is uninterpretable.
@@ -308,17 +413,87 @@ func Run(opts Options) (*Summary, error) {
 		return nil, err
 	}
 
-	for k, v := range map[string]string{
-		store.MetaRepoRoot:          root,
-		store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
-		store.MetaIndexedState:      WorkspaceState(root),
-		store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
-		store.MetaParseCacheVersion: parseCacheVersion,
-		store.MetaIndexSummary:      string(coverage),
-	} {
-		if err := st.SetMeta(k, v); err != nil {
-			return nil, err
+	progress("write", 0, 0)
+
+	g := buildGraph(results, readGoModules(root, files), catalog)
+
+	// The second observation comes after the last read of the workspace,
+	// the go.mod files in buildGraph. When the state differs, the reads can
+	// hold content that the first state does not describe. So the run
+	// records the mark that matches no state. A change after this point
+	// does no harm: the graph matches the recorded state, and the next run
+	// sees the change. The git calls run outside the transaction, so they
+	// do not hold the write lock.
+	recorded := observed
+	changed := observed != "" && WorkspaceState(root, dbPath) != observed
+
+	if changed {
+		recorded = changedDuringRun
+	}
+
+	err = st.Rebuild(func(tx *store.Tx) error {
+		if err := g.write(tx); err != nil {
+			return err
 		}
+
+		for i := range decisions {
+			if err := tx.InsertDecision(&decisions[i]); err != nil {
+				return err
+			}
+		}
+
+		// Every mined pair is stored, also a pair with a gone side. An
+		// agent that deletes a file still needs its live partners.
+		for _, p := range pairs {
+			if err := tx.InsertCoChange(p); err != nil {
+				return err
+			}
+		}
+
+		// The gone list is written in the same transaction as the pairs,
+		// so the reads that leave out gone partners always match them.
+		if err := tx.SetGoneFiles(goneFiles(pairs, present)); err != nil {
+			return err
+		}
+
+		// Persist the parse cache in the same transaction as the graph, so
+		// the two never disagree about which file versions were indexed.
+		for rel, ent := range upserts {
+			if err := tx.UpsertParseCache(rel, ent.Hash, ent.Data); err != nil {
+				return err
+			}
+		}
+
+		if err := tx.PruneParseCache(keep); err != nil {
+			return err
+		}
+
+		// The meta commits with the graph. A meta write after the commit
+		// could pair this graph with the workspace state of a concurrent
+		// run, and a newer state on an older graph reads as current.
+		for k, v := range map[string]string{
+			store.MetaRepoRoot:          root,
+			store.MetaIndexedAt:         fmt.Sprint(time.Now().Unix()),
+			store.MetaIndexedState:      recorded,
+			store.MetaHistoryMined:      fmt.Sprint(sum.HistoryMined),
+			store.MetaParseCacheVersion: parseCacheVersion,
+			store.MetaIndexSummary:      string(coverage),
+		} {
+			if err := tx.SetMeta(k, v); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// The mark is committed now, so the claim of the note is true. The
+	// note says why the next run is not skipped.
+	if changed {
+		logf("note: the workspace changed during indexing; the next run rebuilds")
 	}
 
 	if sum.Stats, err = st.Stats(); err != nil {
@@ -336,7 +511,61 @@ func Run(opts Options) (*Summary, error) {
 // extractors or the FileResult layout change in a way that makes old
 // cached blobs wrong (a decode failure already forces a reparse; this
 // skips loading a large stale cache in the first place).
-const parseCacheVersion = "1"
+//
+// Version "2": the Go extractor records the operand root of a call. gob
+// decodes an old blob with an empty root, so an old cache would skip the
+// rule that drops calls on values of packages outside the repository.
+//
+// Version "3": package-level var initializers (Go) and module-level value
+// bindings (JS/TS, Python) carry the calls inside them, and a JS/TS or
+// Python class carries the calls of its body outside its methods. An old
+// blob decodes with no calls on these symbols, so their edges and effects
+// would stay missing. freshSummary rebuilds an index of another version.
+//
+// Version "4": a call on this in a JS/TS method that is no symbol is a
+// receiver call of the class, because the class carries the calls of such
+// a method. An old blob keeps it a plain call. The rebuild also gives an
+// unchanged index the same-class edges of class bodies.
+//
+// Version "5": a private JS/TS method (#m) is a symbol of its own and
+// carries its calls, so the class no longer carries them. An old blob has
+// no symbol for such a method. A this.#m() call in another method then
+// gets no edge, and that caller misses the effects of the private method.
+//
+// Version "6": every access X.#name in a JS/TS class is a private
+// reference that resolves only in the class that declares the name, and a
+// class references each private method and accessor it declares. An old
+// blob has no such reference: a value, getter or field access of #m gets
+// no edge, and the class misses the effects of its private methods. In an
+// old blob a receiver call this.#m() is a selector call that the
+// same-class tier resolves. A call of #m through any other operand took
+// the guess tier, which now abstains on a # name, so it gets no edge.
+const parseCacheVersion = "6"
+
+// OtherVersion reports an index that another seamark version built: the
+// parse cache version of its last run is not the one of this binary, so
+// the index can lack facts that this binary records. The readers that
+// never rebuild ask it, so such an index does not read as current. A
+// database with a completed run and no stored version predates the
+// version, so it counts as another version. A database that no run
+// completed has nothing to compare. A current index costs one meta read.
+func OtherVersion(st *store.Store) (bool, error) {
+	v, err := st.GetMeta(store.MetaParseCacheVersion)
+	if err != nil || v == parseCacheVersion {
+		return false, err
+	}
+
+	if v != "" {
+		return true, nil
+	}
+
+	indexedAt, err := st.GetMeta(store.MetaIndexedAt)
+	if err != nil {
+		return false, err
+	}
+
+	return indexedAt != "", nil
+}
 
 // loadParseCache returns the stored per-file parse cache, or an empty map
 // when forced, version-stale, or unreadable — every one of which just
@@ -705,6 +934,15 @@ func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, 
 		logf("warn: fix mining failed: %v", mineErr)
 	}
 
+	// The fix write records whether origin names a GitHub repository.
+	// Both index modes run this phase, so both keep the record current.
+	// ResolveRepository runs local git only, so local mode stays offline.
+	noReviewRepository := false
+	if mineErr == nil && mined.Mined {
+		_, repoState := reviews.ResolveRepository(root)
+		noReviewRepository = repoState != reviews.RepositoryGitHub
+	}
+
 	// The hook runs before the open, because the open can create or
 	// migrate the database that the hook guards.
 	if err := runBeforePersist(req, SourceFixes); err != nil {
@@ -738,7 +976,7 @@ func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, 
 
 	progress(RefreshEvent{Phase: PhasePersist, Source: SourceFixes})
 
-	count, err := persistFixes(st, mined)
+	count, err := persistFixes(st, mined, noReviewRepository)
 	if err != nil {
 		done(failedSource(CauseStore, err))
 
@@ -752,7 +990,7 @@ func refreshFixPhase(root, dbPath string, req RefreshRequest, logf func(string, 
 		state = SourceEmpty
 	}
 
-	done(SourceOutcome{State: state, Stored: count, MinedAt: metaUnix(st, store.MetaFixesMinedAt)})
+	done(SourceOutcome{State: state, Stored: count, MinedAt: st.MetaUnix(store.MetaFixesMinedAt)})
 
 	return nil
 }
@@ -835,7 +1073,7 @@ func refreshReviewPhase(ctx context.Context, root, dbPath string, windowDays int
 
 	done(SourceOutcome{
 		State: state, Stored: len(mined.Findings), Lessons: len(mined.Lessons),
-		MinedAt: metaUnix(st, store.MetaReviewsMinedAt), Reason: safeReason(mined.Note),
+		MinedAt: st.MetaUnix(store.MetaReviewsMinedAt), Reason: safeReason(mined.Note),
 	})
 
 	return nil
@@ -916,21 +1154,6 @@ func safeReason(s string) string {
 	return render.SanitizeBlock(strings.Join(strings.Fields(redact.Secrets(s)), " "))
 }
 
-// metaUnix reads a Unix-seconds meta value; 0 when absent or malformed.
-func metaUnix(st *store.Store, key string) int64 {
-	v, err := st.GetMeta(key)
-	if err != nil {
-		return 0
-	}
-
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0
-	}
-
-	return n
-}
-
 // RefreshFixes mines and persists only fix commits reachable from the
 // repository's current HEAD. It performs no network access, which makes it the
 // deterministic lesson-source mode for a pinned historical checkout.
@@ -950,12 +1173,14 @@ func RefreshFixes(root, dbPath string, logf func(string, ...any)) (int, error) {
 // must not look like an authoritative empty history. The store stamps
 // the mine time in the same transaction, because the outcome loop only
 // trusts "no recurrence since exposure" if mining actually ran since.
-func persistFixes(st *store.Store, res fixes.Result) (int, error) {
+// noReviewRepository tells the store that origin names no GitHub
+// repository, so the outcome loop can rely on fix findings alone.
+func persistFixes(st *store.Store, res fixes.Result, noReviewRepository bool) (int, error) {
 	if !res.Mined {
 		return 0, nil
 	}
 
-	if err := st.ReplaceFixFindings(res.Findings); err != nil {
+	if err := st.ReplaceFixFindings(res.Findings, noReviewRepository); err != nil {
 		return 0, err
 	}
 
@@ -1004,17 +1229,23 @@ func RefreshReviews(root, dbPath string, logf func(string, ...any)) (res reviews
 
 // freshSummary returns a Skipped summary when the index at dbPath was
 // built from the current workspace state; nil when a rebuild is needed.
-func freshSummary(root, dbPath string, start time.Time) *Summary {
+// current is the WorkspaceState that Run observed before its reads; a
+// rebuild records the same value when the reads leave it unchanged, else
+// changedDuringRun. open is the opener of the database, so
+// a caller decides whether an older schema migrates. state and decision
+// say whether a rebuild must record root.
+func freshSummary(root, dbPath, current string, start time.Time, open func(string) (*store.Store, error),
+	state ownership.State, decision ownership.Decision,
+) *Summary {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil
 	}
 
-	current := WorkspaceState(root)
 	if current == "" {
 		return nil // no cheap fingerprint without git: rebuild
 	}
 
-	st, err := store.Open(dbPath)
+	st, err := open(dbPath)
 	if err != nil {
 		return nil
 	}
@@ -1025,10 +1256,29 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 		return nil
 	}
 
+	// The fingerprint holds no path, so a copied or a moved checkout keeps
+	// the fingerprint of its origin. Only a rebuild records the new root.
+	recorded, _ := st.GetMeta(store.MetaRepoRoot)
+	if recordsAnotherRoot(root, dbPath, recorded, state, decision) {
+		return nil
+	}
+
 	// A database from before coverage persistence has no index_summary;
 	// skipping would strand it on "coverage unknown" forever, because the
 	// fingerprint still matches. One full pass records it.
 	if summary, err := st.GetMeta(store.MetaIndexSummary); err != nil || summary == "" {
+		return nil
+	}
+
+	// An index built by an older extractor lacks facts that the current
+	// one records, such as the calls of value initializers, and the
+	// fingerprint still matches. A skip would keep that gap until a forced
+	// run, so one full pass rebuilds it and records the current version. A
+	// file that does not accept writes keeps the skip, as in
+	// recordsAnotherRoot, or every run would fail. In the refusal branch of
+	// Run the database records another repository: a mismatch there ends
+	// in that refusal, which names the route to a rebuild.
+	if v, _ := st.GetMeta(store.MetaParseCacheVersion); v != parseCacheVersion && fileAcceptsWrites(dbPath) {
 		return nil
 	}
 
@@ -1037,15 +1287,59 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 		return nil
 	}
 
-	root, _ = st.GetMeta(store.MetaRepoRoot)
 	mined, _ := st.GetMeta(store.MetaHistoryMined)
 
 	return &Summary{
-		Root: root, DBPath: dbPath, Skipped: true,
+		Root: recorded, DBPath: dbPath, Skipped: true, ReadOnly: !fileAcceptsWrites(dbPath),
 		HistoryMined: mined == "true",
 		Stats:        stats,
 		Duration:     time.Since(start),
 	}
+}
+
+// recordsAnotherRoot reports a database that needs a rebuild to record
+// root. A moved or a copied checkout keeps its fingerprint, so the decision
+// ends the skip. A default database also ends it for a new spelling of
+// root. A file that does not accept the write keeps the skip for both, or
+// every run would fail. An empty recorded root says nothing, so it is no
+// difference.
+func recordsAnotherRoot(root, dbPath, recorded string, state ownership.State, decision ownership.Decision) bool {
+	if recorded == "" {
+		return false
+	}
+
+	differs := decision.Build == ownership.BuildRecords ||
+		state.File == ownership.FileDefault && !sameSpelling(recorded, root)
+
+	return differs && fileAcceptsWrites(dbPath)
+}
+
+// fileAcceptsWrites reports whether the file opens for a write. The open
+// changes nothing, because nothing is written and the file is not cut.
+func fileAcceptsWrites(file string) bool {
+	f, err := os.OpenFile(file, os.O_WRONLY, 0)
+	if err != nil {
+		return false
+	}
+
+	return f.Close() == nil
+}
+
+// sameSpelling reports whether the recorded root resolves to the text of
+// root. It is a string test on purpose, unlike store.SameDirectory, which
+// a guard uses. The path readers compute relative paths against the
+// recorded text, so a rename that changes only the case needs a rebuild.
+// A link spelling resolves to the same text and needs none, because the
+// hooks hash the recorded spelling.
+func sameSpelling(recorded, root string) bool {
+	if filepath.Clean(recorded) == filepath.Clean(root) {
+		return true
+	}
+
+	resolvedRecorded, errRecorded := filepath.EvalSymlinks(recorded)
+	resolvedRoot, errRoot := filepath.EvalSymlinks(root)
+
+	return errRecorded == nil && errRoot == nil && resolvedRecorded == resolvedRoot
 }
 
 // WorkspaceState fingerprints the workspace content the index depends
@@ -1055,10 +1349,22 @@ func freshSummary(root, dbPath string, start time.Time) *Summary {
 // status line never changes either). Two equal fingerprints mean the
 // index is current. "" when git is unavailable — there is no cheap
 // fingerprint without it.
-func WorkspaceState(root string) string {
+//
+// db is the database file that the index lives in. A run writes it and
+// its SQLite sidecars, so a file of the database that lies in the
+// workspace would change the fingerprint that the run just stored, and
+// every run would rebuild. The fingerprint leaves those files out (see
+// ownFiles). Every reader passes the file that it reads (store.Path), so
+// it computes what Run stored. "" leaves nothing out.
+//
+// Each git call runs with history.ReadOnlyGitEnviron. Without it, git
+// status and git diff rewrite .git/index after a touch, and a concurrent
+// git command of the user can then fail on .git/index.lock.
+func WorkspaceState(root, db string) string {
 	gitOut := func(args ...string) ([]byte, bool) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = root
+		cmd.Env = history.ReadOnlyGitEnviron()
 
 		out, err := cmd.Output()
 
@@ -1075,12 +1381,26 @@ func WorkspaceState(root string) string {
 	// just stored and every workspace would look permanently stale.
 	const exclSeamark = ":(exclude).seamark"
 
-	status, ok := gitOut("status", "--porcelain", "-z", "--", ".", exclSeamark)
+	own := ownFiles(root, db)
+	specs := []string{"--", ".", exclSeamark}
+	skip := map[string]bool{}
+
+	for _, rel := range own {
+		specs = append(specs, ":(exclude,literal)"+rel)
+		skip[filepath.Join(root, filepath.FromSlash(rel))] = true
+	}
+
+	// --untracked-files=normal is the git default. It keeps
+	// status.showUntrackedFiles=no from hiding a new file, so a new file
+	// still changes the fingerprint.
+	status, ok := gitOut(append([]string{"status", "--porcelain", "-z", "--untracked-files=normal"}, specs...)...)
 	if !ok {
 		return ""
 	}
 
-	diff, ok := gitOut("diff", "HEAD", "--", ".", exclSeamark)
+	// ParsedGitArgs keeps an external diff or a textconv driver from
+	// writing a constant text, which leaves a second edit unseen.
+	diff, ok := gitOut(history.ParsedGitArgs("diff", append([]string{"HEAD"}, specs...)...)...)
 	if !ok {
 		return ""
 	}
@@ -1109,15 +1429,78 @@ func WorkspaceState(root string) string {
 			continue
 		}
 
-		statInto(h, filepath.Join(root, filepath.FromSlash(entry[3:])), &budget)
+		statInto(h, filepath.Join(root, filepath.FromSlash(entry[3:])), &budget, skip)
 	}
 
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
+// ownFiles returns the workspace paths, slash-separated, of the database
+// db and its SQLite sidecars when db lies in root outside .seamark, else
+// nil. .seamark is left out already, so the default database keeps its
+// fingerprint byte for byte. The directory of db resolves its links, as
+// the root does, and the name stays as given, because git lists a link by
+// its own name. A directory that does not exist yet resolves through its
+// nearest parent, because the first run creates it.
+func ownFiles(root, db string) []string {
+	if db == "" {
+		return nil
+	}
+
+	db = store.AbsolutePath(db)
+
+	top, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil
+	}
+
+	dir, ok := resolveDir(filepath.Dir(db))
+	if !ok {
+		return nil
+	}
+
+	rel, err := filepath.Rel(top, filepath.Join(dir, filepath.Base(db)))
+	if err != nil || !filepath.IsLocal(rel) {
+		return nil
+	}
+
+	rel = filepath.ToSlash(rel)
+	if first, _, _ := strings.Cut(rel, "/"); first == store.DefaultDir {
+		return nil
+	}
+
+	return []string{rel, rel + "-wal", rel + "-shm", rel + "-journal"}
+}
+
+// resolveDir resolves the links of dir. A part that does not exist is
+// kept as written below its nearest parent that does.
+func resolveDir(dir string) (string, bool) {
+	rest := ""
+
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, rest), true
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
+}
+
 // statInto hashes a content proxy (path, size, mtime) for an untracked
-// file, or every file under an untracked directory.
-func statInto(h io.Writer, p string, budget *int) {
+// file, or every file under an untracked directory. A path in skip is
+// left out: git still lists an untracked directory that holds a file of
+// the database beside other files.
+func statInto(h io.Writer, p string, budget *int, skip map[string]bool) {
+	if skip[p] {
+		return
+	}
+
 	info, err := os.Stat(p)
 	if err != nil {
 		return
@@ -1135,7 +1518,7 @@ func statInto(h io.Writer, p string, budget *int) {
 			return filepath.SkipAll
 		}
 
-		if d.IsDir() {
+		if d.IsDir() || skip[fp] {
 			return nil
 		}
 
@@ -1168,7 +1551,11 @@ var skipDirs = map[string]bool{
 // tracked paths that git status shows as deleted and not staged. files
 // leaves them out, because nothing exists to parse. A walk finds no such
 // path.
-func listFiles(root string) (files, deleted []string, err error) {
+//
+// present holds every path that git lists and does not show as deleted,
+// parsed or not. A pair path outside this set is a gone path. A walk
+// returns no present set, because a workspace without git has no pairs.
+func listFiles(root string) (files, deleted []string, present map[string]bool, err error) {
 	if history.IsRepo(root) {
 		return gitFiles(root)
 	}
@@ -1198,10 +1585,28 @@ func listFiles(root string) (files, deleted []string, err error) {
 		return nil
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("index: walk %s: %w", root, err)
+		return nil, nil, nil, fmt.Errorf("index: walk %s: %w", root, err)
 	}
 
-	return files, nil, nil
+	return files, nil, nil, nil
+}
+
+// goneFiles returns the paths that a mined pair names and present does
+// not hold. History still names deleted and renamed-away files, and an
+// agent cannot open them, so the co-change reads leave them out as
+// partners and hubs. A walk has no pairs, so it gives no gone path.
+func goneFiles(pairs []model.CoChange, present map[string]bool) []string {
+	var gone []string
+
+	for _, p := range pairs {
+		for _, f := range []string{p.FileA, p.FileB} {
+			if !present[f] {
+				gone = append(gone, f)
+			}
+		}
+	}
+
+	return gone
 }
 
 // gitFiles lists the workspace through git. The cached list keeps a
@@ -1213,12 +1618,17 @@ func listFiles(root string) (files, deleted []string, err error) {
 // directory replaces is deleted. A path that git cannot lstat for a
 // different reason, such as a denied permission, is not deleted. It
 // stays in files, so the read reports it as a parse error.
-func gitFiles(root string) (files, deleted []string, err error) {
+//
+// present uses the same two git calls, so the index has one deletion
+// rule. It keeps the paths that files drops for parsing reasons: paths
+// under skipped directories and skip-worktree paths that a sparse
+// checkout leaves out of the working tree.
+func gitFiles(root string) (files, deleted []string, present map[string]bool, err error) {
 	// -t tags each path, so the loop below can find skip-worktree
 	// entries. The tag is one letter and a space before the path.
 	listed, err := gitRecords(root, "ls-files", "-z", "-t", "--cached", "--others", "--exclude-standard")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// --relative gives paths relative to root, as ls-files does.
@@ -1226,21 +1636,30 @@ func gitFiles(root string) (files, deleted []string, err error) {
 	// path has the same content.
 	gone, err := gitRecords(root, "diff-files", "-z", "--name-only", "--relative", "--no-renames", "--diff-filter=D")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	isGone := make(map[string]bool, len(gone))
 
 	for _, f := range gone {
+		isGone[f] = true
+
 		if !underSkippedDir(f) {
-			isGone[f] = true
 			deleted = append(deleted, f)
 		}
 	}
 
+	present = make(map[string]bool, len(listed))
+
 	for _, rec := range listed {
 		tag, f, ok := strings.Cut(rec, " ")
-		if !ok || underSkippedDir(f) || isGone[f] {
+		if !ok || f == "" || isGone[f] {
+			continue
+		}
+
+		present[f] = true
+
+		if underSkippedDir(f) {
 			continue
 		}
 
@@ -1255,7 +1674,7 @@ func gitFiles(root string) (files, deleted []string, err error) {
 		files = append(files, f)
 	}
 
-	return files, deleted, nil
+	return files, deleted, present, nil
 }
 
 // missingFile reports whether rel has no working-tree entry. Only
@@ -1573,8 +1992,12 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 }
 
 // writeCallEdges resolves the call references of one declaration, in
-// descending confidence order (RFC §3: every edge declares its derivation):
+// descending confidence order. Every edge declares its derivation:
 //
+//  0. JS/TS private      → the method or accessor of the   (same-class)
+//     (#name) member       caller's own class with that
+//     reference, never     name, else that class when it
+//     a guess              carries calls
 //  1. bare identifier    → named import target module,     (qualified)
 //     that is a named      else function in the same       (same-package)
 //     import               package/module
@@ -1583,14 +2006,25 @@ func (g *graph) writeImportEdges(tx *store.Tx, res *parse.FileResult) error {
 //     import alias or
 //     namespace import
 //  3. self/cls/this      → the method of the caller's      (same-class)
-//     method call          own class, when declared there
+//     method call of a     own class, when declared there;
+//     method or of a       a class body calls its own class
+//     class body
 //  4. any other          → the single same-family repo     (unique-name)
 //     selector call        symbol with that method name
 //
-// Known limitation, accepted for M1: resolution is purely syntactic, so a
-// local variable shadowing an import alias (or sharing a method name) can
-// produce a wrong edge. The origin column declares the derivation exactly
-// so consumers can weigh it; proper scope tracking is future work.
+// In Go, tier 4 skips three kinds of call. A call whose operand chain starts
+// at an import outside the repository gets no edge. Such a value is rarely
+// a repository value, and every measured guess there was false. A generic
+// helper such as cmp.Or can return one, and that real call then loses its
+// edge. A common standard-library method name gets no edge when the calling
+// file neither shares the method's directory nor imports its package (see
+// uniqueMethod). An unexported method of another directory gets no edge,
+// because Go allows no such call.
+//
+// Known limitation: resolution is purely syntactic, so a local variable
+// shadowing an import alias (or sharing a method name) can produce a wrong
+// edge. The origin column declares the derivation exactly so consumers can
+// weigh it; proper scope tracking is future work.
 func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.SymbolDecl) error {
 	fam := parse.LanguageFamily(res.Language)
 
@@ -1598,6 +2032,7 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	named := map[string]string{}      // bare imported name -> scoped package key
 	rawImports := map[string]string{} // qualifier local name -> import path as written
 	rawNamed := map[string]string{}   // bare imported name -> import path as written
+	imported := map[string]bool{}     // scoped package key of every import, blank and dot included
 
 	for _, imp := range res.Imports {
 		if imp.LocalName != "" {
@@ -1614,6 +2049,13 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 		}
 
 		key := scopedKey(fam, rawKey)
+
+		// An empty import path maps to the root package key "". Only a real
+		// import of the module root may count as evidence for a root method.
+		if imp.Path != "" {
+			imported[key] = true
+		}
+
 		if imp.LocalName != "" {
 			imports[imp.LocalName] = key
 		}
@@ -1628,7 +2070,29 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	// so a same-class resolution is never reported as a name-match guess.
 	best := map[int64]string{}
 
+	keep := func(dst *model.Symbol, origin string) {
+		if dst == nil || dst.ID == decl.Symbol.ID {
+			return
+		}
+
+		if cur, seen := best[dst.ID]; !seen || originRank(origin) > originRank(cur) {
+			best[dst.ID] = origin
+		}
+	}
+
 	for _, call := range decl.Calls {
+		// A private reference names a member of the caller's own class,
+		// never a catalogue sink, so it skips effect detection. It also
+		// skips every other tier: a guess could pick the private member
+		// of another class, which JavaScript does not allow.
+		if call.Private {
+			for _, dst := range privateTargets(res, &decl.Symbol, call.Name) {
+				keep(dst, model.OriginSameClass)
+			}
+
+			continue
+		}
+
 		// Effect detection runs on the raw reference: the interesting
 		// sinks live in external dependencies and never resolve to edges.
 		g.detectCallEffects(fam, rawImports, rawNamed, decl.Symbol.ID, call)
@@ -1650,11 +2114,10 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 				dst = pickUnique(g.decls[scopedKey(fam, res.Package)][call.Name], model.KindFunction)
 				origin = model.OriginSamePackage
 			}
-		case call.Receiver && decl.Symbol.Kind == model.KindMethod:
+		case call.Receiver && (decl.Symbol.Kind == model.KindMethod || decl.Symbol.Kind == model.KindType):
 			// The receiver shadows any same-named import, so this tier
-			// comes first. The caller's FQN is <pkg>.<Class>.<name>; a
-			// sibling method shares everything but the last segment.
-			want := strings.TrimSuffix(decl.Symbol.FQN, "."+decl.Symbol.Name) + "." + call.Name
+			// comes first.
+			want := receiverClass(&decl.Symbol) + "." + call.Name
 
 			for _, c := range g.decls[scopedKey(fam, res.Package)][call.Name] {
 				if c.Kind == model.KindMethod && c.FQN == want {
@@ -1667,7 +2130,7 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 
 			// Miss (e.g. an inherited method): the guess tier may catch it.
 			if dst == nil {
-				dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
+				dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 			}
 		case call.Qualifier != "":
 			if pkgKey, ok := imports[call.Qualifier]; ok {
@@ -1676,20 +2139,21 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 				dst = pickUnique(g.decls[pkgKey][call.Name], model.KindFunction)
 				origin = model.OriginQualified
 			} else {
-				dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
+				dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 			}
+		case g.externalRoot(imports, call.Root):
+			// The operand chain starts at a package outside the repository,
+			// as strings.NewReplacer(…).Replace(s) does. Such a value is
+			// rarely a repository value, and every measured guess there was
+			// false, so the call gets no edge. A generic helper such as
+			// cmp.Or can return a repository value, and that real call then
+			// loses its edge.
 		default:
 			// Complex operand (x.db.Close()): only the guess tier applies.
-			dst, origin = g.uniqueMethod(fam, call.Name, res.Path)
+			dst, origin = g.uniqueMethod(fam, call.Name, res.Path, imported)
 		}
 
-		if dst == nil || dst.ID == decl.Symbol.ID {
-			continue
-		}
-
-		if cur, seen := best[dst.ID]; !seen || originRank(origin) > originRank(cur) {
-			best[dst.ID] = origin
-		}
+		keep(dst, origin)
 	}
 
 	for dstID, origin := range best {
@@ -1705,6 +2169,63 @@ func (g *graph) writeCallEdges(tx *store.Tx, res *parse.FileResult, decl *parse.
 	}
 
 	return nil
+}
+
+// privateTargets returns the symbols that a private (#name) reference of
+// caller resolves to. JavaScript scopes a private name to its class, and
+// the extractor records the reference only for a symbol of the class that
+// declares the name, so the lookup stays in the caller's own class and
+// file. The targets are the method symbols with that name; a get and set
+// pair gives two. A private field is no symbol, so the reference resolves
+// to the class, which carries the field initializer. A class with no
+// calls gives no target, because the edge would add no reach.
+func privateTargets(res *parse.FileResult, caller *model.Symbol, name string) []*model.Symbol {
+	if caller.Kind != model.KindMethod && caller.Kind != model.KindType {
+		return nil
+	}
+
+	class := receiverClass(caller)
+	member := class + "." + name
+
+	var (
+		methods []*model.Symbol
+		owner   *model.Symbol
+	)
+
+	for i := range res.Symbols {
+		sd := &res.Symbols[i]
+
+		switch {
+		case sd.Symbol.Kind == model.KindMethod && sd.Symbol.FQN == member:
+			methods = append(methods, &sd.Symbol)
+		case sd.Symbol.Kind == model.KindType && sd.Symbol.FQN == class && len(sd.Calls) > 0:
+			owner = &sd.Symbol
+		}
+	}
+
+	if len(methods) > 0 {
+		return methods
+	}
+
+	if owner != nil {
+		return []*model.Symbol{owner}
+	}
+
+	return nil
+}
+
+// receiverClass returns the FQN of the class that a receiver call of sym
+// calls into. A method FQN is <pkg>.<Class>.<name>, so the class is all but
+// the last segment. A class carries the calls of its body, such as a field
+// arrow function that calls this.save(), so the class is sym itself. Only
+// a JS/TS class gives such calls: a Python class body binds no receiver
+// name, and no other type carries calls.
+func receiverClass(sym *model.Symbol) string {
+	if sym.Kind == model.KindType {
+		return sym.FQN
+	}
+
+	return strings.TrimSuffix(sym.FQN, "."+sym.Name)
 }
 
 // detectCallEffects records catalogue matches for one call site on the
@@ -1817,32 +2338,160 @@ func originRank(origin string) int {
 	return 2
 }
 
+// commonGoMethodNames lists Go method names that standard-library types
+// implement and that Go code often calls on values whose type the parser
+// cannot see. The sources are error, fmt.Stringer and fmt.Formatter,
+// context.Context, the io interfaces, bufio, sync, sort.Interface,
+// strings and bytes, bufio.Scanner, database/sql, http.Header, url.Values,
+// os/exec, os, time and testing.TB. A repository method with such a name is
+// often the only one, so a call such as ctx.Err() or
+// strings.NewReplacer(…).Replace(s) looks unique although its target is a
+// standard-library value. uniqueMethod therefore asks for package evidence
+// before it keeps a guess with one of these names.
+var commonGoMethodNames = map[string]bool{
+	// error, fmt.Stringer, fmt.Formatter.
+	"Error": true, "String": true, "Format": true,
+	// context.Context.
+	"Deadline": true, "Done": true, "Err": true, "Value": true,
+	// The io interfaces and bufio.
+	"Read": true, "Write": true, "Close": true, "Seek": true,
+	"ReadAt": true, "WriteAt": true, "ReadFrom": true, "WriteTo": true,
+	"ReadByte": true, "WriteByte": true, "ReadRune": true, "WriteString": true,
+	"Flush": true,
+	// sync.Mutex, sync.RWMutex, sync.WaitGroup, sync.Once, sync.Map.
+	"Lock": true, "Unlock": true, "RLock": true, "RUnlock": true,
+	"Wait": true, "Do": true, "Load": true, "Store": true,
+	"Delete": true, "Range": true,
+	// sort.Interface.
+	"Len": true, "Less": true, "Swap": true,
+	// strings.Replacer, strings.Builder, bytes.Buffer.
+	"Replace": true, "Reset": true, "Bytes": true, "Grow": true,
+	// bufio.Scanner, database/sql rows.
+	"Scan": true, "Next": true, "Text": true,
+	// http.Header, url.Values.
+	"Get": true, "Set": true, "Add": true, "Del": true,
+	// os/exec.Cmd, os.File, os.Process, time.Timer, time.Ticker.
+	"Run": true, "Start": true, "Kill": true, "Stop": true,
+	"Name": true, "Stat": true, "Size": true, "Sync": true,
+	// testing.TB.
+	"Helper": true, "Cleanup": true, "Fatal": true, "Fatalf": true,
+	"Errorf": true, "Log": true, "Logf": true, "Skip": true,
+	"TempDir": true, "Setenv": true,
+}
+
 // uniqueMethod is the lowest-confidence tier: the single method in the
 // language family carrying the called name, if exactly one exists.
 // Production callers never resolve into test files — test doubles (fake
 // engines, stub clients) carry generic names (set, begin, fetchone) that
 // are often the only repo-declared occurrence, and every such edge is a
-// fabrication.
-func (g *graph) uniqueMethod(fam, name, callerFile string) (dst *model.Symbol, origin string) {
-	candidates := g.methodsByName[fam][name]
+// fabrication. A Go caller also skips a method in a _test.go file of
+// another directory. Go compiles a _test.go file only into the test binary
+// of its own directory, so such a method can never be the target. The rule
+// is Go only: Python and ECMA test files can import helpers from any
+// directory. A Go caller also never resolves into an unexported method of
+// another directory, because Go allows no such call.
+//
+// A Go call with a name from commonGoMethodNames keeps its sole candidate
+// only with package evidence. The calling file is in the candidate's
+// directory, or it imports the candidate's package. imported holds the
+// scoped package keys of every import of the calling file. Without evidence
+// the call gets no edge, so false effects do not flow to the caller.
+//
+// The trade-off: a real call loses its guess when the calling file does not
+// import the package that declares the type of the value. An interface call
+// is one case. A call on a field is another case: pair.Data.WriteString(…),
+// where another file of the caller's directory declares the field. A method
+// promoted from an embedded field that another file declares is a third
+// case. The evidence stays per file on purpose. A test on a large Go
+// repository found that imports from every file of the directory restore
+// one real call and about fifty false guesses.
+//
+// The rule is Go only. Python and ECMA code often calls a value of a module
+// that the file never imports, so an import there is weak evidence.
+func (g *graph) uniqueMethod(fam, name, callerFile string, imported map[string]bool) (dst *model.Symbol, origin string) {
+	// A JS/TS private (#name) member is visible only inside its class, so
+	// a guess must never give it a caller of another class. Go and Python
+	// names never start with "#".
+	if strings.HasPrefix(name, "#") {
+		return nil, ""
+	}
 
-	if !isTestPath(callerFile) {
-		var prod []*model.Symbol
+	var candidates []*model.Symbol
 
-		for _, c := range candidates {
-			if !isTestPath(c.File) {
-				prod = append(prod, c)
-			}
+	for _, c := range g.methodsByName[fam][name] {
+		if !isTestPath(callerFile) && isTestPath(c.File) {
+			continue
 		}
 
-		candidates = prod
+		if fam == "go" && !goTestVisible(callerFile, c.File) {
+			continue
+		}
+
+		candidates = append(candidates, c)
 	}
 
-	if len(candidates) == 1 {
-		return candidates[0], model.OriginUniqueName
+	if len(candidates) != 1 {
+		return nil, ""
 	}
 
-	return nil, ""
+	c := candidates[0]
+
+	if fam == "go" && commonGoMethodNames[name] && !goPackageEvidence(callerFile, c.File, imported) {
+		return nil, ""
+	}
+
+	// Go allows no call to an unexported method of another package. The
+	// check runs after the count, so a call that two methods share stays
+	// without an edge.
+	if fam == "go" && !token.IsExported(name) && path.Dir(callerFile) != path.Dir(c.File) {
+		return nil, ""
+	}
+
+	return c, model.OriginUniqueName
+}
+
+// externalRoot reports whether an operand root names an import whose
+// package declares nothing in the graph, that is, a package outside the
+// repository. An empty root never matches, because blank and dot imports
+// have no local name in imports. Only the Go extractor sets a root.
+func (g *graph) externalRoot(imports map[string]string, root string) bool {
+	if root == "" {
+		return false
+	}
+
+	key, ok := imports[root]
+
+	return ok && len(g.decls[key]) == 0
+}
+
+// goPackageEvidence reports whether Go code in callerFile has a reason to
+// call a method declared in candidateFile. The reason is a shared directory
+// or an import of the candidate's package. A Go package key is the file's
+// directory, "" at the repository root, so the root key matches only an
+// import of the module root.
+func goPackageEvidence(callerFile, candidateFile string, imported map[string]bool) bool {
+	dir := path.Dir(candidateFile)
+	if path.Dir(callerFile) == dir {
+		return true
+	}
+
+	if dir == "." {
+		dir = ""
+	}
+
+	return imported[scopedKey("go", dir)]
+}
+
+// goTestVisible reports whether Go code in callerFile can call a method
+// declared in candidateFile. A method in a _test.go file is visible only to
+// _test.go files of the same directory. path.Dir gives "." for a root file,
+// so two root files count as one directory.
+func goTestVisible(callerFile, candidateFile string) bool {
+	if !strings.HasSuffix(candidateFile, "_test.go") {
+		return true
+	}
+
+	return strings.HasSuffix(callerFile, "_test.go") && path.Dir(callerFile) == path.Dir(candidateFile)
 }
 
 // isTestPath reports whether a file is test code, by each language's

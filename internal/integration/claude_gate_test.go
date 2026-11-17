@@ -18,9 +18,9 @@ func TestClaudeCommandsDecodeTheShellEvent(t *testing.T) {
 	assert.Equal(t, "/workspace/repo", event.CWD)
 	assert.Nil(t, event.Context)
 
-	// The rule the gate hook always had: the matcher selects the tool,
-	// so the decoder does not check tool_name, and a payload without a
-	// command decodes to an empty command for the gate to refuse.
+	// The rule that the gate hook always had: the matcher selects the
+	// tool, so the decoder does not check tool_name. A payload without a
+	// command decodes to an empty command, which the gate refuses.
 	event, err = claudeCommands{}.DecodeCommand([]byte(`{"tool_input":{"command":"ls -la"}}`))
 	require.NoError(t, err)
 	assert.Equal(t, "ls -la", event.Command)

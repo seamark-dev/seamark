@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
-	"github.com/seamark-dev/seamark/internal/scaffold"
+	"github.com/seamark-dev/seamark/internal/history"
+	"github.com/seamark-dev/seamark/internal/hooks"
 	"github.com/seamark-dev/seamark/internal/tui"
 	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/workspace"
@@ -29,7 +29,10 @@ var errNotInteractive = errors.New("seamark tui needs an interactive terminal")
 // maintenance. The trigger extraction shares the executor and the
 // guarded save. So the text names no other difference. Pin authoring,
 // the lesson settings, and the selection sample have no command. So the
-// text names the files to edit by hand and the views that help.
+// text names the files to edit by hand and the views that help. The
+// lesson checks of Pins share the engines of lessons --verify and
+// lessons --set-mode. The console only shows the lesson-check hooks, so
+// the text names the init flags that install and remove them.
 const tuiGuidance = `seamark tui is an interactive, full-screen console (experimental).
 This session has no interactive terminal, so it did not start.
 
@@ -49,14 +52,22 @@ The same information and the closest actions are available as plain commands:
   seamark lessons --extract-triggers --dry-run  plan a trigger backfill of every
                                       eligible proposal (drop --dry-run to run it)
   seamark lessons --stats             lesson delivery statistics
+  seamark lessons --delivery [--pin <ref>]  lesson delivery and version-isolated expansion
   seamark lessons --list              mined rules and regions to copy into a pin that you write
   seamark lessons --file <path>       the lessons of one file (closest to the selection sample)
+  seamark lessons --verify            check the working tree against the lesson checks
+  seamark lessons --set-mode <mode> --pin <pin-ref>  set the mode of one pin (needs distill.write)
+  seamark init --client <claude|codex> --lesson-checks <off|check|enforce>
+                                      install, switch, or remove the lesson-check hooks
+  seamark init --client <claude|codex> --lesson-exploration <off|on>
+                                      install or remove the exploration hook
 
 Settings live in .seamark/config.yaml: agent.cli, distill.write,
 reviews.window_days, index.generated, and index.exclude.
 Lesson delivery and mutes live in .seamark/lessons.yaml: threshold,
 pin_budget, change_budget, hook_delivery, and mute.
 Pins that you write live there too, in the pin: list.
+Check definitions live there under checks:; key M in Pins edits one.
 `
 
 func newTUICmd(opts *options) *cobra.Command {
@@ -98,7 +109,7 @@ the plain commands stay the stable interface.`,
 			}
 
 			return tui.Run(tui.Options{
-				Services: services.New(ws, version, scaffold.BinaryPath()),
+				Services: services.New(ws, version, hooks.BinaryPath()),
 				ASCII:    ascii,
 				In:       in,
 				Out:      out,
@@ -130,58 +141,13 @@ func terminalStream(s any) bool {
 	return ok && term.IsTerminal(f.Fd())
 }
 
-// gitConfigKey is the git setting that stops `git diff` from refreshing
-// the stat cache in .git/index. GIT_OPTIONAL_LOCKS does not stop that
-// refresh, because git diff writes the index without the optional-lock
-// check.
-const gitConfigKey = "diff.autoRefreshIndex"
-
-// readOnlyGitEnv returns the environment changes that keep git from
-// rewriting .git/index while the console inspects the workspace.
-//
-// The index freshness check runs `git status` and `git diff HEAD` on
-// open, on each refresh, and after each mutation. Both commands refresh
-// the stat cache of .git/index and take .git/index.lock. docs/tui.md
-// says that opening and refreshing the console never write. Also, the
-// lock can make a concurrent git command of the user fail.
-// GIT_OPTIONAL_LOCKS=0 stops the write of `git status`. The
-// diff.autoRefreshIndex=false setting stops the write of `git diff`.
-// Neither setting changes the command output, so the freshness
-// fingerprint stays the same. Both affect only the optional stat-cache
-// write, so the git commands of an index build work as before.
-//
-// The setting goes in through GIT_CONFIG_COUNT, the git mechanism for
-// configuration from the environment. The helper appends to entries that
-// already exist. It adds nothing when the count is not a number, because
-// git then refuses every command and a new entry cannot help.
-func readOnlyGitEnv(lookup func(string) (string, bool)) [][2]string {
-	env := [][2]string{{"GIT_OPTIONAL_LOCKS", "0"}}
-
-	n := 0
-
-	if v, ok := lookup("GIT_CONFIG_COUNT"); ok && v != "" {
-		parsed, err := strconv.Atoi(v)
-		if err != nil || parsed < 0 {
-			return env
-		}
-
-		n = parsed
-	}
-
-	i := strconv.Itoa(n)
-
-	return append(env,
-		[2]string{"GIT_CONFIG_KEY_" + i, gitConfigKey},
-		[2]string{"GIT_CONFIG_VALUE_" + i, "false"},
-		[2]string{"GIT_CONFIG_COUNT", strconv.Itoa(n + 1)})
-}
-
-// useReadOnlyGit sets readOnlyGitEnv for this process. The console runs
-// git through child processes, and they inherit the environment. The
-// change lasts only for this process, so the user's shell keeps its
-// settings.
+// useReadOnlyGit sets history.ReadOnlyGitEnv for this process. The
+// console runs git through child processes, and they inherit the
+// environment. docs/tui.md says that opening and refreshing the console
+// never write. The change lasts only for this process, so the user's
+// shell keeps its settings.
 func useReadOnlyGit() error {
-	for _, kv := range readOnlyGitEnv(os.LookupEnv) {
+	for _, kv := range history.ReadOnlyGitEnv(os.LookupEnv) {
 		if err := os.Setenv(kv[0], kv[1]); err != nil {
 			return fmt.Errorf("set %s: %w", kv[0], err)
 		}

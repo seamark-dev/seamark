@@ -800,7 +800,8 @@ func (p *propView) previewKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 // confirmable reports a preview that y may commit: eligible proposals,
-// and for apply an open write gate with no existing pins.
+// and for apply an open write gate, no existing pins, and no refusal of
+// the root.
 func (p *propView) confirmable() bool {
 	d := p.dec
 	if d == nil || !d.showsPreview() || len(d.preview.Proposals) == 0 {
@@ -808,7 +809,7 @@ func (p *propView) confirmable() bool {
 	}
 
 	if d.action == proposals.ActionApply {
-		return d.preview.Write && len(d.preview.AlreadyPinned) == 0
+		return d.preview.Write && d.preview.RootBlock == nil && len(d.preview.AlreadyPinned) == 0
 	}
 
 	return true

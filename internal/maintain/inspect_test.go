@@ -12,6 +12,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/confidence"
 	"github.com/seamark-dev/seamark/internal/distill"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/outcome"
 	"github.com/seamark-dev/seamark/internal/pinfile"
@@ -292,7 +293,7 @@ func TestInspectReportsBlockedTriggers(t *testing.T) {
 
 	require.Len(t, r.Trigger.Blocked, 1, "the trigger reading reuses the facts of the scope advice")
 	assert.Equal(t, "lib/gone.go", r.Trigger.Blocked[0].Path)
-	assert.NotEmpty(t, r.Trigger.Blocked[0].BlockedLine())
+	assert.NotEmpty(t, r.Trigger.Blocked[0].BlockedLine(model.ProposalApplied))
 }
 
 func TestInspectScopeNeedsAReadyIndex(t *testing.T) {
@@ -535,10 +536,11 @@ func TestInspectReadsUnknownWithAReason(t *testing.T) {
 		// Inspect never reaches this state, because the linked readings
 		// need a file that parsed. The guard keeps a change of that rule
 		// from giving a zero outcome.
-		in.Doc.Bytes = []byte("threshold: lots\n")
+		in.Doc = pinfile.Parse([]byte("threshold: lots\n"))
 
 		errs := in.readOutcomes(f.st, []int{0}, []model.Proposal{in.Pins[0].Link.Applied[0]}, firingLog{})
 		require.Len(t, errs, 1)
+		require.ErrorIs(t, errs[0], reviews.ErrLessonsConfig)
 		assert.False(t, in.Pins[0].Readings.Outcome.Known)
 		assert.Equal(t, pinfile.ErrUnreadable.Error(), in.Pins[0].Readings.Outcome.Reason)
 	})
@@ -568,4 +570,100 @@ func TestInspectWritesNothing(t *testing.T) {
 	after, err := os.ReadDir(filepath.Join(f.root, ".seamark"))
 	require.NoError(t, err)
 	assert.Equal(t, len(entries), len(after), "no new file appears")
+}
+
+// TestInspectReadsPinChecks covers the lesson-check reading of the
+// inspection. Each pin carries its requested mode, its check with the
+// predicate, its scope, its listing, and its own errors. A file without
+// a lesson-check key reads Uses false, so the console keeps the bytes
+// of such a repository.
+func TestInspectReadsPinChecks(t *testing.T) {
+	t.Run("a file without lesson-check keys", func(t *testing.T) {
+		f := inspectFixture(t)
+		in := Inspect(f.root, f.st, f.probe(), fixtureNow)
+
+		assert.False(t, in.Checks.Uses)
+		assert.Empty(t, in.Checks.IDs())
+		require.Len(t, in.Pins, 9)
+
+		c := in.Pins[0].Check
+		assert.True(t, c.Known)
+		assert.Equal(t, lessoncheck.ModeAdvisory, c.Mode)
+		assert.Equal(t, lessoncheck.ListingNotCheckable, c.Listing)
+		assert.Nil(t, c.Check)
+		assert.Len(t, c.Ref, reviews.ShownPinRef)
+	})
+
+	t.Run("every mode and listing", func(t *testing.T) {
+		f := inspectFixture(t)
+		f.write(`lesson_checks_version: 1
+checks:
+  no-todo:
+    kind: no-added-pattern/1
+    pattern: 'TODO\('
+pin:
+  - rule: guard-empty
+    region: scripts
+    note: Guard empty datasets.
+    mode: enforce
+    check: no-todo
+  - rule: later
+    region: api
+    note: Later.
+    check: no-todo
+  - rule: prose
+    region: web
+    note: Prose only.
+  - rule: broken
+    region: lib
+    note: Broken.
+    mode: check
+    check: missing
+`, 0o644)
+
+		in := Inspect(f.root, f.st, f.probe(), fixtureNow)
+
+		assert.True(t, in.Checks.Uses)
+		assert.Equal(t, []string{"no-todo"}, in.Checks.IDs())
+		assert.Len(t, in.Checks.SHA256, 64)
+		require.Len(t, in.Pins, 4)
+
+		enforce := in.Pins[0].Check
+		assert.Equal(t, lessoncheck.ModeEnforce, enforce.Mode)
+		assert.Empty(t, enforce.Listing)
+		require.NotNil(t, enforce.Check)
+		assert.Equal(t, lessoncheck.KindNoAddedPattern, enforce.Check.Kind)
+		assert.Len(t, enforce.Check.Version, 64)
+		assert.Contains(t, enforce.Predicate, "TODO")
+		assert.Equal(t, []string{"scripts"}, enforce.Scope)
+		assert.Empty(t, enforce.Errors)
+
+		later := in.Pins[1].Check
+		assert.Equal(t, lessoncheck.ModeAdvisory, later.Mode)
+		assert.Equal(t, lessoncheck.ListingAdvisoryWithCheck, later.Listing)
+		assert.Equal(t, enforce.Predicate, later.Predicate, "one definition gives one predicate")
+
+		assert.Equal(t, lessoncheck.ListingNotCheckable, in.Pins[2].Check.Listing)
+
+		broken := in.Pins[3].Check
+		require.NotNil(t, broken.Check)
+		assert.Empty(t, broken.Check.Version, "an undefined ID has no version")
+		assert.Empty(t, broken.Predicate, "an undefined ID has no predicate")
+		require.Len(t, broken.Errors, 1, "only the errors of this pin")
+		assert.Equal(t, lessoncheck.CodePinCheckMissing, broken.Errors[0].Code)
+		assert.Len(t, in.Checks.Errors, 1)
+	})
+
+	t.Run("an unreadable file gives no reading", func(t *testing.T) {
+		f := inspectFixture(t)
+		f.write(inspectLessons+"threshold: lots\n", 0o644)
+
+		in := Inspect(f.root, f.st, f.probe(), fixtureNow)
+
+		assert.Equal(t, ChecksReading{}, in.Checks)
+
+		for _, p := range in.Pins {
+			assert.False(t, p.Check.Known)
+		}
+	})
 }

@@ -2,6 +2,7 @@ package maintain
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -101,7 +102,8 @@ func TestPlanAuthorRelationshipMatrix(t *testing.T) {
 	}
 
 	const (
-		linkedNote   = "linked to proposal #1; only its note can change here; " + routeRetarget
+		linkedNote   = "linked to proposal p1; only its note, mode, check, and regions can change here; " + routeLinkedPin
+		linkedScope  = "linked to proposal p1; a change of its regions needs the scope preview"
 		ambiguousFix = "; " + reasonLedgerFixes
 	)
 
@@ -123,10 +125,10 @@ func TestPlanAuthorRelationshipMatrix(t *testing.T) {
 		{name: "linked note with the same rule", entry: "linked", req: noteSameRule, link: pinfile.LinkLinked},
 		{name: "linked note with the same scope", entry: "linked", req: noteSameScope, link: pinfile.LinkLinked},
 		{name: "linked rename", entry: "linked", req: rename, link: pinfile.LinkLinked, blocker: linkedNote},
-		{name: "linked rescope", entry: "linked", req: rescope, link: pinfile.LinkLinked, blocker: linkedNote},
+		{name: "linked rescope", entry: "linked", req: rescope, link: pinfile.LinkLinked, blocker: linkedScope},
 		{
 			name: "linked removal", entry: "linked", req: remove, link: pinfile.LinkLinked,
-			blocker: "linked to proposal #1; Remove is only for unlinked pins; " + routePrune,
+			blocker: "linked to proposal p1; Remove is only for unlinked pins; " + routePrune,
 		},
 		{
 			name: "pending match", entry: "pending", req: note, link: pinfile.LinkPendingMatch,
@@ -146,7 +148,7 @@ func TestPlanAuthorRelationshipMatrix(t *testing.T) {
 		},
 		{
 			name: "an unlinked entry that a row's apply wrote", entry: "fields", req: note, link: pinfile.LinkNoProposal,
-			blocker: "ambiguous: stored region fields disagree (applied #5)" + ambiguousFix,
+			blocker: "ambiguous: stored region fields disagree (applied p5)" + ambiguousFix,
 		},
 		{
 			// p8 links no entry, but its apply writes the key of the
@@ -156,7 +158,7 @@ func TestPlanAuthorRelationshipMatrix(t *testing.T) {
 				Signature: "s8", Rule: "linked", Region: "zzz", Regions: []string{"api"}, Note: "Disagrees.",
 				Status: model.ProposalApplied,
 			}},
-			blocker: "ambiguous: stored region fields disagree (applied #8)" + ambiguousFix,
+			blocker: "ambiguous: stored region fields disagree (applied p8)" + ambiguousFix,
 		},
 	}
 
@@ -210,9 +212,9 @@ func TestPlanAuthorLinkedNoteEditKeepsItsLink(t *testing.T) {
 		"Earlier deliveries stay recorded under the earlier wording and scope. Nothing is reset or moved. " +
 			"The new wording is a new delivery identity: a context that already saw the old wording can receive " +
 			"it again, also in once-per-context mode.",
-		"Proposal #1 measures its outcome by the live wording, so its Outcome reads 'untested' until the new " +
+		"Proposal p1 measures its outcome by the live wording, so its Outcome reads 'untested' until the new " +
 			"wording is delivered.",
-		"Proposal #1 keeps its recorded rule, note, and evidence. Pins shows the difference as 'edited'. " +
+		"Proposal p1 keeps its recorded rule, note, and evidence. Pins shows the difference as 'edited'. " +
 			"Trigger extraction still asks about the recorded note. Saving does not extract triggers or retarget.",
 		"The proposal ledger does not change.",
 		noteRedacted,
@@ -233,17 +235,17 @@ func TestPlanAuthorRefusesAKeyThatAnotherOwnerHolds(t *testing.T) {
 		{
 			name:  "an applied row without a pin",
 			req:   func(*fixture) AuthorRequest { return newPin("gone", "Guidance.", "srv") },
-			owner: "applied #7",
+			owner: "applied p7",
 		},
 		{
 			name:  "a pending row",
 			req:   func(*fixture) AuthorRequest { return newPin("pending", "Guidance.", "db") },
-			owner: "the pin at line 9, pending #2",
+			owner: "the pin at line 9, pending p2",
 		},
 		{
 			name:  "the pin that a row with disagreeing fields writes",
 			req:   func(*fixture) AuthorRequest { return newPin("fields", "Guidance.") },
-			owner: "the pin at line 21, applied #5",
+			owner: "the pin at line 21, applied p5",
 		},
 		{
 			name: "a rename onto a linked pin",
@@ -253,7 +255,7 @@ func TestPlanAuthorRefusesAKeyThatAnotherOwnerHolds(t *testing.T) {
 					Scope: ScopeRegions, Regions: []string{"api"}, ScopeSet: true,
 				}
 			},
-			owner: "the pin at line 6, applied #1",
+			owner: "the pin at line 6, applied p1",
 		},
 		{
 			name: "a rescope onto an applied row",
@@ -263,7 +265,7 @@ func TestPlanAuthorRefusesAKeyThatAnotherOwnerHolds(t *testing.T) {
 					Scope: ScopeRegions, Regions: []string{"srv"}, ScopeSet: true,
 				}
 			},
-			owner: "applied #7",
+			owner: "applied p7",
 		},
 	}
 
@@ -465,4 +467,40 @@ func TestPlanAuthorNamesWhatBlocksTheFile(t *testing.T) {
 		assert.Nil(t, p.After)
 		assert.False(t, p.Confirmable)
 	})
+}
+
+// TestLinkedTextsNameTheProposalInThePNForm pins the pN form in every text
+// that names a proposal. Some texts reach the tests only through
+// fmt.Sprintf of the constant, so a literal assert cannot catch a return
+// of the #N form, which the console keeps for finding IDs.
+func TestLinkedTextsNameTheProposalInThePNForm(t *testing.T) {
+	// Each lead keeps the noun before the ID, because a bare p12 does not
+	// tell the reader that it names a proposal. A review note starts a
+	// sentence, so its noun starts with a capital.
+	texts := []struct {
+		name, text, lead string
+	}{
+		{"textLinkedNote", textLinkedNote, "linked to proposal p12; "},
+		{"textLinkedScope", textLinkedScope, "linked to proposal p12; "},
+		{"textLinkedOnly", textLinkedOnly, "linked to proposal p12; "},
+		{"textIdentityLinked", textIdentityLinked, "Proposal p12 measures "},
+		{"textLinkedEdited", textLinkedEdited, "Proposal p12 keeps "},
+		{"textLinkedKeeps", textLinkedKeeps, "Proposal p12 keeps "},
+		{"textLinkedChecks", textLinkedChecks, "Proposal p12 keeps "},
+		{"textScopeKeeps", textScopeKeeps, "Proposal p12 keeps "},
+	}
+
+	for _, c := range texts {
+		got := fmt.Sprintf(c.text, 12)
+
+		assert.True(t, strings.HasPrefix(got, c.lead), "%s: %q does not start with %q", c.name, got, c.lead)
+		assert.NotContains(t, got, "#", c.name)
+	}
+
+	labels := ownerLabels(pinfile.Owners{
+		Applied: []model.Proposal{{ID: 12}},
+		Pending: []model.Proposal{{ID: 13}},
+	})
+
+	assert.Equal(t, []string{"applied p12", "pending p13"}, labels)
 }

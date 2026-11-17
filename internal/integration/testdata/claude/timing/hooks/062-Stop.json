@@ -1,0 +1,23 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000006",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000006.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000009",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "done",
+  "background_tasks": [
+    {
+      "id": "a0000000000000002",
+      "type": "subagent",
+      "status": "running",
+      "description": "Read timing/child.txt",
+      "agent_type": "reader"
+    }
+  ],
+  "session_crons": []
+}

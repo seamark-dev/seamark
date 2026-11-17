@@ -12,8 +12,9 @@ own (gopls, pyright, ts_ls, …). It serves three things from the index:
   confidence), which files empirically change together, recent commits.
 - **Code lenses** — caller counts per function; a file-level lens for
   empirical coupling.
-- **Diagnostics on save** — co-change omission: "`schema.ts` changes with
-  this file in 38 of 58 commits and is not part of this change."
+- **Diagnostics on save** — co-change omission: "usually changed together,
+  not in this change: `schema.ts` (12/58 commits, lift 3.1)". 12 commits
+  changed both files, out of 58 commits counted in the mined window.
 
 `seamark lsp` speaks LSP over stdio and builds the index on first start.
 All logging goes to stderr; stdout is the protocol channel.
@@ -23,12 +24,13 @@ All logging goes to stderr; stdout is the protocol channel.
 Source [editors/nvim/seamark.lua](../editors/nvim/seamark.lua) from your
 config (or copy its contents; for lazy.nvim/LazyVim put it in
 `lua/plugins/` and add `return {}` at the end). It attaches seamark to
-Go/Python/TS/JS buffers, wires code-lens refresh, and maps `<leader>sm`
+Go/Python/TS/JS buffers, wires code-lens refresh, and maps `<leader>K`
 to a seamark-only hover — on nvim 0.10+ plain `K` also merges seamark's
-answer into the combined hover. Requires `seamark` on `$PATH`, or adjust
-`cmd`.
+answer into the combined hover. The `cmd` line starts
+`~/.local/bin/seamark`, where `make install` puts the binary; adjust
+`cmd` for another location, such as a Homebrew install.
 
-Try it: open a file, `<leader>sm` on a function, save a file that has
+Try it: open a file, `<leader>K` on a function, save a file that has
 strong co-change partners and watch the diagnostics.
 
 ## VS Code

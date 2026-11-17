@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,8 +64,9 @@ type extPreviewOpts struct {
 	// live are the live notes that differ from the recorded notes.
 	live     map[int64]string
 	blockers []string
-	// workDirErr is the working-directory error of the preview. The
-	// engine adds its line to blockers; a test lists that line itself.
+	// workDirErr marks the working-directory blocker. The engine adds that
+	// line to blockers. A test lists the line itself, and extBlockers
+	// gives it its kind.
 	workDirErr error
 	// none plans no batch, as for a selection without an open question.
 	none bool
@@ -144,9 +146,27 @@ func extPreview(o extPreviewOpts) *learning.ExtractPreview {
 
 	return &learning.ExtractPreview{
 		Request: extRequestOf(rows, o), Plan: plan, Invocation: agent.ClaudeCommand(), WorkDir: "/work/repo",
-		RepoRoot: "/work/repo", DBPath: "/work/repo/.seamark/index.db", LiveNotes: o.live, Blockers: o.blockers,
-		WorkDirErr: o.workDirErr, PlannedAt: extPlannedAt,
+		RepoRoot: "/work/repo", DBPath: "/work/repo/.seamark/index.db", LiveNotes: o.live, Blockers: extBlockers(o),
+		PlannedAt: extPlannedAt,
 	}
+}
+
+// extBlockers types the listed lines. The line that names o.workDirErr
+// is the working-directory blocker, and every other line is an agent
+// blocker.
+func extBlockers(o extPreviewOpts) []learning.ExtractBlocker {
+	var out []learning.ExtractBlocker
+
+	for _, line := range o.blockers {
+		kind := learning.ExtractBlockAgent
+		if o.workDirErr != nil && strings.HasSuffix(line, o.workDirErr.Error()) {
+			kind = learning.ExtractBlockWorkDir
+		}
+
+		out = append(out, learning.ExtractBlocker{Kind: kind, Reason: line})
+	}
+
+	return out
 }
 
 // extRequestOf returns the request that selected the fixture: every

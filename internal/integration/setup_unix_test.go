@@ -339,14 +339,33 @@ func TestAMissingHookActionClearsTheStateBehindALinkedDocument(t *testing.T) {
 
 	commands := inspected(t, codexSetup{}.Inspect(root), CapabilityCommands)
 	require.Equal(t, StateAbsent, commands.State)
-	assert.Equal(t, inspected(t, codexSetup{}.Inspect(root), CapabilityMCPRegistration).Action, commands.Action)
-	assert.Contains(t, commands.Action, "replace the symlink at .codex/config.toml")
+	assert.Equal(t, "replace the symlink at .codex/config.toml with the real file or directory, "+
+		"then re-run `seamark init --client codex`", commands.Action)
 
 	explicit, err = ExplicitSetups(Builtin(), []string{CodexID}, false, false, "")
 	require.NoError(t, err)
 
 	_, err = PlanSetup(Builtin(), SetupRequest{Root: root, Binary: testBinary, Clients: explicit})
 	require.ErrorContains(t, err, "symlink at .codex/config.toml")
+}
+
+func TestCodexMissingBinaryActionNamesALinkedConfig(t *testing.T) {
+	// Setup never writes config.toml through a link, so the repair of a
+	// missing binary replaces the link first, then runs the Codex setup.
+	root := t.TempDir()
+	linkTo(t, root, approve.CodexConfig, "[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n")
+	writeRel(t, root, codexHooksFile, bashHook(absentBinary+" gate --hook --client codex"))
+
+	insp := codexSetup{}.Inspect(root)
+
+	route := "replace the symlink at .codex/config.toml with the real file or directory, " +
+		"then re-run `seamark init --client codex`, which rewrites the hook command to the running seamark binary; " +
+		"then open the project in Codex and review the hooks with /hooks, because the new command changes the trust hash"
+
+	gate := findingsAt(insp.Findings, codexHooksFile, "cannot start the seamark gate hook")
+	require.Len(t, gate, 1)
+	assert.Equal(t, route, gate[0].Action)
+	assert.Equal(t, route, inspected(t, insp, CapabilityCommands).Action)
 }
 
 func TestInspectSanitizesTheHookDocumentError(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/doctor"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/proposals"
@@ -39,6 +40,11 @@ const (
 	// It reads without an index, so it is a source of its own and never
 	// rides on the ledger.
 	secPins
+	// secChecks is the lesson-capability/1 report of the Pins CHECK
+	// section and of the Integrations detail. It joins the last
+	// inspection of the clients with lessons.yaml. So it loads after a
+	// load of either source (followChecks), and allSections omits it.
+	secChecks
 	secCount
 )
 
@@ -137,6 +143,7 @@ type state struct {
 	learning     section[learning.Snapshot]
 	settings     section[*settings.Snapshot]
 	pins         section[*maintain.Inspection]
+	capability   section[lessoncheck.CapabilityReport]
 
 	// gens drops out-of-order results: only the newest load of a
 	// source may replace its snapshot.
@@ -526,7 +533,8 @@ func (w *workerSet) wait(d time.Duration) bool {
 // loading reports any source that is loading.
 func (s *state) loading() bool {
 	return s.doctor.loading || s.index.loading || s.integrations.loading ||
-		s.ledger.loading || s.stats.loading || s.learning.loading || s.settings.loading || s.pins.loading
+		s.ledger.loading || s.stats.loading || s.learning.loading || s.settings.loading || s.pins.loading ||
+		s.capability.loading
 }
 
 // load starts background loads of the named sources.
@@ -594,6 +602,15 @@ func (s *state) load(kinds ...sectionKind) tea.Cmd {
 			s.pins.loading = true
 			cmds = append(cmds, func() tea.Msg {
 				return loadedMsg{kind: k, gen: gen, value: svc.Pins(), at: time.Now()}
+			})
+		case secChecks:
+			// The report joins the inspections that the console holds, so
+			// one refresh inspects each client once. The load reads the
+			// snapshot here, because a worker must not read the model.
+			s.capability.loading = true
+			insps := s.integrations.value
+			cmds = append(cmds, func() tea.Msg {
+				return loadedMsg{kind: k, gen: gen, value: svc.LessonCapability(insps), at: time.Now()}
 			})
 		}
 	}
@@ -676,9 +693,25 @@ func (s *state) store(msg loadedMsg) bool {
 	case secPins:
 		v, _ := msg.value.(*maintain.Inspection)
 		s.pins.set(v, msg.err, msg.at)
+	case secChecks:
+		v, _ := msg.value.(lessoncheck.CapabilityReport)
+		s.capability.set(v, msg.err, msg.at)
 	}
 
 	return true
+}
+
+// followChecks starts a load of the capability report after a stored
+// load of the clients or of the pins. The report joins both, so a new
+// inspection or a new lessons.yaml makes the last report old. It waits
+// for the first inspection of the clients, because a report without it
+// names no client.
+func (s *state) followChecks(msg loadedMsg) tea.Cmd {
+	if (msg.kind != secIntegrations && msg.kind != secPins) || !s.integrations.loaded {
+		return nil
+	}
+
+	return s.load(secChecks)
 }
 
 // pendingCount returns the pending proposal count, or -1 when unknown.

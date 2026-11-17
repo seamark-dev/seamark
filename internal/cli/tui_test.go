@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/settings"
 )
 
 // TestTUIWithoutTerminalPrintsPlainGuidance proves the noninteractive
@@ -49,6 +51,63 @@ func TestTUIWithoutTerminalPrintsPlainGuidance(t *testing.T) {
 	assert.Contains(t, out, "Lesson delivery and mutes live in .seamark/lessons.yaml")
 	assert.NotContains(t, out, "\x1b", "plain guidance carries no escape sequence")
 	assert.Equal(t, before, snapshot(t, root), "a refused launch writes nothing")
+}
+
+// TestTUIGuidanceNamesLessonChecks proves that the plain guidance names
+// the command route of each lesson-check action of the console: the
+// verification of V, the mode edit of the pin form, the definitions that
+// M edits, and the init flags that install and remove the hooks, which
+// the console only shows. A refused launch still writes nothing.
+func TestTUIGuidanceNamesLessonChecks(t *testing.T) {
+	root := writeFixture(t)
+	before := snapshot(t, root)
+
+	out, err := run(t, "-C", root, "tui")
+	require.ErrorIs(t, err, errNotInteractive)
+
+	assert.Contains(t, out, "seamark lessons --verify ")
+	assert.Contains(t, out, "seamark lessons --set-mode <mode> --pin <pin-ref>")
+	assert.Contains(t, out, "--lesson-checks <off|check|enforce>")
+	assert.Contains(t, out, "--lesson-exploration <off|on>")
+	assert.Contains(t, out, "Check definitions live there under checks:")
+	assert.NotContains(t, out, "\x1b", "plain guidance carries no escape sequence")
+
+	for _, line := range strings.Split(out, "\n") {
+		assert.LessOrEqual(t, len([]rune(line)), 100, "a guidance line stays readable in a narrow terminal: %q", line)
+	}
+
+	assert.Equal(t, before, snapshot(t, root), "a refused launch writes nothing")
+}
+
+// TestTUIGuidanceGatedCommandsMatchSettings proves that the plain
+// guidance and the distill.write setting name the same gated commands.
+// Both texts list the commands by hand, so a new gated command in only
+// one text fails here.
+func TestTUIGuidanceGatedCommandsMatchSettings(t *testing.T) {
+	flag := regexp.MustCompile(`--[a-z][a-z-]*`)
+
+	guidance := map[string]bool{}
+
+	for _, line := range strings.Split(tuiGuidance, "\n") {
+		if !strings.Contains(line, "(needs distill.write)") {
+			continue
+		}
+
+		// The first flag of a guidance line is its command.
+		cmd := flag.FindString(line)
+		require.NotEmpty(t, cmd, "a gated guidance line names a flag: %q", line)
+
+		guidance[cmd] = true
+	}
+
+	setting := map[string]bool{}
+	for _, f := range flag.FindAllString(settings.PinWriteCommands, -1) {
+		setting[f] = true
+	}
+
+	want := map[string]bool{"--apply": true, "--retarget": true, "--prune": true, "--set-mode": true}
+	assert.Equal(t, want, guidance, "the guidance marks these commands as gated")
+	assert.Equal(t, guidance, setting, "the setting names every gated command of the guidance")
 }
 
 // TestTUIRejectsInvalidWorkspaceFirst proves that a bad workspace fails
@@ -90,34 +149,20 @@ func TestTUIDevNullIsNotInteractive(t *testing.T) {
 	require.ErrorIs(t, cmd.Execute(), errNotInteractive)
 }
 
-// TestTUIReadOnlyGitEnv proves the environment changes that keep git
-// from writing .git/index, including the append to existing entries.
-func TestTUIReadOnlyGitEnv(t *testing.T) {
-	lookup := func(env map[string]string) func(string) (string, bool) {
-		return func(k string) (string, bool) {
-			v, ok := env[k]
-
-			return v, ok
-		}
+// TestUseReadOnlyGitSetsBothParts proves that the console sets both
+// parts of the read-only git setting for its process.
+func TestUseReadOnlyGitSetsBothParts(t *testing.T) {
+	for _, k := range tuiGitEnvKeys {
+		t.Setenv(k, "")
+		require.NoError(t, os.Unsetenv(k))
 	}
 
-	assert.Equal(t, [][2]string{
-		{"GIT_OPTIONAL_LOCKS", "0"},
-		{"GIT_CONFIG_KEY_0", "diff.autoRefreshIndex"},
-		{"GIT_CONFIG_VALUE_0", "false"},
-		{"GIT_CONFIG_COUNT", "1"},
-	}, readOnlyGitEnv(lookup(nil)))
+	require.NoError(t, useReadOnlyGit())
 
-	assert.Equal(t, [][2]string{
-		{"GIT_OPTIONAL_LOCKS", "0"},
-		{"GIT_CONFIG_KEY_2", "diff.autoRefreshIndex"},
-		{"GIT_CONFIG_VALUE_2", "false"},
-		{"GIT_CONFIG_COUNT", "3"},
-	}, readOnlyGitEnv(lookup(map[string]string{"GIT_CONFIG_COUNT": "2"})), "existing entries stay")
-
-	assert.Equal(t, [][2]string{{"GIT_OPTIONAL_LOCKS", "0"}},
-		readOnlyGitEnv(lookup(map[string]string{"GIT_CONFIG_COUNT": "many"})),
-		"a broken count gets no new entry")
+	assert.Equal(t, "0", os.Getenv("GIT_OPTIONAL_LOCKS"))
+	assert.Equal(t, "1", os.Getenv("GIT_CONFIG_COUNT"))
+	assert.Equal(t, "diff.autoRefreshIndex", os.Getenv("GIT_CONFIG_KEY_0"))
+	assert.Equal(t, "false", os.Getenv("GIT_CONFIG_VALUE_0"))
 }
 
 // TestTUIReadOnlyGitKeepsTheGitIndex proves finding 26: with the console
@@ -167,7 +212,7 @@ func TestTUIReadOnlyGitKeepsTheGitIndex(t *testing.T) {
 	touch(3 * time.Hour)
 
 	before = read()
-	require.NotEmpty(t, index.WorkspaceState(root))
+	require.NotEmpty(t, index.WorkspaceState(root, ""))
 	assert.Equal(t, before, read(), "the freshness check rewrote .git/index")
 }
 

@@ -1,7 +1,7 @@
 package integration
 
-// Tests of Landed and SameGuard, the readback and the staleness check
-// that every Phase 4 editor shares.
+// Tests of Landed, the readback of the settings editor and the pin-file
+// editor, and of SameGuard, the staleness check of the pin-file editor.
 
 import (
 	"crypto/sha256"
@@ -59,4 +59,12 @@ func TestSameGuardComparesEveryObservedField(t *testing.T) {
 			assert.False(t, SameGuard(base, other))
 		})
 	}
+
+	t.Run("the path and the read rule name the file, not its state", func(t *testing.T) {
+		other := base
+		other.Path, other.Kind = "b", GuardInput
+
+		require.NotEqual(t, base.Kind, other.Kind, "the case changes the read rule")
+		assert.True(t, SameGuard(base, other))
+	})
 }

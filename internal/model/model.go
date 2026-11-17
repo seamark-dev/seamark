@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"time"
 )
 
 // SymbolKind classifies a Symbol row.
@@ -49,7 +50,10 @@ const (
 	// OriginSamePackage: bare-identifier call resolved within the package.
 	OriginSamePackage = "same-package"
 	// OriginSameClass: self/cls/this method call resolved to a method of
-	// the caller's own class.
+	// the caller's own class. A class body, such as a field initializer,
+	// calls into its own class. A JS/TS private (#name) member reference
+	// resolves only in the class that declares the name: to the private
+	// method or accessor, or to the class for a private field.
 	OriginSameClass = "same-class"
 	// OriginQualified: qualified call resolved through the file's imports.
 	OriginQualified = "qualified"
@@ -59,6 +63,26 @@ const (
 	// OriginParse: edge read directly off the syntax tree (imports).
 	OriginParse = "parse"
 )
+
+// OriginConfidence ranks a CALLS edge origin for display, from 4 for the
+// most trusted tier to 1 for a name match. Any other origin, "" and parse
+// included, gives 0, so an unknown edge sorts after every known tier.
+// The index dedup keeps its own rank because it only needs to tell a
+// resolved edge from a guess: the resolved tiers reach disjoint targets.
+func OriginConfidence(origin string) int {
+	switch origin {
+	case OriginQualified:
+		return 4
+	case OriginSameClass:
+		return 3
+	case OriginSamePackage:
+		return 2
+	case OriginUniqueName:
+		return 1
+	default:
+		return 0
+	}
+}
 
 // Span is a half-open source range in 1-based lines and 0-based columns.
 type Span struct {
@@ -96,7 +120,7 @@ type CoChange struct {
 	FileA    string // canonical order: FileA < FileB
 	FileB    string
 	Together int // commits touching both
-	Total    int // commits in the mined window
+	Total    int // commits that co-change counts in the mined window
 	Lift     float64
 }
 
@@ -219,6 +243,12 @@ const (
 // live distillation.
 const MaxTriggerPaths = 3
 
+// ScopeChoiceDate returns the UTC date of the scope choice at. Every
+// surface prints this form, so one choice reads as one date everywhere.
+func ScopeChoiceDate(at int64) string {
+	return time.Unix(at, 0).UTC().Format(time.DateOnly)
+}
+
 // Proposal is one distilled pattern awaiting review. It is a pin-shaped
 // lesson synthesized by the configured agent from the findings it cited.
 // Proposals follow the plan/apply contract: the distiller may only propose.
@@ -231,9 +261,10 @@ type Proposal struct {
 	// a single value for display and for readers that predate region
 	// sets ("" = repo-wide).
 	Region string
-	// Regions is the current bounded delivery set. It starts as evidence
-	// coverage and may become a set of verified trigger files or
-	// directories. Empty means "derive from Region" — pre-set rows and
+	// Regions is the current delivery set. It starts as evidence coverage
+	// and may become a set of verified trigger files or directories, or a
+	// set that a person chose. A computed set is bounded, and a chosen set
+	// is not. Empty means "derive from Region" — pre-set rows and
 	// repo-wide proposals both land there.
 	Regions []string
 	// TriggerPaths are validated repo paths where the mistake is MADE,
@@ -255,6 +286,20 @@ type Proposal struct {
 	Agent                string  // provenance: adapter name + prompt version
 	Status               string  // proposed | applied | dismissed
 	CreatedAt            int64
+	// Source names the evidence kind of the row. ProposalSourceFindings
+	// marks review findings, the only source that this build creates. A
+	// row without a source reads as findings.
+	Source string
+	// Provenance is the provenance document (JSON) of the source, empty
+	// for a findings row. The ledger stores it and a state bundle carries
+	// it, but no code of this build reads its content.
+	Provenance string
+	// ScopeChosen is when a person chose Regions (unix seconds; 0 = no
+	// person chose them). It is a decision, not evidence, so inference
+	// never reads it. A set that a person chose must not change without a
+	// review of the replacement. RetargetApplied writes it, and a state
+	// import carries it with the regions of the row.
+	ScopeChosen int64
 }
 
 // RegionSet returns the effective region set: Regions when present,

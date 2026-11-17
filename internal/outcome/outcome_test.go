@@ -135,7 +135,7 @@ func TestGather(t *testing.T) {
 			CreatedAt: post, Source: "fix:subject",
 		},
 	}
-	require.NoError(t, st.ReplaceFixFindings(fixes))
+	require.NoError(t, st.ReplaceFixFindings(fixes, false))
 
 	// Region activity: svc/auth is well-tested on both sides of the
 	// exposure (3 before, 6 after); svc/metrics sees a single commit
@@ -321,4 +321,79 @@ func TestGather(t *testing.T) {
 	assert.Equal(t, ReasonStaleEvidence, stale[1].Reason)
 	assert.Equal(t, "untested — evidence not mined since exposure (fired 1×)", stale[1].Line())
 	assert.Equal(t, VerdictNotLanding, stale[2].Verdict)
+}
+
+// TestGatherWithoutAReviewRepository checks the verdict when origin
+// names no GitHub repository. No reviews stamp ever exists there, so
+// only the no-review-repository record lets fix findings end the state.
+func TestGatherWithoutAReviewRepository(t *testing.T) {
+	root := t.TempDir()
+
+	st, err := store.Open(filepath.Join(root, ".seamark", "index.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	// Data sits an hour away from the real firing time, as in TestGather.
+	now := time.Now()
+	pre := now.Add(-time.Hour).Unix()
+
+	require.NoError(t, st.ReplaceFixFindings([]model.Finding{{
+		ID: 1, Path: "api/handler.go", Body: "guard the empty request body",
+		CreatedAt: pre, Source: model.SourceFixConventional,
+	}}, true))
+
+	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+		for i := range MinExposureActivity {
+			err := tx.InsertDecision(&model.Decision{
+				Kind: model.DecisionCommit, Ref: fmt.Sprintf("api-post-%d", i),
+				TS: now.Add(10*time.Minute).Unix() + int64(i), Files: []string{"api/handler.go"},
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	pin := reviews.PinRule{Rule: "guard-empty-body", Region: "api", Note: "guard empty bodies"}
+	cfg := &reviews.Config{Pin: []reviews.PinRule{pin}}
+	applied := []model.Proposal{{
+		ID: 1, Rule: pin.Rule, Region: pin.Region, Members: []int64{1}, Status: model.ProposalApplied,
+	}}
+
+	require.NoError(t, reviews.RecordFiring(root, "api/handler.go", "Edit",
+		[]model.Lesson{reviews.SurfacedPin{Pin: pin}.Lesson()}))
+
+	firings, err := reviews.ReadFirings(root)
+	require.NoError(t, err)
+
+	// The fix mine ran after exposure and no reviews stamp exists.
+	minedAt := fmt.Sprint(now.Add(2 * time.Hour).Unix())
+	require.NoError(t, st.SetMeta(store.MetaFixesMinedAt, minedAt))
+
+	readings, err := Gather(st, cfg, applied, firings)
+	require.NoError(t, err)
+	assert.Equal(t, ReasonStaleEvidence, readings[1].Reason, "a GitHub repository still waits for reviews")
+	assert.Equal(t, "untested — evidence not mined since exposure (fired 1×)", readings[1].Line())
+
+	// The record of the same fix write lets fix findings alone decide.
+	require.NoError(t, st.SetMeta(store.MetaNoReviewRepositoryAt, minedAt))
+
+	readings, err = Gather(st, cfg, applied, firings)
+	require.NoError(t, err)
+	assert.Equal(t, VerdictWorking, readings[1].Verdict)
+	assert.Equal(t,
+		"working — flagged 1× in ~0 region-commits before exposure; 0× in 5 since (fired 1×)",
+		readings[1].Line())
+}
+
+func TestPinTextKeepsTheEarlierErrorText(t *testing.T) {
+	// Gather errors named a pin by printing the whole PinRule. PinRule
+	// gained Mode and Check later; the text must not change with them.
+	advisory := reviews.PinRule{Rule: "guard-empty", Region: "scripts", Note: "Guard empty datasets."}
+	assert.Equal(t, "{guard-empty scripts [] Guard empty datasets.}", pinText(advisory))
+
+	bound := reviews.PinRule{Rule: "r", Region: "api", Regions: []string{"api", "db"}, Note: "n", Mode: "enforce", Check: "c"}
+	assert.Equal(t, "{r api [api db] n}", pinText(bound))
 }

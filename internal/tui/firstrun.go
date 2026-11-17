@@ -40,6 +40,10 @@ type firstRun struct {
 	resultErr error
 	// configDone is true after an apply that wrote or kept every file.
 	configDone bool
+	// applied is true after the first apply result and never goes back.
+	// The start check then no longer holds: a failed write can leave
+	// .seamark/ behind, and a stale plan means a file changed after planning.
+	applied bool
 }
 
 // frStage is the part of the Create config step that the guide shows.
@@ -235,6 +239,7 @@ func (fr *firstRun) update(msg firstRunMsg) tea.Cmd {
 		fr.stage = frResult
 		fr.result, fr.resultErr = msg.res, msg.err
 		fr.configDone = msg.err == nil && frAllLanded(msg.res)
+		fr.applied = true
 
 		return tea.Batch(mutationDone, refresh(frRefreshKinds...))
 	}
@@ -445,11 +450,25 @@ func frFitLines(body, tail []string, rows int, more string) []string {
 	return append(append([]string(nil), body...), tail...)
 }
 
+// lead returns the text before the path on the first line of the steps.
+// It follows the last apply result, because the guide opens on a fresh
+// check that an apply makes out of date.
+func (fr *firstRun) lead() string {
+	switch {
+	case fr.configDone:
+		return "Config written to .seamark/ in "
+	case fr.applied:
+		return "Step 1 did not finish in "
+	default:
+		return "No .seamark/ directory in "
+	}
+}
+
 // stepsBody renders the lead line, the three steps and the write note.
 func (fr *firstRun) stepsBody(inner int) []string {
 	t := fr.st.theme
 
-	lead := "No .seamark/ directory in "
+	lead := fr.lead()
 	path := ui.TruncateLeft(ui.OneLine(ui.DisplayPath(fr.st.svc.Root())), max(8, inner-ui.Width(lead)-1), t.Glyphs.Ellipsis)
 
 	lines := []string{t.Muted.Render(lead) + t.Body.Render(path) + t.Muted.Render("."), ""}

@@ -14,6 +14,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/seamark-dev/seamark/internal/history"
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/parse"
@@ -524,6 +525,9 @@ func (s *Server) handleDidSave(p *didSaveParams) error {
 
 	start := time.Now()
 
+	// A failed run ends this save only. The loop logs the error and the
+	// reads keep working. This holds for the refusal of a move of another
+	// root too, because the server has no flag that allows the move.
 	if _, err := index.Run(index.Options{Root: s.root, DBPath: s.dbPath, Logf: s.logf}); err != nil {
 		return fmt.Errorf("reindex: %w", err)
 	}
@@ -596,10 +600,15 @@ func (s *Server) publishDiagnostics(uri string, diags []diagnostic) error {
 // modifiedFiles returns a predicate over repo-relative paths the working
 // tree has changed (staged, unstaged, or untracked). Untracked
 // directories appear in porcelain output as a single "dir/" entry, so
-// files under them match by prefix.
+// files under them match by prefix. --untracked-files=normal is the git
+// default. It keeps status.showUntrackedFiles=no from hiding a saved new
+// file, so that file still gets diagnostics. history.ReadOnlyGitEnviron
+// keeps git status from rewriting .git/index on each save, so an editor
+// does not race a concurrent git command for .git/index.lock.
 func (s *Server) modifiedFiles() (func(rel string) bool, error) {
-	cmd := exec.Command("git", "status", "--porcelain", "-z", "--no-renames")
+	cmd := exec.Command("git", "status", "--porcelain", "-z", "--no-renames", "--untracked-files=normal")
 	cmd.Dir = s.root
+	cmd.Env = history.ReadOnlyGitEnviron()
 
 	out, err := cmd.Output()
 	if err != nil {

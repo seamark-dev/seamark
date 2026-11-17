@@ -12,6 +12,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/distill"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -25,11 +26,10 @@ import (
 // confirmed action: CleanupPending. The CLI keeps its own entry,
 // distill.Run, which plans with the same step and selects the same groups.
 
-// The repository-relative files that a distillation preview binds.
-const (
-	distConfigFile  = ".seamark/config.yaml"
-	distLessonsFile = ".seamark/lessons.yaml"
-)
+// distConfigFile is the repository-relative config.yaml that a preview
+// binds. The bound lessons.yaml is pinfile.File, which the pin readers
+// share.
+const distConfigFile = ".seamark/config.yaml"
 
 var (
 	// ErrDistillNotReady reports an index that is absent, not indexed,
@@ -37,7 +37,7 @@ var (
 	// action; a distillation never builds the index as a side effect.
 	ErrDistillNotReady = errors.New("the index is not ready for distillation")
 	// ErrDistillConfig marks a configuration reader error. The console
-	// is stricter than the CLI here: it must not spend against a default
+	// is stricter than the CLI here: a paid run must not use a default
 	// that the user did not review. DistillConfigError names the file.
 	ErrDistillConfig = errors.New("the distillation configuration is invalid")
 	// ErrDistillBlocked reports a run of a preview with blockers. A
@@ -71,6 +71,13 @@ func (e *DistillConfigError) Error() string {
 // example reviews.ErrLessonsConfig.
 func (e *DistillConfigError) Unwrap() []error {
 	return []error{ErrDistillConfig, e.Err}
+}
+
+// distConfigFault returns the *DistillConfigError of a reader error in
+// the file at path. The distillation preview passes it to
+// distReadInputs, so the error names the broken file.
+func distConfigFault(path string, err error) error {
+	return &DistillConfigError{Path: path, Err: err}
 }
 
 // DistillRequest is the scope the user chose for one distillation.
@@ -156,30 +163,22 @@ func PlanDistill(ws workspace.Workspace, reg *integration.Registry, req DistillR
 		reg = integration.Builtin()
 	}
 
-	in, err := distReadInputs(reg, root, func(path string, err error) error {
-		return &DistillConfigError{Path: path, Err: err}
-	})
+	b, lessons, err := distReadInputs(reg, distill.ErrStale, root, ws.DBPath, distConfigFault)
 	if err != nil {
 		return nil, err
 	}
 
-	b := in.bind(distill.ErrStale, root, ws.DBPath)
-
-	st, now, err := workspace.OpenReadOnly(ws)
+	st, err := b.openIndex(ws, ErrDistillNotReady)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrDistillNotReady, err)
+		return nil, err
 	}
 	defer func() { _ = st.Close() }()
-
-	if now.State != workspace.IndexReady || now.Root != root {
-		return nil, fmt.Errorf("%w: the index changed while planning; prepare again", distill.ErrStale)
-	}
 
 	plan, err := distill.NewPlan(st, distill.NewLexicalGrouper(), distill.PlanOptions{
 		Region: region,
 		Limit:  limit,
-		Pins:   distill.PinsFromConfig(in.lessons),
-		Spec:   in.spec,
+		Pins:   distill.PinsFromConfig(lessons),
+		Spec:   b.invocation,
 		Root:   root,
 	})
 	if err != nil {
@@ -204,21 +203,17 @@ func PlanDistill(ws workspace.Workspace, reg *integration.Registry, req DistillR
 		PlannedAt:  plan.PlannedAt,
 	}
 
-	// Only PATH is checked: running a configured command, even with
-	// --version, could start a login flow or spend money.
-	if _, err := exec.LookPath(in.spec.Argv[0]); err != nil {
-		p.Blockers = append(p.Blockers, distSafe(fmt.Sprintf("agent cli %q not found on PATH", in.spec.Argv[0])))
-	}
+	p.Blockers = append(p.Blockers, b.agentBlockers()...)
 
 	return p, nil
 }
 
 // RunDistill executes a confirmed preview. Before any work it checks
 // the workspace identity, both bound files, the resolved invocation,
-// and the store snapshot; a changed input returns an error that wraps
-// distill.ErrStale and starts nothing. It then calls distill.Execute
-// with the store boundary checks on, and repeats the file and identity
-// checks before each group.
+// and the store snapshot. A changed input returns an error that wraps
+// distill.ErrStale, and the run starts nothing. It then calls
+// distill.Execute with the store boundary checks on, and repeats the
+// file and identity checks before each group.
 //
 // A nil inv builds the invoker from the preview's invocation; tests
 // pass a fake. That invoker starts the agent in its own process group,
@@ -247,21 +242,9 @@ func RunDistill(ctx context.Context, ws workspace.Workspace, reg *integration.Re
 		return nil, err
 	}
 
-	if reg == nil {
-		reg = integration.Builtin()
-	}
-
-	if err := distCheckInvocation(reg, b); err != nil {
+	inv, err := distInvoker(reg, b, inv, ErrDistillBlocked)
+	if err != nil {
 		return nil, err
-	}
-
-	if inv == nil {
-		command, err := agent.NewGroupCommand(p.Invocation)
-		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrDistillBlocked, err)
-		}
-
-		inv = command
 	}
 
 	st, err := store.Open(ws.DBPath)
@@ -318,52 +301,54 @@ func CleanupPending(ws workspace.Workspace, p *DistillPreview) (int, error) {
 	return x.Removed, nil
 }
 
-// The helpers below serve every console preview that starts an agent:
+// The helpers below serve every preview that starts an agent:
 // distillation and trigger extraction. Both bind the same inputs, so
 // both refuse a changed input in the same way.
 
-// distInputs are the configuration inputs of one preview.
-type distInputs struct {
-	spec         agent.CommandSpec
-	lessons      *reviews.Config
-	configGuard  integration.FileGuard
-	lessonsGuard integration.FileGuard
-}
-
-// distReadInputs observes both files, then reads them with the shared
-// readers. Every reader error blocks the preview: a paid run must not
-// fall back to defaults that the user did not review. fault turns a
-// reader error into the typed configuration error of the preview kind.
-// It receives the repository-relative path of the file to repair.
-func distReadInputs(reg *integration.Registry, root string,
+// distReadInputs observes both files under root, then parses the
+// observed bytes with the shared parsers. It returns the binding of a
+// preview of the database at dbPath and the parsed lessons
+// configuration. Every check error of the binding wraps stale. The
+// guards then bind exactly the bytes that the preview used, and each
+// file is read once. Every reader error blocks the preview: a paid run
+// must not fall back to defaults that the user did not review. fault
+// turns a reader error into the typed configuration error of the
+// preview kind. It receives the repository-relative path of the file to
+// repair.
+func distReadInputs(reg *integration.Registry, stale error, root, dbPath string,
 	fault func(path string, err error) error,
-) (distInputs, error) {
-	var in distInputs
+) (inputBinding, *reviews.Config, error) {
+	b := inputBinding{stale: stale, repoRoot: root, dbPath: dbPath}
+
+	var configData, lessonsData []byte
 
 	var err error
 
-	if in.configGuard, _, err = integration.ReadInput(root, distConfigFile); err != nil {
-		return in, fault(distConfigFile, err)
+	if b.config, configData, err = integration.ReadInput(root, distConfigFile); err != nil {
+		return inputBinding{}, nil, fault(distConfigFile, err)
 	}
 
-	if in.lessonsGuard, _, err = integration.ReadInput(root, distLessonsFile); err != nil {
-		return in, fault(distLessonsFile, err)
+	if b.lessons, lessonsData, err = integration.ReadInput(root, pinfile.File); err != nil {
+		return inputBinding{}, nil, fault(pinfile.File, err)
 	}
 
-	acfg, err := agent.LoadConfig(root)
+	// An absent file gives nil bytes, and each parser reads nil as the
+	// defaults of an absent file.
+	acfg, err := agent.ParseConfig(configData)
 	if err != nil {
-		return in, fault(distConfigFile, err)
+		return inputBinding{}, nil, fault(distConfigFile, err)
 	}
 
-	if in.spec, err = reg.ResolveInvocation(acfg, root); err != nil {
-		return in, fault(distConfigFile, err)
+	if b.invocation, err = reg.ResolveInvocation(acfg, root); err != nil {
+		return inputBinding{}, nil, fault(distConfigFile, err)
 	}
 
-	if in.lessons, err = reviews.LoadConfig(root); err != nil {
-		return in, fault(distLessonsFile, err)
+	lessons, err := reviews.ParseConfig(lessonsData)
+	if err != nil {
+		return inputBinding{}, nil, fault(pinfile.File, err)
 	}
 
-	return in, nil
+	return b, lessons, nil
 }
 
 // inputBinding is what a preview binds before an agent run: the
@@ -380,19 +365,6 @@ type inputBinding struct {
 	lessons    integration.FileGuard
 }
 
-// bind returns the binding of the inputs, read under root, for a
-// preview of the database at dbPath.
-func (in distInputs) bind(stale error, root, dbPath string) inputBinding {
-	return inputBinding{
-		stale:      stale,
-		repoRoot:   root,
-		dbPath:     dbPath,
-		invocation: in.spec,
-		config:     in.configGuard,
-		lessons:    in.lessonsGuard,
-	}
-}
-
 // binding returns what the distillation preview binds.
 func (p *DistillPreview) binding() inputBinding {
 	return inputBinding{
@@ -403,6 +375,37 @@ func (p *DistillPreview) binding() inputBinding {
 		config:     p.Config,
 		lessons:    p.Lessons,
 	}
+}
+
+// openIndex opens the index of ws read-only for a plan. notReady is the
+// not-ready error of the preview kind, and it wraps an open error. The
+// index must still be ready at the bound root, because the plan reads
+// the index together with the inputs that were read under that root.
+func (b inputBinding) openIndex(ws workspace.Workspace, notReady error) (*store.Store, error) {
+	st, now, err := workspace.OpenReadOnly(ws)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", notReady, err)
+	}
+
+	if now.State != workspace.IndexReady || now.Root != b.repoRoot {
+		_ = st.Close()
+
+		return nil, fmt.Errorf("%w: the index changed while planning; prepare again", b.stale)
+	}
+
+	return st, nil
+}
+
+// agentBlockers returns the safe blocker line of an agent executable
+// that is not on PATH, or nil. Only PATH is checked: running a
+// configured command, even with --version, could start a login flow or
+// spend money.
+func (b inputBinding) agentBlockers() []string {
+	if _, err := exec.LookPath(b.invocation.Argv[0]); err != nil {
+		return []string{distSafe(fmt.Sprintf("agent cli %q not found on PATH", b.invocation.Argv[0]))}
+	}
+
+	return nil
 }
 
 // distCheckInputs checks the workspace identity and both bound files.
@@ -474,6 +477,33 @@ func distCheckInvocation(reg *integration.Registry, b inputBinding) error {
 	}
 
 	return nil
+}
+
+// distInvoker checks that the agent configuration still resolves to the
+// previewed command, then returns the invoker of the run. A nil reg is
+// the built-in registry. A nil inv builds a group command from the
+// previewed invocation, so a stop ends the whole agent process group.
+// blocked is the blocked error of the preview kind, and it wraps a build
+// error, because a run never starts a command that cannot be built.
+func distInvoker(reg *integration.Registry, b inputBinding, inv agent.Invoker, blocked error) (agent.Invoker, error) {
+	if reg == nil {
+		reg = integration.Builtin()
+	}
+
+	if err := distCheckInvocation(reg, b); err != nil {
+		return nil, err
+	}
+
+	if inv != nil {
+		return inv, nil
+	}
+
+	command, err := agent.NewGroupCommand(b.invocation)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", blocked, err)
+	}
+
+	return command, nil
 }
 
 // distLimit turns a request into the engine limit. A negative limit is

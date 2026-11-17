@@ -75,12 +75,22 @@ func validateClient(c Client) error {
 			c.ID, c.Edits.AdviceMechanism(), clientIDPattern)
 	}
 
+	// The exploration records of the firing log store this name too.
+	if c.Explores != nil && !clientIDPattern.MatchString(c.Explores.ExploreMechanism()) {
+		return fmt.Errorf("client %q: explore mechanism %q: must match %s",
+			c.ID, c.Explores.ExploreMechanism(), clientIDPattern)
+	}
+
 	if c.SetupOps.GateHook && !c.SetupOps.Hooks {
 		return fmt.Errorf("client %q: a gate hook is declared without hook installation", c.ID)
 	}
 
 	if c.SetupOps.ResetHook && !c.SetupOps.Hooks {
 		return fmt.Errorf("client %q: a reset hook is declared without hook installation", c.ID)
+	}
+
+	if err := validateLessonCheckOps(c); err != nil {
+		return err
 	}
 
 	// A declared operation without an adapter is a broken descriptor, not
@@ -143,10 +153,10 @@ func (r *Registry) Lookup(id string) (Client, bool) {
 	return r.ordered[i].clone(), true
 }
 
-// Select resolves user-supplied IDs into descriptors: duplicates
-// collapse, unknown IDs fail before any work, and the result follows
-// registration order regardless of the input order, so repeated runs
-// with reordered flags produce the same plan. The descriptors are copies.
+// Select resolves user-supplied IDs into descriptors. Duplicates
+// collapse, and an unknown ID fails before any work. The result follows
+// registration order, whatever the input order, so repeated runs with
+// reordered flags produce the same plan. The descriptors are copies.
 func (r *Registry) Select(ids []string) ([]Client, error) {
 	want := make(map[string]bool, len(ids))
 

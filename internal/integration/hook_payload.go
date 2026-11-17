@@ -1,6 +1,8 @@
 package integration
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -43,6 +45,60 @@ func ReadHookPayload(r io.Reader) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+// hookContextReply is the reply shape of a hook that adds context.
+// Claude Code and Codex add additionalContext to the context of the
+// agent and do not block the tool, so both clients use this shape.
+type hookContextReply struct {
+	HookSpecificOutput struct {
+		HookEventName     string `json:"hookEventName"`
+		AdditionalContext string `json:"additionalContext"`
+	} `json:"hookSpecificOutput"`
+}
+
+// encodeContextReply wraps text in the additionalContext reply to a hook
+// event. The edit advice and the completion findings of both clients,
+// and the explore advice of Claude Code, go through this one encoder, so
+// every reply keeps the same bytes.
+func encodeContextReply(event, text string) (HookReply, error) {
+	var reply hookContextReply
+
+	reply.HookSpecificOutput.HookEventName = event
+	reply.HookSpecificOutput.AdditionalContext = text
+
+	var out bytes.Buffer
+	if err := json.NewEncoder(&out).Encode(reply); err != nil {
+		return HookReply{}, err
+	}
+
+	return HookReply{Stdout: out.Bytes()}, nil
+}
+
+// malformedJSON returns ErrMalformedEvent with fixed text for a JSON
+// error of a hook payload. The text of a JSON error can quote a
+// character or a number of the payload. The guard prints a decoder error
+// in its deny text on stderr, and that text must never hold payload
+// text. So the text names the error class and the byte offset only, or
+// a field name of the decoder's own type.
+func malformedJSON(err error) error {
+	var (
+		syntax *json.SyntaxError
+		typed  *json.UnmarshalTypeError
+	)
+
+	switch {
+	case errors.As(err, &syntax):
+		return fmt.Errorf("%w: invalid JSON syntax at byte %d", ErrMalformedEvent, syntax.Offset)
+	case errors.As(err, &typed) && typed.Field != "":
+		// Field is the path of the decoder's own JSON field names. It
+		// never holds an object key of the payload.
+		return fmt.Errorf("%w: the field %s has the wrong JSON type", ErrMalformedEvent, typed.Field)
+	case errors.As(err, &typed):
+		return fmt.Errorf("%w: a value has the wrong JSON type", ErrMalformedEvent)
+	}
+
+	return fmt.Errorf("%w: the payload cannot be decoded as JSON", ErrMalformedEvent)
 }
 
 // receiverID builds the ID of a receiving context from the native

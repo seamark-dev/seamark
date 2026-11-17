@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/store"
 )
 
 // version is stamped by the Makefile via -ldflags.
@@ -19,12 +21,20 @@ var version = "dev"
 // options shared by all commands via persistent flags.
 type options struct {
 	workspace string
-	dbPath    string
+	// dbPath is --db in absolute form (store.AbsolutePath). Every rule and
+	// every open use it, so they judge one file.
+	dbPath string
+	// dbGiven is --db as the user wrote it, for a report that shows it.
+	dbGiven string
 }
 
 // New builds the root command tree.
 func New() *cobra.Command {
-	opts := &options{}
+	return newRoot(&options{})
+}
+
+// newRoot builds the root command tree around opts.
+func newRoot(opts *options) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "seamark",
 		Short: "An effects-and-history graph for your repository",
@@ -33,6 +43,9 @@ actually do: which files really change together, why the weird parts are
 weird, and which paths can reach production.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRun: func(*cobra.Command, []string) {
+			opts.dbGiven, opts.dbPath = opts.dbPath, store.AbsolutePath(opts.dbPath)
+		},
 	}
 	root.PersistentFlags().StringVarP(&opts.workspace, "workspace", "C", ".",
 		"workspace directory (defaults to the enclosing git repo of the cwd)")
@@ -59,12 +72,13 @@ func newVersionCmd() *cobra.Command {
 
 // Execute runs the CLI and returns a process exit code. Policy blocks get
 // a distinct code (2) so PreToolUse hooks and CI can tell "denied" from
-// "broken".
+// "broken". A lesson-check violation gets code 2 too, because CI must
+// tell an observed violation from an incomplete check (code 1).
 func Execute() int {
 	if err := New().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "seamark:", err)
 
-		if errors.Is(err, gate.ErrBlocked) {
+		if errors.Is(err, gate.ErrBlocked) || errors.Is(err, lessoncheck.ErrViolation) {
 			return 2
 		}
 

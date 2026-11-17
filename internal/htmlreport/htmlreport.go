@@ -55,6 +55,9 @@ type Report struct {
 	IndexState string
 	Generated  string
 	Stale      bool
+	// OtherVersion is true when another seamark version built the index.
+	// Stale is then true too, and the warning names that reason.
+	OtherVersion bool
 
 	Stats   []Stat
 	Sources string // the evidence mix behind every proposal
@@ -112,6 +115,10 @@ type Card struct {
 	Facts      string
 	Era        string
 	RegionsNow string
+	// ScopeChosen is the date that a person chose the stored regions, or
+	// empty. The card then reads RegionsNow as a suggestion and prints no
+	// command, because `--retarget` refuses that row.
+	ScopeChosen string
 	// Scope is the trigger-scope advisory sentence (RFC-004): the note
 	// and co-change history point outside the pin's regions, so
 	// delivery may miss the trigger site. Same Line() the ledger prints.
@@ -288,7 +295,7 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		regionsNow[p.ID] = recomputed
 
 		for _, f := range facts {
-			if line := f.BlockedLine(); line != "" {
+			if line := f.BlockedLine(p.Status); line != "" {
 				if blocked[p.ID] != "" {
 					blocked[p.ID] += "; "
 				}
@@ -306,7 +313,11 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 	}
 
 	state, _ := st.GetMeta(store.MetaIndexedState)
-	current := index.WorkspaceState(root)
+	current := index.WorkspaceState(root, st.Path())
+
+	// An index of another version can match the workspace and still lack
+	// facts, so it is stale too. A failed read is no evidence of it.
+	other, _ := index.OtherVersion(st)
 
 	r := &Report{
 		Repo:       repoName(root),
@@ -315,7 +326,8 @@ func Build(st *store.Store, root string, now time.Time) (*Report, error) {
 		// A report that outlives the terminal it was generated from
 		// must carry its own freshness warning: unreadable state is not
 		// evidence of staleness, so an unknown current state stays quiet.
-		Stale:            state != "" && current != "" && current != state,
+		Stale:            other || (state != "" && current != "" && current != state),
+		OtherVersion:     other,
 		Sources:          sourceMix(findings),
 		MapWidth:         mapWidth,
 		MapHeight:        mapHeight,
@@ -451,6 +463,10 @@ func (r *Report) buildCards(
 						card.RegionsNow = "*"
 					}
 				}
+			}
+
+			if p.Status == model.ProposalApplied && p.ScopeChosen > 0 {
+				card.ScopeChosen = model.ScopeChoiceDate(p.ScopeChosen)
 			}
 
 			// The passive-loop verdict; readings only contains measured
@@ -791,8 +807,8 @@ func sourceMix(findings []model.Finding) string {
 	return strings.Join(parts, " · ")
 }
 
-// clean strips control characters — including newlines — from text
-// that came from a reviewer, a commit, or a model. Escaping is the
+// clean strips control characters from text that came from a reviewer,
+// a commit, or a model, and puts the text on one line. Escaping is the
 // template's job; this is about text that would corrupt the page's
 // layout rather than its markup.
 func clean(s string) string {

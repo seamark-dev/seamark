@@ -2,10 +2,14 @@ package store
 
 import (
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +124,159 @@ func TestCoChangePartnersEitherOrientation(t *testing.T) {
 	partners, err := s.CoChangePartners("pkg/a/a.go", 4.0, 10)
 	require.NoError(t, err)
 	assert.Empty(t, partners, "minLift must filter chance-level pairs")
+}
+
+// partnerNames lists the partners of file at lift 1 or more, at most
+// limit of them, in read order.
+func partnerNames(t *testing.T, s *Store, file string, limit int) []string {
+	t.Helper()
+
+	partners, err := s.CoChangePartners(file, 1.0, limit)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(partners))
+	for _, p := range partners {
+		names = append(names, p.File)
+	}
+
+	return names
+}
+
+// storedGoneFiles returns the paths of the stored gone list of s. The
+// list holds a hex key for each path, so the helper decodes the keys.
+func storedGoneFiles(t *testing.T, s *Store) []string {
+	t.Helper()
+
+	stored, err := s.GetMeta(MetaGoneFiles)
+	require.NoError(t, err)
+
+	var keys []string
+	require.NoError(t, json.Unmarshal([]byte(stored), &keys))
+
+	paths := make([]string, 0, len(keys))
+
+	for _, k := range keys {
+		b, err := hex.DecodeString(k)
+		require.NoError(t, err)
+
+		paths = append(paths, string(b))
+	}
+
+	return paths
+}
+
+func TestCoChangeReadsLeaveOutGoneFiles(t *testing.T) {
+	s := openTestStore(t)
+
+	// The pair a-gone is the strongest, so a limit of one shows whether
+	// the filter runs before LIMIT. The pair a-c is below chance level,
+	// so it counts in no hub.
+	pairs := []model.CoChange{
+		{FileA: "a", FileB: "b", Together: 2, Total: 4, Lift: 1.5},
+		{FileA: "a", FileB: "c", Together: 1, Total: 6, Lift: 0.5},
+		{FileA: "a", FileB: "gone", Together: 5, Total: 6, Lift: 3.0},
+		{FileA: "b", FileB: "gone", Together: 3, Total: 5, Lift: 2.0},
+		{FileA: "gone", FileB: "old", Together: 4, Total: 5, Lift: 2.5},
+	}
+
+	seedPairs := func(gone []string) {
+		t.Helper()
+
+		require.NoError(t, s.Rebuild(func(tx *Tx) error {
+			for _, p := range pairs {
+				if err := tx.InsertCoChange(p); err != nil {
+					return err
+				}
+			}
+
+			if gone == nil {
+				return nil
+			}
+
+			return tx.SetGoneFiles(gone)
+		}))
+	}
+
+	seedPairs([]string{"old", "gone", "", "gone"})
+
+	assert.Equal(t, []string{"gone", "old"}, storedGoneFiles(t, s), "the list is sorted, distinct, and has no empty path")
+
+	assert.Equal(t, []string{"b"}, partnerNames(t, s, "a", 1), "limit counts live partners only")
+	assert.Equal(t, []string{"a", "b"}, partnerNames(t, s, "gone", 10), "a gone file keeps its live partners")
+	assert.Empty(t, partnerNames(t, s, "old", 10), "a gone file is never a partner")
+
+	hot, err := s.HotFiles(10)
+	require.NoError(t, err)
+	assert.Equal(t, []HotFile{
+		{File: "a", Partners: 1, MaxLift: 1.5},
+		{File: "b", Partners: 1, MaxLift: 1.5},
+	}, hot, "a hub counts live pairs only, and a gone file is no hub")
+
+	stats, err := s.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, len(pairs), stats.CoChanges, "the pair count says what the index stores")
+
+	// A Rebuild that writes pairs and no list leaves no list from the
+	// earlier run, so nothing is filtered.
+	seedPairs(nil)
+
+	stored, err := s.GetMeta(MetaGoneFiles)
+	require.NoError(t, err)
+	assert.Empty(t, stored)
+	assert.Equal(t, []string{"gone", "b"}, partnerNames(t, s, "a", 10), "no list reads as an empty list")
+
+	seedPairs([]string{})
+
+	stored, err = s.GetMeta(MetaGoneFiles)
+	require.NoError(t, err)
+	assert.Equal(t, "[]", stored)
+
+	// A damaged list fails both reads, so it never reads as "nothing is
+	// gone".
+	require.NoError(t, s.SetMeta(MetaGoneFiles, "not json"))
+
+	_, err = s.CoChangePartners("a", 1.0, 10)
+	require.Error(t, err)
+
+	_, err = s.HotFiles(10)
+	require.Error(t, err)
+}
+
+func TestGoneListKeepsThePathBytes(t *testing.T) {
+	s := openTestStore(t)
+
+	// History keeps the raw bytes of a path, and a name from an old Linux
+	// repository can hold bytes that are not valid UTF-8. JSON text
+	// replaces such bytes, so both paths would read as one wrong name.
+	e9, ff := "pkg/caf\xe9.go", "pkg/caf\xff.go"
+
+	require.NoError(t, s.Rebuild(func(tx *Tx) error {
+		for _, p := range []model.CoChange{
+			{FileA: "pkg/a.go", FileB: e9, Together: 3, Total: 7, Lift: 1.8},
+			{FileA: "pkg/a.go", FileB: ff, Together: 3, Total: 7, Lift: 1.8},
+			{FileA: "pkg/a.go", FileB: "pkg/live.go", Together: 3, Total: 7, Lift: 2.3},
+			{FileA: e9, FileB: "pkg/live.go", Together: 2, Total: 7, Lift: 1.6},
+			{FileA: ff, FileB: "pkg/live.go", Together: 2, Total: 7, Lift: 1.6},
+		} {
+			if err := tx.InsertCoChange(p); err != nil {
+				return err
+			}
+		}
+
+		return tx.SetGoneFiles([]string{ff, e9})
+	}))
+
+	assert.Equal(t, []string{"pkg/live.go"}, partnerNames(t, s, "pkg/a.go", 10), "a gone path is never a partner")
+	assert.Equal(t, []string{"pkg/a.go", "pkg/live.go"}, partnerNames(t, s, e9, 10), "a gone path keeps its live partners")
+
+	hot, err := s.HotFiles(10)
+	require.NoError(t, err)
+	assert.Equal(t, []HotFile{
+		{File: "pkg/a.go", Partners: 1, MaxLift: 2.3},
+		{File: "pkg/live.go", Partners: 1, MaxLift: 2.3},
+	}, hot, "a gone path is no hub")
+
+	assert.Equal(t, []string{e9, ff}, storedGoneFiles(t, s), "each stored path keeps its own bytes")
 }
 
 func TestDecisionsForFile(t *testing.T) {
@@ -320,6 +477,96 @@ func TestEvidenceHorizon(t *testing.T) {
 	// older stamp still bounds it.
 	require.NoError(t, s.SetMeta(MetaReviewsMinedAt, "3000"))
 	assert.Equal(t, int64(2000), s.EvidenceHorizon())
+
+	// A malformed stamp proves nothing, whichever channel holds it.
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "yesterday"))
+	assert.Zero(t, s.EvidenceHorizon())
+
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "2000"))
+	require.NoError(t, s.SetMeta(MetaReviewsMinedAt, "yesterday"))
+	assert.Zero(t, s.EvidenceHorizon())
+}
+
+func TestEvidenceHorizonWithoutAReviewRepository(t *testing.T) {
+	cases := []struct {
+		name    string
+		fixes   string
+		reviews string
+		record  string
+		want    int64
+	}{
+		{name: "record matches the fixes stamp", fixes: "2000", record: "2000", want: 2000},
+		{name: "an older reviews stamp does not count", fixes: "2000", reviews: "1500", record: "2000", want: 2000},
+		{name: "a newer reviews stamp does not count", fixes: "2000", reviews: "3000", record: "2000", want: 2000},
+		{name: "a stale record proves nothing", fixes: "2000", record: "1500", want: 0},
+		{name: "a record above the fixes stamp proves nothing", fixes: "2000", record: "2500", want: 0},
+		{name: "a record above the fixes stamp falls back to both stamps", fixes: "2000", reviews: "1500", record: "2500", want: 1500},
+		{name: "a record needs the fixes stamp", record: "2000", want: 0},
+		{name: "a malformed record falls back to both stamps", fixes: "2000", reviews: "1500", record: "x", want: 1500},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := openTestStore(t)
+
+			for key, value := range map[string]string{
+				MetaFixesMinedAt: c.fixes, MetaReviewsMinedAt: c.reviews, MetaNoReviewRepositoryAt: c.record,
+			} {
+				if value != "" {
+					require.NoError(t, s.SetMeta(key, value))
+				}
+			}
+
+			assert.Equal(t, c.want, s.EvidenceHorizon())
+		})
+	}
+}
+
+func TestMetaUnix(t *testing.T) {
+	s := openTestStore(t)
+
+	assert.Zero(t, s.MetaUnix(MetaFixesMinedAt), "an absent stamp reads as zero")
+
+	for value, want := range map[string]int64{
+		"1700000000":           1700000000,
+		"":                     0,
+		"yesterday":            0,
+		"12.5":                 0,
+		"99999999999999999999": 0, // out of range: ParseInt also returns MaxInt64
+	} {
+		require.NoError(t, s.SetMeta(MetaFixesMinedAt, value))
+		assert.Equal(t, want, s.MetaUnix(MetaFixesMinedAt), "value %q", value)
+	}
+
+	require.NoError(t, s.Close())
+	assert.Zero(t, s.MetaUnix(MetaFixesMinedAt), "a failed read reads as zero")
+}
+
+func TestLessonCount(t *testing.T) {
+	s := openTestStore(t)
+
+	n, err := s.LessonCount()
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	seed(t, s)
+	require.NoError(t, s.ReplaceLessons([]model.Lesson{
+		{ClusterKey: "first", Region: "pkg/a", Symptom: "first", Occurrences: 1},
+		{ClusterKey: "second", Region: "pkg/b", Symptom: "second", Occurrences: 2},
+	}, nil))
+
+	n, err = s.LessonCount()
+	require.NoError(t, err)
+
+	stats, err := s.Stats()
+	require.NoError(t, err)
+	assert.Equal(t, stats.Lessons, n, "the count agrees with Stats")
+	assert.Equal(t, 2, n)
+
+	require.NoError(t, s.Close())
+
+	_, err = s.LessonCount()
+	require.Error(t, err)
 }
 
 func TestRebuildReplacesDerivedTables(t *testing.T) {
@@ -466,9 +713,11 @@ func TestMetaKeysKeepTheStoredNames(t *testing.T) {
 	assert.Equal(t, []string{
 		"schema_version", "indexed_at", "repo_root", "indexed_state", "history_mined",
 		"index_summary", "parse_cache_version", "fixes_mined_at", "reviews_mined_at",
+		"no_review_repository_at",
 	}, []string{
 		MetaSchemaVersion, MetaIndexedAt, MetaRepoRoot, MetaIndexedState, MetaHistoryMined,
 		MetaIndexSummary, MetaParseCacheVersion, MetaFixesMinedAt, MetaReviewsMinedAt,
+		MetaNoReviewRepositoryAt,
 	})
 }
 
@@ -640,7 +889,7 @@ func TestReplaceFixFindingsTouchesOnlyFixSources(t *testing.T) {
 
 	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
 		{ID: 9, Path: "new.go", Body: "fresh", Source: model.SourceFixConventional},
-	}))
+	}, false))
 
 	got, err := s.AllFindings()
 	require.NoError(t, err)
@@ -662,7 +911,7 @@ func TestReplaceFixFindingsStampsInTheSameTransaction(t *testing.T) {
 
 	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
 		{ID: 1, Path: "a.go", Body: "fix", Source: model.SourceFixConventional},
-	}))
+	}, false))
 
 	stamp, err := s.GetMeta(MetaFixesMinedAt)
 	require.NoError(t, err)
@@ -678,7 +927,7 @@ func TestReplaceFixFindingsStampsInTheSameTransaction(t *testing.T) {
 	err = s.ReplaceFixFindings([]model.Finding{
 		{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
 		{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
-	})
+	}, false)
 	require.Error(t, err)
 
 	stamp, err = s.GetMeta(MetaFixesMinedAt)
@@ -689,6 +938,97 @@ func TestReplaceFixFindingsStampsInTheSameTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, int64(1), got[0].ID, "a rolled-back swap keeps the old rows")
+
+	record, err := s.GetMeta(MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+	assert.Empty(t, record, "a write for a GitHub origin leaves no record")
+
+	// A write for an origin that names no GitHub repository sets the
+	// record to the fixes stamp, so the two values always match.
+	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+		{ID: 3, Path: "c.go", Body: "fix", Source: model.SourceFixConventional},
+	}, true))
+
+	stamp, err = s.GetMeta(MetaFixesMinedAt)
+	require.NoError(t, err)
+
+	record, err = s.GetMeta(MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+	assert.NotEqual(t, "1000", stamp)
+	assert.Equal(t, stamp, record, "the record holds the fixes stamp of its write")
+
+	// A failed swap keeps the old stamp and the old record together.
+	require.NoError(t, s.SetMeta(MetaFixesMinedAt, "1000"))
+	require.NoError(t, s.SetMeta(MetaNoReviewRepositoryAt, "1000"))
+
+	for _, noReviewRepository := range []bool{false, true} {
+		err = s.ReplaceFixFindings([]model.Finding{
+			{ID: 4, Path: "d.go", Body: "fix", Source: model.SourceFixConventional},
+			{ID: 4, Path: "d.go", Body: "fix", Source: model.SourceFixConventional},
+		}, noReviewRepository)
+		require.Error(t, err)
+
+		stamp, err = s.GetMeta(MetaFixesMinedAt)
+		require.NoError(t, err)
+
+		record, err = s.GetMeta(MetaNoReviewRepositoryAt)
+		require.NoError(t, err)
+		assert.Equal(t, "1000", stamp, "noReviewRepository=%v", noReviewRepository)
+		assert.Equal(t, "1000", record, "noReviewRepository=%v", noReviewRepository)
+	}
+
+	// A later write for a GitHub origin deletes the record.
+	require.NoError(t, s.ReplaceFixFindings(nil, false))
+
+	record, err = s.GetMeta(MetaNoReviewRepositoryAt)
+	require.NoError(t, err)
+	assert.Empty(t, record, "a GitHub origin clears the record")
+}
+
+func TestReplaceFixFindingsReportsAFailedRecordWrite(t *testing.T) {
+	for _, noReviewRepository := range []bool{false, true} {
+		t.Run(fmt.Sprintf("noReviewRepository=%v", noReviewRepository), func(t *testing.T) {
+			s := openTestStore(t)
+
+			require.NoError(t, s.ReplaceFixFindings([]model.Finding{
+				{ID: 1, Path: "a.go", Body: "fix", Source: model.SourceFixConventional},
+			}, true))
+			require.NoError(t, s.SetMeta(MetaFixesMinedAt, "1000"))
+			require.NoError(t, s.SetMeta(MetaNoReviewRepositoryAt, "1000"))
+
+			// Only the record statement fails, so the rows and the fixes
+			// stamp succeed before it. The test then shows that the write
+			// reports the error and rolls back the earlier statements.
+			for _, op := range []string{"INSERT", "UPDATE", "DELETE"} {
+				row := "NEW"
+				if op == "DELETE" {
+					row = "OLD"
+				}
+
+				execSQL(t, s, fmt.Sprintf(`CREATE TRIGGER fail_record_%s BEFORE %s ON meta
+					WHEN %s.key = '%s' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`,
+					strings.ToLower(op), op, row, MetaNoReviewRepositoryAt))
+			}
+
+			err := s.ReplaceFixFindings([]model.Finding{
+				{ID: 2, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
+			}, noReviewRepository)
+			require.ErrorContains(t, err, "injected failure")
+
+			stamp, err := s.GetMeta(MetaFixesMinedAt)
+			require.NoError(t, err)
+
+			record, err := s.GetMeta(MetaNoReviewRepositoryAt)
+			require.NoError(t, err)
+			assert.Equal(t, "1000", stamp, "a failed record write keeps the old stamp")
+			assert.Equal(t, "1000", record, "a failed record write keeps the old record")
+
+			got, err := s.AllFindings()
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, int64(1), got[0].ID, "a failed record write keeps the old rows")
+		})
+	}
 }
 
 func TestSaveDistilledGroupIsAtomic(t *testing.T) {
@@ -751,7 +1091,7 @@ func TestMigrationAddsFindingSource(t *testing.T) {
 	// And the upgraded table accepts the new lifecycle.
 	require.NoError(t, s.ReplaceFixFindings([]model.Finding{
 		{ID: 99, Path: "b.go", Body: "fix", Source: model.SourceFixConventional},
-	}))
+	}, false))
 
 	got, err = s.AllFindings()
 	require.NoError(t, err)
@@ -929,4 +1269,17 @@ func TestFindingsByIDsSpansChunks(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, got, 1203)
 	assert.Equal(t, "b", got[1203].Body)
+}
+
+// TestInsertProposalRefusesAnUnknownSource proves that the one insert path
+// keeps the source in the closed set, because the finding cleanup filters on it.
+func TestInsertProposalRefusesAnUnknownSource(t *testing.T) {
+	s := openTestStore(t)
+
+	err := s.InsertProposal(&model.Proposal{
+		Signature: "s", Rule: "r", Note: "n", Status: model.ProposalProposed, Source: "chat",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown source "chat"`)
+	assert.Empty(t, allProposals(t, s))
 }

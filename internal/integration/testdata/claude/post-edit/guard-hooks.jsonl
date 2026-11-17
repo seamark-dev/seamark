@@ -1,0 +1,16 @@
+{"run":1,"hook":"baseline","event":"PreToolUse","tool":"Edit","status":0,"ms":118}
+{"run":1,"hook":"post-edit","event":"PostToolUse","tool":"Edit","status":0,"ms":15}
+{"run":1,"hook":"verify","event":"PostToolUse","tool":"Edit","status":0,"ms":96}
+{"run":2,"hook":"baseline","event":"PreToolUse","tool":"Edit","status":0,"ms":118}
+{"run":2,"hook":"post-edit","event":"PostToolUse","tool":"Edit","status":0,"ms":15}
+{"run":2,"hook":"verify","event":"PostToolUse","tool":"Edit","status":0,"ms":97}
+{"run":3,"hook":"baseline","event":"PreToolUse","tool":"Write","status":0,"ms":131}
+{"run":3,"hook":"post-edit","event":"PostToolUse","tool":"Write","status":0,"ms":12211}
+{"run":4,"hook":"baseline","event":"PreToolUse","tool":"Edit","status":0,"ms":121}
+{"run":4,"hook":"post-edit","event":"PostToolUse","tool":"Edit","status":0,"ms":12150}
+{"run":5,"hook":"baseline","event":"PreToolUse","tool":"Write","status":0,"ms":121}
+{"run":5,"hook":"post-edit","event":"PostToolUse","tool":"Write","status":0,"ms":12206}
+{"run":6,"hook":"baseline","event":"PreToolUse","tool":"Edit","status":0,"ms":172}
+{"run":6,"hook":"post-edit","event":"PostToolUse","tool":"Edit","status":0,"ms":12216}
+{"run":7,"hook":"baseline","event":"PreToolUse","tool":"Write","status":0,"ms":130}
+{"run":7,"hook":"post-edit","note":"2026-11-17T21:01:57.173Z [DEBUG] Hooks: PostToolUse:Write [sh /opt/instrumentation/post-edit.sh] timed out after 15000ms (15035ms)"}

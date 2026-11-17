@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -33,6 +34,10 @@ func newInitCmd(opts *options) *cobra.Command {
 		skillsOpt    skillsFlag
 		approveTools bool
 		clients      []string
+		// lessonChecks and lessonExploration are the two lesson-check
+		// flags; empty keeps the installed choice.
+		lessonChecks      string
+		lessonExploration string
 	)
 
 	cmd := &cobra.Command{
@@ -63,7 +68,9 @@ Enforcement is an explicit opt-in:
   seamark init --gate-mode enforce
 
 That bakes --enforce into the hook: deny/require_approval verdicts exit 2
-(blocking the agent's command) and the gate's own failures fail closed.
+(blocking the agent's command), and so do the gate's own failures. The
+gate cannot block a command when the client stops the hook at its
+timeout (setup writes ` + strconv.Itoa(hooks.GateTimeout) + ` seconds) or cannot start the seamark binary.
 A fresh init also scaffolds .seamark/policy.yaml with the matching mode;
 an existing policy file is never modified.
 
@@ -103,6 +110,19 @@ not support yet is reported, not skipped silently. Without --client,
 init behaves exactly as before. --client takes a bare --skills only:
 --skills=codex and the other values belong to the form without --client.
 
+--lesson-checks off|check|enforce installs, switches, or removes the
+lesson-check hooks of the hooked clients: check records a baseline
+before each covered edit and verifies the result after it; enforce also
+denies a covered violation before the write. --lesson-exploration on|off
+installs or removes the advice hook on a structured Read; Claude Code
+has one, and a client without it gets a note. Without these
+flags init keeps the installed choice and installs nothing new. Enforce
+needs a valid .seamark/lessons.yaml and a client with a pre-write guard;
+otherwise init stops before any write. The flags never change the gate
+mode. To roll back, run:
+
+  seamark init --lesson-checks off --lesson-exploration off
+
 Use --print to preview every change without writing anything.`,
 		// init takes no positional arguments. The one likely mistake,
 		// "--skills codex", parses as the bare flag plus a stray word
@@ -119,6 +139,10 @@ Use --print to preview every change without writing anything.`,
 			if gateMode != "" && gateMode != gateModeWarn && gateMode != gateModeEnforce {
 				return fmt.Errorf("init: --gate-mode must be %s or %s, got %q",
 					gateModeWarn, gateModeEnforce, gateMode)
+			}
+
+			if err := lessonCheckFlagError(cmd, lessonChecks, lessonExploration); err != nil {
+				return err
 			}
 
 			if skillsOpt.mode != "" && !slices.Contains(skills.Modes, skillsOpt.mode) {
@@ -139,15 +163,16 @@ Use --print to preview every change without writing anything.`,
 			}
 
 			run := initRun{
-				w: cmd.OutOrStdout(), root: root, bin: scaffold.BinaryPath(),
+				w: cmd.OutOrStdout(), root: root, bin: hooks.BinaryPath(),
 				gateMode: gateMode, printOnly: printOnly, approveTools: approveTools,
+				lessonChecks: lessonChecks, lessonExploration: lessonExploration,
 			}
 
 			if len(clients) > 0 {
 				return runInitClients(run, clients, skillsOpt.requested)
 			}
 
-			return runInit(run.w, run.root, run.bin, gateMode, printOnly, skillsOpt.legacyMode(), approveTools)
+			return runInitLegacy(run, skillsOpt.legacyMode())
 		},
 	}
 
@@ -165,6 +190,11 @@ Use --print to preview every change without writing anything.`,
 	cmd.Flags().BoolVar(&approveTools, "approve-tools", false,
 		"let the seamark MCP tools run without prompts: Claude Code allow rules in .claude/settings.json, "+
 			"Codex per-tool approvals in .codex/config.toml (additive; never removes a setting)")
+	cmd.Flags().StringVar(&lessonChecks, "lesson-checks", "",
+		"lesson-check hooks: off (remove them), check (baseline before and verification after each covered edit), "+
+			"or enforce (also deny a covered violation before the write); omitted keeps the installed choice")
+	cmd.Flags().StringVar(&lessonExploration, "lesson-exploration", "",
+		"exploration advice hook on a structured Read: on or off; omitted keeps the installed choice")
 	cmd.Flags().StringArrayVar(&clients, "client", nil,
 		"set up this agent only ("+clientSupport(integration.Builtin())+"); repeat the flag for several. "+
 			"Omitted keeps the detection init always used")
@@ -256,19 +286,49 @@ type initRun struct {
 	gateMode     string
 	printOnly    bool
 	approveTools bool
+	// lessonChecks and lessonExploration are the lesson-check flags;
+	// empty keeps the installed choice.
+	lessonChecks      string
+	lessonExploration string
 }
 
-// runInit is an init run without --client. skillsMode is one of
-// skills.Modes, or empty for "not requested". The run is translated
+// lessonCheckFlagError checks the values of the two lesson-check flags.
+// An explicit empty value is an error too: the empty intent means "keep
+// the installed choice", and a script that passes an unset variable
+// must learn that its flag did nothing.
+func lessonCheckFlagError(cmd *cobra.Command, checks, exploration string) error {
+	switch {
+	case cmd.Flags().Changed("lesson-checks") &&
+		!slices.Contains([]string{hooks.LessonChecksOff, hooks.LessonChecksCheck, hooks.LessonChecksEnforce}, checks):
+		return fmt.Errorf("--lesson-checks takes off, check, or enforce, got %q", checks)
+	case cmd.Flags().Changed("lesson-exploration") &&
+		!slices.Contains([]string{hooks.LessonExplorationOff, hooks.LessonExplorationOn}, exploration):
+		return fmt.Errorf("--lesson-exploration takes off or on, got %q", exploration)
+	}
+
+	return nil
+}
+
+// runInit is an init run without --client and without a lesson-check
+// flag. skillsMode is one of skills.Modes, or empty for "not
+// requested".
+func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
+	return runInitLegacy(initRun{w: w, root: root, bin: bin, gateMode: gateMode, printOnly: printOnly, approveTools: approveTools},
+		skillsMode)
+}
+
+// runInitLegacy is an init run without --client. The run is translated
 // into the per-client intent it always had and then takes the same path
 // as an explicit selection, so there is one implementation of setup.
-func runInit(w io.Writer, root, bin, gateMode string, printOnly bool, skillsMode string, approveTools bool) error {
-	setups, err := integration.LegacySetups(root, skillsMode, approveTools, gateMode)
+// The lesson-check flags reach the clients that get hooks, and in this
+// form that is Claude Code only.
+func runInitLegacy(run initRun, skillsMode string) error {
+	setups, err := integration.LegacySetups(run.root, skillsMode, run.approveTools, run.gateMode)
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
 
-	run := initRun{w: w, root: root, bin: bin, gateMode: gateMode, printOnly: printOnly, approveTools: approveTools}
+	setups = integration.WithLessonChecks(setups, run.lessonChecks, run.lessonExploration)
 	reg := integration.Builtin()
 
 	return applyInit(run, reg, setups, legacyNotes{reg: reg, skillsRequested: skillsMode != ""})
@@ -282,6 +342,8 @@ func runInitClients(run initRun, clients []string, installSkills bool) error {
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
+
+	setups = integration.WithLessonChecks(setups, run.lessonChecks, run.lessonExploration)
 
 	return applyInit(run, reg, setups, selectedNotes{reg: reg, skillsRequested: installSkills})
 }
@@ -336,7 +398,7 @@ func applyInit(run initRun, reg *integration.Registry, setups []integration.Clie
 
 		printNoGateHook(w, run.root, gateMode)
 	} else {
-		printGateLine(w, run.root, gateMode, plan.GateHooks)
+		printGateLine(w, run.root, gateMode, run.gateMode != "", plan.GateHooks, plan.UncheckedGateSources, writesPolicy(plan))
 
 		// The gate line describes the clients with a gate hook. A selected
 		// client without one must not look covered by it.
@@ -464,9 +526,31 @@ func printFindings(w io.Writer, findings []integration.Finding, showInfo bool) {
 // another source, such as the user's local settings file, or a wrapped
 // command in the shared file. Setup leaves that hook as it is, so it
 // still runs: when it enforces, the run blocks whatever the mode of the
-// hook setup manages.
-func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.GateHook) {
+// hook setup manages. A definition that may run a gate can block too,
+// so a warn line beside one claims only that the gate hooks that
+// certainly run block nothing.
+//
+// A run can also leave a source unchecked: init without --client never
+// reads the user's local settings file for gate hooks. The line then
+// names that file and the command that checks it, because a hook there
+// can block or stop blocking without this run knowing.
+//
+// requested is true when the user typed --gate-mode. Without the flag,
+// the mode of the run comes from the installed hooks. A line that says
+// where the flag went would then name a flag that the user never gave.
+//
+// policyNew is true when this run writes .seamark/policy.yaml. The line
+// then calls the file new, not kept: the file carries the mode of this
+// run, not an earlier choice of the user.
+func printGateLine(w io.Writer, root, gateMode string, requested bool, gateHooks []integration.GateHook, unchecked []string,
+	policyNew bool,
+) {
 	policyMode, policyErr := policyFileMode(root, gateMode)
+
+	policyWord := "kept"
+	if policyNew {
+		policyWord = "new"
+	}
 
 	// The summary comes from the hooks the run leaves, never from the
 	// mode it asked for: a hook setup does not manage keeps its own mode,
@@ -475,12 +559,30 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 	summary := integration.SummarizeGateHooks(gateHooks)
 
 	var (
-		managed        *integration.GateHook
+		managed        *integration.GateHook // the first managed hook that runs
 		managedEnforce bool
+		managedOff     bool     // a managed hook sits in a client whose hooks are off
+		offEnforce     bool     // a managed hook that is off carries --enforce
 		enforcing      []string // the unmanaged hooks that enforce
 	)
 
 	for i, hook := range gateHooks {
+		// A hook that the client does not run describes nothing that
+		// happens now. When another hook runs, the note below names each
+		// such hook by its path. When no other hook runs, the off line
+		// names no path, so an unmanaged hook that is off gets no line.
+		// Only a managed hook gets its mode, because setup knows what it
+		// does once the hooks run. The sentences about the run still must
+		// not deny that hook.
+		if hook.HooksOff {
+			if hook.Managed {
+				managedOff = true
+				offEnforce = offEnforce || hook.Mode == gateModeEnforce
+			}
+
+			continue
+		}
+
 		if hook.Managed && managed == nil {
 			managed = &gateHooks[i]
 		}
@@ -496,13 +598,35 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		}
 	}
 
-	// What the managed hook does beside an unmanaged enforcing one.
+	// What the managed hook does beside an unmanaged enforcing one. Setup
+	// can install a managed hook in a client whose hooks are off. That hook
+	// exists, so the line says that it does not run, not that it is absent.
 	beside, besideSentence := "; setup installed no gate hook of its own beside it", "Setup installed no gate hook of its own beside it"
-	if managed != nil {
+
+	switch {
+	case managed != nil:
 		beside, besideSentence = ", although the hook setup manages is in warn mode", "The hook setup manages is in warn mode"
+	case managedOff:
+		beside, besideSentence = "; the hook setup manages does not run while the hooks are off",
+			"The hook setup manages does not run while the hooks are off"
 	}
 
+	reach := enforceReach(requested, offEnforce)
+
 	switch effect := summary.Effect(); {
+	case effect == integration.GateEffectNone && len(summary.HooksOff) > 0:
+		// Every gate hook of the run sits in a client whose hooks are off.
+		// A mode line would claim verdicts that never come, so the line
+		// says what is true now and what each managed hook does later.
+		fmt.Fprintf(w, "  gate    off — no gate hook runs while the hooks are off (see the note above), so no shell command gets a verdict\n")
+
+		for _, line := range offManagedLines(gateHooks, false) {
+			fmt.Fprintf(w, "          %s\n", line)
+		}
+
+		if policyErr != nil {
+			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)
+		}
 	case effect == integration.GateEffectNone:
 		// A gated client whose gate hook never fires: an owned entry under
 		// another matcher, which setup does not rewrite. The coverage
@@ -518,8 +642,7 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		// The plan never holds an unreadable document, so the possible
 		// definitions are the whole reason.
 		fmt.Fprintf(w, "  gate    unknown — %s holds a definition that may run a gate hook, and setup cannot tell what\n"+
-			"          it does; run the seamark gate directly in that definition, or remove it and re-run\n",
-			strings.Join(summary.Possible, ", "))
+			"          it does; %s\n", strings.Join(summary.Possible, ", "), possibleRoute(summary))
 
 		if policyErr != nil {
 			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)
@@ -534,16 +657,25 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 			"          edits a gate hook it does not manage; remove that hook to stop blocking\n", strings.Join(enforcing, ", "), beside)
 
 		if policyMode == gateModeEnforce {
-			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml also sets mode: enforce, so every gate hook blocks\n"+
-				"          too; both must change to stop blocking\n")
+			fmt.Fprintf(w, "          note: the %s .seamark/policy.yaml also sets mode: enforce, so every gate hook blocks\n"+
+				"          too; both must change to stop blocking\n", policyWord)
 		}
 	case effect == integration.GateEffectReportOnly:
-		// Every gate hook of the run discards its exit status. No mode and
-		// no policy makes it block, so the line must not name one.
-		fmt.Fprintf(w, "  gate    report-only — the gate hook in %s discards its exit status: verdicts\n"+
+		// Every gate hook of the run discards its exit status or runs in
+		// the background. No mode and no policy makes it block, so the line
+		// must not name one. The fix names the cause of each hook.
+		fix := "run the gate last in that hook"
+		if len(summary.Background) > 0 {
+			fix = "remove the background key from that hook"
+			if len(summary.Background) < len(summary.ReportOnly) {
+				fix = "run the gate last and in the foreground in that hook"
+			}
+		}
+
+		fmt.Fprintf(w, "  gate    report-only — the gate hook in %s %s: verdicts\n"+
 			"          are reported, nothing blocks, whatever --enforce or .seamark/policy.yaml says. Setup never\n"+
-			"          edits a gate hook it does not manage; run the gate last in that hook, or remove it and re-run\n",
-			strings.Join(summary.ReportOnly, ", "))
+			"          edits a gate hook it does not manage; %s, or remove it and re-run\n",
+			strings.Join(summary.ReportOnly, ", "), summary.ReportOnlyCause(summary.ReportOnly), fix)
 
 		if policyErr != nil {
 			fmt.Fprintf(w, "          note: .seamark/policy.yaml also failed to load (%v)\n", policyErr)
@@ -555,22 +687,69 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 		fmt.Fprintf(w, "  gate    warn — .seamark/policy.yaml failed to load (%v);\n"+
 			"          the hook reports the error and fails open\n", policyErr)
 	case managedEnforce:
-		fmt.Fprintf(w, "  gate    enforce — deny/require_approval verdicts exit 2 and block; gate failures fail closed\n")
+		// The gate's own failures exit 2 only while the gate process runs.
+		// The line names the two cases where it never returns, because
+		// then the client's own rule decides and the gate cannot block.
+		fmt.Fprintf(w, "  gate    enforce — deny/require_approval verdicts exit 2 and block; so do the gate's own failures.\n"+
+			"          The gate cannot block a command when the client stops the hook at its timeout (setup\n"+
+			"          writes %d s) or cannot start the seamark binary\n", hooks.GateTimeout)
 
 		if policyMode != gateModeEnforce {
-			fmt.Fprintf(w, "          note: the kept .seamark/policy.yaml says mode: %s — it still governs plain\n"+
-				"          `seamark gate` and `seamark check` runs; only a gate hook with --enforce blocks\n", policyMode)
+			fmt.Fprintf(w, "          note: the %s .seamark/policy.yaml says mode: %s — it still governs plain\n"+
+				"          `seamark gate` and `seamark check` runs; only a gate hook with --enforce blocks\n", policyWord, policyMode)
 		}
 	case policyMode == gateModeEnforce:
-		fmt.Fprintf(w, "  gate    enforce — the kept .seamark/policy.yaml sets mode: enforce and the hook\n"+
+		fmt.Fprintf(w, "  gate    enforce — the %s .seamark/policy.yaml sets mode: enforce and the hook\n"+
 			"          follows it: deny/require_approval verdicts exit 2 and block; edit policy.yaml\n"+
-			"          to stop blocking\n")
+			"          to stop blocking\n", policyWord)
+	case gateMode == gateModeEnforce && len(summary.Possible) > 0:
+		// A definition that may run a gate can block, for example a
+		// filtered one that enforces. So the line limits its claim to the
+		// gate hooks that certainly run. The note below names the
+		// definition.
+		line := "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing"
+		if reach != "" {
+			line += ";\n          " + reach
+		}
+
+		fmt.Fprintln(w, line)
 	case gateMode == gateModeEnforce:
-		// The run asked for enforce and no hook of the run carries it. The
-		// notes below name each hook and why.
-		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks; --gate-mode enforce reached no gate hook of this run\n")
+		// The mode of the run is enforce, and no gate hook that runs
+		// carries it. The notes below name each hook and why.
+		line := "  gate    warn — verdicts are reported, nothing blocks"
+		if reach != "" {
+			line += "; " + reach
+		}
+
+		fmt.Fprintln(w, line)
+	case len(summary.Possible) > 0:
+		fmt.Fprintf(w, "  gate    warn — verdicts are reported; the gate hooks that certainly run block nothing"+
+			" (opt in: --gate-mode enforce)\n")
 	default:
 		fmt.Fprintf(w, "  gate    warn — verdicts are reported, nothing blocks (opt in: --gate-mode enforce)\n")
+	}
+
+	// The note follows every gate line, also a blocking one: a local copy
+	// of the managed handler in the background makes the managed gate
+	// report-only. The path is an adapter constant, so it needs no scrub.
+	if len(unchecked) > 0 {
+		fmt.Fprintf(w, "          this run does not check %s for gate hooks, so this line leaves\n"+
+			"          them out; `seamark doctor` checks that file\n", strings.Join(unchecked, ", "))
+	}
+
+	// The gate line above describes the hooks that run. A hook that the
+	// client does not run must not look covered by it. The paths are
+	// adapter constants, so they need no scrub.
+	if len(summary.HooksOff) > 0 && summary.Effect() > integration.GateEffectNone {
+		fmt.Fprintf(w, "  note    the gate hook in %s does not run while the hooks are off (see the note above);"+
+			" the gate line covers the other hooks\n", strings.Join(summary.HooksOff, ", "))
+
+		// The gate line leaves out the managed hook that is off, so the
+		// note states its mode. Another hook runs, so each line names the
+		// path of the hook that is off.
+		for _, line := range offManagedLines(gateHooks, true) {
+			fmt.Fprintf(w, "          %s\n", line)
+		}
 	}
 
 	// The unknown line above already names the possible definitions.
@@ -580,6 +759,82 @@ func printGateLine(w io.Writer, root, gateMode string, gateHooks []integration.G
 	}
 
 	printGateModeNotes(w, gateMode, gateHooks)
+}
+
+// offManagedLines say what each managed gate hook that is off does once
+// its client runs the hooks again. One such hook gets one line without
+// its path, unless named is true. Several get one line each with the
+// path, because the modes of the clients can differ. One sentence would
+// give the mode of one hook to all of them. The note beside a gate line
+// sets named, because another hook runs there. "The gate hook setup
+// manages" could then read as a hook that runs. The result is empty when
+// no managed hook is off. The paths are adapter constants, so they need
+// no scrub.
+func offManagedLines(gateHooks []integration.GateHook, named bool) []string {
+	var off []integration.GateHook
+
+	for _, hook := range gateHooks {
+		if hook.HooksOff && hook.Managed {
+			off = append(off, hook)
+		}
+	}
+
+	if len(off) == 1 && !named {
+		return []string{"the gate hook setup manages " + offManagedEffect(off[0].Mode)}
+	}
+
+	lines := make([]string, 0, len(off))
+	for _, hook := range off {
+		lines = append(lines, "the managed gate hook in "+hook.Path+" "+offManagedEffect(hook.Mode))
+	}
+
+	return lines
+}
+
+// offManagedEffect says what a managed gate hook in this mode does once
+// its client runs the hooks again.
+func offManagedEffect(mode string) string {
+	switch mode {
+	case gateModeEnforce:
+		return "carries --enforce: its deny/require_approval verdicts block once the hooks run"
+	case integration.GateModeReportOnly:
+		return "stays report-only once the hooks run"
+	default:
+		return "follows .seamark/policy.yaml once the hooks run"
+	}
+}
+
+// enforceReach says where a typed --gate-mode enforce went, for a run
+// whose gate hooks that run carry no --enforce. It is empty when the
+// user typed no --gate-mode, because the line must not name a flag that
+// the user never gave. A managed hook that is off can carry the flag.
+// The sentence then limits its claim to the hooks that run, and a note
+// names the hook that is off.
+func enforceReach(requested, offEnforce bool) string {
+	switch {
+	case !requested:
+		return ""
+	case offEnforce:
+		return "--gate-mode enforce reached no gate hook that runs"
+	default:
+		return "--gate-mode enforce reached no gate hook of this run"
+	}
+}
+
+// possibleRoute names the route for the definitions that may run a gate
+// hook, in the words that doctor prints for each one. A filtered handler
+// already runs the gate directly, so it gets the route that removes the
+// filter. A run with both kinds names both routes.
+func possibleRoute(summary integration.GateSummary) string {
+	switch {
+	case summary.FilteredPossible == 0:
+		return integration.UncertainHookRoute
+	case summary.UnfilteredPossible == 0:
+		return integration.FilteredHookRoute
+	default:
+		return "for a definition with an `if` field, " + integration.FilteredHookRoute + ";\n" +
+			"          for another, " + integration.UncertainHookRoute
+	}
 }
 
 // printGateModeNotes names each gate hook that runs without --enforce
@@ -596,9 +851,9 @@ func printGateModeNotes(w io.Writer, gateMode string, gateHooks []integration.Ga
 
 	for _, hook := range gateHooks {
 		// The note above names a hook that may run; its mode is not known
-		// to apply.
+		// to apply. A hook that the client does not run has its own note.
 		switch {
-		case hook.Mode != gateModeWarn || hook.Uncertain:
+		case hook.Mode != gateModeWarn || hook.Uncertain || hook.HooksOff:
 		case hook.Managed:
 			fmt.Fprintf(w, "  note    %s runs its gate hook without --enforce: that hook follows .seamark/policy.yaml\n"+
 				"          instead; re-run with --gate-mode enforce to bake the flag into every selected client's gate hook\n",
@@ -625,6 +880,15 @@ func printNoGateHook(w io.Writer, root, gateMode string) {
 
 	fmt.Fprintf(w, "  gate    no gate hook for the selected clients — .seamark/policy.yaml (mode: %s) governs\n"+
 		"          plain `seamark gate` and `seamark check` runs\n", policyMode)
+}
+
+// writesPolicy reports whether the plan writes .seamark/policy.yaml. The
+// plan keeps an existing starter file, so a write means that the file is
+// new in this run. A preview plans the same write.
+func writesPolicy(plan *integration.SetupPlan) bool {
+	return slices.ContainsFunc(plan.Writes, func(fw integration.FileWrite) bool {
+		return fw.Path == ".seamark/policy.yaml"
+	})
 }
 
 // policyFileMode reads the mode of .seamark/policy.yaml through the real

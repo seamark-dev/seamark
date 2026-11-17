@@ -136,11 +136,18 @@ type PlanBytes struct {
 	Before, After []byte
 }
 
-// PinWriteScope names every write that distill.write governs (spec R-5).
-// The proposal apply, the Pins retarget and prune, and the pin authoring
-// of Lessons › Pins read the same gate. Every text that says what the
-// gate governs uses this phrase, so no text names a part of the scope.
-const PinWriteScope = "apply, retarget, prune, and new pins, pin edits, and pin removals in Lessons › Pins"
+// PinWriteScope names every console write that distill.write governs.
+// The proposal apply, the Pins retarget and prune, the pin authoring, and
+// the check definitions of Lessons › Pins read the same gate. Every text
+// that says what the gate governs uses this phrase, so no text names a
+// part of the scope.
+const PinWriteScope = "apply, retarget, prune, and new pins, pin edits, check definitions, and pin removals in Lessons › Pins"
+
+// PinWriteCommands names every CLI command that distill.write governs.
+// The CLI writes through the same engines as the console. The setting
+// must name every route that refuses while it is off, so both notes of
+// the setting use this list.
+const PinWriteCommands = "seamark lessons --apply, --prune, --retarget, and --set-mode"
 
 // Activation text: when a field takes effect (spec R-13). The pin-write
 // gate names its whole scope, because every pin write reads the gate.
@@ -581,12 +588,12 @@ func setScalar(doc *yamledit.Doc, section, key string, value any) ([]byte, error
 	}
 
 	if sk, _, _ := doc.Section(section); sk == nil {
-		return appendSection(doc, section, []string{key + ": " + text}), nil
+		return doc.AppendSection(section, []string{key + ": " + text}), nil
 	}
 
 	k, v := doc.Child(section, key)
 	if k == nil {
-		return insertChild(doc, section, []string{key + ": " + text}), nil
+		return doc.InsertChild(section, []string{key + ": " + text}), nil
 	}
 
 	if err := singleLine(doc, section, key, k, v); err != nil {
@@ -664,12 +671,12 @@ func setList(doc *yamledit.Doc, section, key string, items []string) ([]byte, er
 	}
 
 	if sk, _, _ := doc.Section(section); sk == nil {
-		return appendSection(doc, section, fresh()), nil
+		return doc.AppendSection(section, fresh()), nil
 	}
 
 	k, v := doc.Child(section, key)
 	if k == nil {
-		return insertChild(doc, section, fresh()), nil
+		return doc.InsertChild(section, fresh()), nil
 	}
 
 	field := section + "." + key
@@ -811,66 +818,6 @@ func listShape(doc *yamledit.Doc, field string, k, v *yaml.Node, end int) error 
 	}
 
 	return nil
-}
-
-// indentAll prefixes each line with n spaces.
-func indentAll(lines []string, n int) []string {
-	out := make([]string, 0, len(lines))
-
-	for _, l := range lines {
-		out = append(out, spaces(n)+l)
-	}
-
-	return out
-}
-
-// insertChild adds child lines at the end of an existing section. The
-// lines get the indentation of the other children, or two spaces more
-// than the section key. A null token on the section line ("agent: ~")
-// goes away, because a mapping follows now.
-func insertChild(doc *yamledit.Doc, section string, child []string) []byte {
-	sk, sv, idx := doc.Section(section)
-	lines := slices.Clone(doc.Lines)
-
-	indent := sk.Column - 1 + 2
-	if sv.Kind == yaml.MappingNode && len(sv.Content) > 0 {
-		indent = sv.Content[0].Column - 1
-	}
-
-	// A null token ("~", "null", or a bare "!!null" tag) holds no quote,
-	// so the comment search can start at the token itself. A line with
-	// no token and no tag stays as it is.
-	if yamledit.IsNull(sv) && sv.Line == sk.Line && (sv.Value != "" || sv.Style&yaml.TaggedStyle != 0) {
-		line := lines[sk.Line-1]
-		start := doc.Offset(sk.Line, sv.Column)
-		lines[sk.Line-1] = strings.TrimRight(line[:start], " \t") + yamledit.TrailingComment(line, start)
-	}
-
-	end := doc.SectionEnd(idx)
-	lines = slices.Insert(lines, end, indentAll(child, indent)...)
-
-	return yamledit.JoinLines(lines, doc.FinalEOL)
-}
-
-// appendSection adds a new section at the end of the document content.
-func appendSection(doc *yamledit.Doc, section string, child []string) []byte {
-	return appendTopLevel(doc, append([]string{section + ":"}, indentAll(child, 2)...))
-}
-
-// appendTopLevel adds new top-level lines at the end of the document
-// content, after a blank line. The indentation follows the existing
-// top-level keys. Text after a "..." end marker is not read, so the
-// lines go before the marker. Both documents add a key here.
-func appendTopLevel(doc *yamledit.Doc, block []string) []byte {
-	lines := slices.Clone(doc.Lines)
-	pos, indent, lead := doc.SectionStart()
-
-	lead = append(lead, indentAll(block, indent)...)
-
-	finalEOL := doc.FinalEOL || pos == len(lines)
-	lines = slices.Insert(lines, pos, lead...)
-
-	return yamledit.JoinLines(lines, finalEOL)
 }
 
 // removeKey deletes one field. Its comment lines stay, because they are
@@ -1274,7 +1221,7 @@ func (f Field) Activation() Activation {
 		a.When = whenPreview
 		a.Notes = []string{
 			"Saving writes no pin; only a new preview offers the write.",
-			"The setting also governs seamark lessons --apply, --prune, and --retarget.",
+			"The setting also governs " + PinWriteCommands + ".",
 		}
 	case GroupEvidence:
 		a.When = whenEvidence

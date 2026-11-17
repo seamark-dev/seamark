@@ -1,0 +1,26 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000022",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000022.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000025",
+  "permission_mode": "default",
+  "agent_id": "a0000000000000007",
+  "agent_type": "editor",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000022/subagents/agent-a0000000000000007.jsonl",
+  "last_assistant_message": "absent",
+  "background_tasks": [
+    {
+      "id": "a0000000000000007",
+      "type": "subagent",
+      "status": "running",
+      "description": "Edit notes/multi.txt with MultiEdit",
+      "agent_type": "editor"
+    }
+  ],
+  "session_crons": []
+}

@@ -1,0 +1,19 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000020",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000020.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000021",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Create sentinel child file",
+    "prompt": "Create the file sentinel/slow-child.txt with exactly this single line of content: child",
+    "subagent_type": "writer",
+    "run_in_background": true
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000027"
+}

@@ -3,6 +3,7 @@ package distill
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -24,9 +25,10 @@ var ErrRegionEscapes = errors.New("the region is outside the workspace")
 // NormalizeRegion turns operator input into the repository-relative
 // region form that PlanOptions.Region expects. A relative input is
 // relative to root, not to the process directory, because the console
-// can start anywhere. An absolute input must be inside root. The empty
-// input, ".", "./", and root itself all mean the whole repository and
-// return "". The result uses slashes and has no trailing slash.
+// can start anywhere. An absolute input must be inside root, also when
+// it reaches root through a link above root. The empty input, ".", "./",
+// and root itself all mean the whole repository and return "". The
+// result uses slashes and has no trailing slash.
 //
 // The CLI keeps its own lenient toRepoRel: its output must not change.
 func NormalizeRegion(root, input string) (string, error) {
@@ -57,30 +59,76 @@ func NormalizeRegion(root, input string) (string, error) {
 }
 
 // regionInside returns the root-relative form of an absolute path when
-// the path is inside root. It retries with resolved symbolic links,
-// because a root such as /var/... can also appear as /private/var/...
+// the path is inside root. The comparison is lexical first. Then only an
+// alias of root itself counts, for example /var/x for /private/var/x.
+// The function never resolves the named path. A deleted path must still
+// compare, and a link below root must stay visible as a link.
 func regionInside(root, abs string) (string, bool) {
+	abs = filepath.Clean(abs)
+
 	roots := []string{filepath.Clean(root)}
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		roots = append(roots, resolved)
 	}
 
-	targets := []string{filepath.Clean(abs)}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		targets = append(targets, resolved)
+	for _, r := range roots {
+		if rel, ok := relInside(r, abs); ok {
+			return rel, true
+		}
 	}
 
-	for _, r := range roots {
-		for _, t := range targets {
-			rel, err := filepath.Rel(r, t)
-			if err != nil {
-				continue
-			}
+	return aliasInside(root, abs)
+}
 
-			rel = filepath.ToSlash(rel)
-			if rel != ".." && !strings.HasPrefix(rel, "../") {
-				return rel, true
-			}
+// relInside returns the lexical form of abs relative to dir when abs is
+// dir or below it.
+func relInside(dir, abs string) (string, bool) {
+	rel, err := filepath.Rel(dir, abs)
+	if err != nil {
+		return "", false
+	}
+
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", false
+	}
+
+	return rel, true
+}
+
+// aliasInside finds the ancestor of abs that is the same directory as
+// root, and returns the lexical rest of abs below it. The walk starts at
+// the file system root. Thus it meets the alias of root before any path
+// below root, and it follows no link below root. os.SameFile also
+// matches an alias that differs only in letter case, because git prints
+// the top level in the letter case of the disk. The walk ends with abs
+// itself, so a link that names root still means the whole repository.
+func aliasInside(root, abs string) (string, bool) {
+	rootInfo, err := os.Stat(root)
+	if err != nil {
+		return "", false
+	}
+
+	var chain []string
+
+	for p := abs; ; p = filepath.Dir(p) {
+		chain = append(chain, p)
+
+		if filepath.Dir(p) == p {
+			break
+		}
+	}
+
+	for i := len(chain) - 1; i >= 0; i-- {
+		info, err := os.Stat(chain[i])
+		if err != nil {
+			// A missing or unreadable ancestor hides every path below
+			// it, so no later ancestor can be root.
+			return "", false
+		}
+
+		if os.SameFile(info, rootInfo) {
+			return relInside(chain[i], abs)
 		}
 	}
 

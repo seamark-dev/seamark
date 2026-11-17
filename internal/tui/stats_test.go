@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	lessondelivery "github.com/seamark-dev/seamark/internal/delivery"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	lessonmodel "github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/reviews"
@@ -505,13 +506,27 @@ func TestStatsDistinguishesMissingEmptyAndUnreadableLogs(t *testing.T) {
 		assertFrame(t, noLog, w, h)
 		assert.Contains(t, noLog, "No recorded delivery yet")
 		assert.NotContains(t, noLog, "holds no records")
-		assert.Contains(t, statsFlat(strings.Join(missing.deliveryLines(missing.st.stats.value, 55), "\n")),
-			"never records a delivery")
+
+		// Each body says what its own log state means, so the test spells
+		// out both bodies. A swapped, shortened, or reworded body fails.
+		noLogBody := statsFlat(strings.Join(missing.deliveryLines(missing.st.stats.value, 55), "\n"))
+		assert.Contains(t, noLogBody, "Seamark records a delivery when one of these surfaces returns or injects "+
+			"lessons: "+statsTestSurfaces+". The delivery log does not exist yet. "+
+			"Viewing lessons here never records a delivery.")
+		assert.NotContains(t, noLogBody, "has no readable record yet", "a missing log is not an empty log")
+		assert.NotContains(t, noLogBody, "MCP change_set or check tools", "the old body named two surfaces")
 
 		noRecords := statsRender(empty, w, h)
 		assertFrame(t, noRecords, w, h)
 		assert.Contains(t, noRecords, "The log exists but holds no records")
 		assert.NotContains(t, noRecords, "No recorded delivery yet")
+
+		noRecordsBody := statsFlat(strings.Join(empty.deliveryLines(empty.st.stats.value, 55), "\n"))
+		assert.Contains(t, noRecordsBody, "The delivery log has no readable record yet. These surfaces add a "+
+			"record when they return or inject lessons: "+statsTestSurfaces+". "+
+			"Viewing lessons here never records a delivery.")
+		assert.NotContains(t, noRecordsBody, "does not exist yet", "an empty log is not a missing log")
+		assert.NotContains(t, noRecordsBody, "Agent hooks and the MCP", "the old body named two surfaces")
 
 		unreadable := statsRender(failed, w, h)
 		assertFrame(t, unreadable, w, h)
@@ -527,6 +542,43 @@ func TestStatsDistinguishesMissingEmptyAndUnreadableLogs(t *testing.T) {
 
 	assert.Contains(t, statsFlat(statsDelivery(failed, failed.st.stats.value, 55)), "permission denied")
 	assert.False(t, keyEnabled(failed.keys(), "f"), "an unreadable log has no chart period")
+}
+
+// statsTestSurfaces is the surface list of both empty states. The test
+// spells it out and does not read report.FiringSurfaces, so a changed
+// list fails here.
+const statsTestSurfaces = "the edit hook before an edit, the exploration hook after a Claude Code file read, " +
+	"seamark lessons --prepare, the MCP change_set tool, and check from the CLI or MCP"
+
+// statsSurfacePhrases takes each surface that writes a delivery record
+// to the phrase that names it in the empty states. The test spells the
+// phrases out, so a dropped surface fails here.
+var statsSurfacePhrases = map[string]string{
+	"hook":                                "the edit hook before an edit",
+	string(lessondelivery.SurfaceExplore): "the exploration hook after a Claude Code file read",
+	string(lessondelivery.SurfacePrepare): "seamark lessons --prepare",
+	"change_set":                          "the MCP change_set tool",
+	"check":                               "check from the CLI or MCP",
+}
+
+// TestStatsEmptyStateNamesEverySurface proves that both empty states
+// name every surface of the Stats view. A new surface that the empty
+// states leave out fails here.
+func TestStatsEmptyStateNamesEverySurface(t *testing.T) {
+	for _, surface := range statsSurfaces(nil) {
+		assert.Contains(t, statsSurfacePhrases, surface, "the empty states name the surface %q", surface)
+	}
+
+	missing, _ := newStatsTest(lessonstats.Snapshot{LogPath: statsTestLog, Eligible: true}, false)
+	empty, _ := newStatsTest(lessonstats.Snapshot{LogPath: statsTestLog, LogExists: true, Eligible: true}, false)
+
+	for _, v := range []*statsView{missing, empty} {
+		body := statsFlat(strings.Join(v.logStateLines(v.st.stats.value, 200), "\n"))
+
+		for surface, phrase := range statsSurfacePhrases {
+			assert.Contains(t, body, phrase, "the empty state names the surface %q", surface)
+		}
+	}
 }
 
 // keyEnabled reports whether the enabled bindings name key k.

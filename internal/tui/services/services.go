@@ -18,6 +18,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/index"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/learning"
+	"github.com/seamark-dev/seamark/internal/lessonreport"
 	"github.com/seamark-dev/seamark/internal/lessonstats"
 	"github.com/seamark-dev/seamark/internal/maintain"
 	"github.com/seamark-dev/seamark/internal/proposals"
@@ -55,6 +56,7 @@ type All interface {
 	Learning
 	Maintenance
 	Settings
+	Checks
 }
 
 // Reader is the shared read side of the workspace: the paths, the
@@ -89,6 +91,10 @@ type Reader interface {
 	Ledger() (*proposals.Ledger, error)
 	// Stats reads the lesson delivery statistics.
 	Stats() lessonstats.Snapshot
+	// Delivery builds the delivery/1 reading. It opens sources read-only,
+	// writes nothing, and calls no model. Source failures are report
+	// data; only a pin reference that cannot select one identity fails.
+	Delivery(req lessonreport.Request) (lessonreport.Report, error)
 	// Sample runs the lesson selection of one surface for explicit
 	// paths under the two lessons.yaml texts of one review. It never
 	// emits, records, or leases delivery, and it never builds the index.
@@ -103,7 +109,10 @@ type Setup interface {
 	PlanSetup(setups []integration.ClientSetup) (*SetupPreview, error)
 	// ApplySetup applies exactly the reviewed plan.
 	ApplySetup(p *SetupPreview) (integration.SetupResult, error)
-	// BuildIndex runs a local index build. It cannot be cancelled.
+	// BuildIndex runs a local index build. It cannot be cancelled. It
+	// refuses the database of another repository with an error that
+	// names the recorded root and the next route, and it writes nothing
+	// then.
 	BuildIndex(force bool, progress func(IndexEvent)) (*index.Summary, error)
 }
 
@@ -112,7 +121,9 @@ type Setup interface {
 type Decisions interface {
 	// PreviewDecision describes a proposal decision. It writes nothing.
 	PreviewDecision(action proposals.Action, ids []int64) (*proposals.Preview, error)
-	// CommitDecision revalidates and applies a reviewed decision.
+	// CommitDecision revalidates and applies a reviewed decision. An
+	// apply refuses a foreign root as a maintenance commit does, and the
+	// preview names that refusal in RootBlock.
 	CommitDecision(p *proposals.Preview) (proposals.Result, error)
 }
 
@@ -151,9 +162,10 @@ type Learning interface {
 }
 
 // Maintenance covers the installed pins of .seamark/lessons.yaml: the
-// pin read, the pin authoring, the retarget and prune maintenance, and
-// the recovery of a partial operation. Lessons › Pins, its authoring
-// form, and its maintenance modal use it.
+// pin read, the pin authoring, the check-definition authoring, the
+// retarget, prune, and scope maintenance, and the recovery of a partial
+// operation. Lessons › Pins, its authoring forms, and its maintenance
+// modal use it.
 type Maintenance interface {
 	// Pins reads the installed pins of .seamark/lessons.yaml and relates
 	// them to the ledger. It needs no index and never fails: a file or
@@ -162,7 +174,11 @@ type Maintenance interface {
 	// PlanMaintenance plans a retarget or a prune of the selected pins.
 	// It writes nothing.
 	PlanMaintenance(req maintain.Request) (*maintain.Plan, error)
+	// PlanScope plans the region set that a person chose for a linked pin.
+	// It writes nothing.
+	PlanScope(req maintain.ScopeRequest) (*maintain.Plan, error)
 	// CommitMaintenance revalidates and commits exactly the reviewed plan.
+	// It also commits a scope plan of PlanScope.
 	CommitMaintenance(p *maintain.Plan) (maintain.Result, error)
 	// PlanRecovery plans the ledger-only completion of a partial
 	// maintenance operation of this session. It writes nothing.
@@ -178,6 +194,15 @@ type Maintenance interface {
 	// bytes. It never writes the ledger, and it refuses a foreign root
 	// with ErrForeignRoot.
 	CommitAuthor(p *maintain.AuthorPlan) (maintain.AuthorResult, error)
+	// PlanCheckDef plans the edit of one check definition: the
+	// checks.<id> entry and lesson_checks_version. It writes nothing and
+	// takes no lock. A foreign root and a closed write gate are blockers
+	// of the plan.
+	PlanCheckDef(req maintain.CheckDefRequest) (*maintain.CheckDefPlan, error)
+	// CommitCheckDef writes exactly the reviewed definition plan under
+	// the engine lock. It never changes a pin and never writes the
+	// ledger, and it refuses a foreign root with ErrForeignRoot.
+	CommitCheckDef(p *maintain.CheckDefPlan) (maintain.AuthorResult, error)
 }
 
 // Settings covers the focused settings of the two settings documents,
@@ -192,7 +217,9 @@ type Settings interface {
 	// writes nothing.
 	PlanSettings(snap *settings.Snapshot, edits []settings.Edit) (*settings.Plan, error)
 	// SaveSettings writes exactly the reviewed plan, or reports it stale.
-	// A lessons save refuses a foreign root with ErrForeignRoot.
+	// A lessons save refuses a foreign root with ErrForeignRoot. A
+	// config.yaml save refuses it unless the recorded root owns the
+	// database.
 	SaveSettings(p *settings.Plan) (settings.Result, error)
 }
 
@@ -207,6 +234,9 @@ type IndexView struct {
 	// Policy summarizes the gate policy. It does not need the index, so
 	// it is filled in every index state.
 	Policy PolicySummary
+	// Database holds the answers about the index database that need the
+	// disk, because a view must not read it.
+	Database workspace.DatabaseFacts
 }
 
 // PolicySummary is the typed rule count of the gate policy, for the
@@ -275,6 +305,7 @@ var (
 	_ Learning    = (*engine)(nil)
 	_ Maintenance = (*engine)(nil)
 	_ Settings    = (*engine)(nil)
+	_ Checks      = (*engine)(nil)
 )
 
 // Deps are the three external boundaries of the engine: the GitHub
@@ -367,6 +398,14 @@ func (e *engine) Doctor() *doctor.Report {
 }
 
 func (e *engine) Index() IndexView {
+	view := e.indexView()
+	view.Database = e.databaseFacts(view.Probe).DatabaseFacts
+
+	return view
+}
+
+// indexView reads the probe, the semantic health, and the gate policy.
+func (e *engine) indexView() IndexView {
 	policy := summarizePolicy(e.ws.Root)
 
 	probe := workspace.Probe(e.ws)
@@ -496,6 +535,10 @@ func (e *engine) BuildIndex(force bool, progress func(IndexEvent)) (*index.Summa
 	}
 	defer e.mu.Unlock()
 
+	if err := e.buildBlock(); err != nil {
+		return nil, err
+	}
+
 	return index.Run(index.Options{
 		Root:   e.ws.Root,
 		DBPath: e.ws.DBPath,
@@ -522,7 +565,14 @@ func (e *engine) PreviewDecision(action proposals.Action, ids []int64) (*proposa
 	case proposals.ActionReconcile:
 		return proposals.PreviewReconcile(st, probe.Root, ids)
 	default:
-		return proposals.PreviewApply(st, probe.Root, ids)
+		pv, err := proposals.PreviewApply(st, probe.Root, ids)
+		if err != nil {
+			return nil, err
+		}
+
+		pv.RootBlock = e.ownRoot(probe)
+
+		return pv, nil
 	}
 }
 
@@ -535,6 +585,14 @@ func (e *engine) CommitDecision(p *proposals.Preview) (proposals.Result, error) 
 	probe := workspace.Probe(e.ws)
 	if probe.State != workspace.IndexReady && probe.State != workspace.IndexNotIndexed {
 		return proposals.Result{Action: p.Action}, fmt.Errorf("%w (%s)", ErrNoLedger, probe.State)
+	}
+
+	// An apply writes the pin file under the recorded root and the ledger
+	// in this database. A dismissal and a record write only the ledger.
+	if p.Action == proposals.ActionApply {
+		if err := e.ownRoot(probe); err != nil {
+			return proposals.Result{Action: p.Action}, err
+		}
 	}
 
 	// A decision is a short write; the store closes right after it, so

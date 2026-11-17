@@ -8,12 +8,9 @@
 package status
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,44 +18,57 @@ import (
 	"github.com/seamark-dev/seamark/internal/approve"
 	"github.com/seamark-dev/seamark/internal/gate"
 	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/integration"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/redact"
 	"github.com/seamark-dev/seamark/internal/render"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
 
-// Coverage is the persisted file summary of the last index run.
-type Coverage struct {
-	// Known is false for indexes written before coverage was persisted;
-	// the renderer must say "unknown", never imply full coverage.
-	Known        bool `json:"known"`
-	FilesSeen    int  `json:"files_seen,omitempty"`
-	FilesParsed  int  `json:"files_parsed,omitempty"`
-	FilesSkipped int  `json:"files_skipped,omitempty"`
-	// FilesDeleted counts the tracked paths that git status shows as
-	// deleted and not staged. It is not a parse error. An index from
-	// before this field reads 0.
-	FilesDeleted int `json:"files_deleted"`
-	ParseErrors  int `json:"parse_errors"`
-}
+// Coverage is the persisted file summary of the last index run. The
+// indexhealth package owns its rules, so status and orient read one
+// summary in the same way.
+type Coverage = indexhealth.Coverage
 
 // Freshness states: whether the index still matches the workspace.
 const (
-	FreshCurrent = "current"
-	FreshStale   = "stale"
-	// FreshUnknown means no fingerprint exists to compare — a non-git
-	// workspace has no cheap change signal. Unknown is not current.
-	FreshUnknown = "unknown"
+	FreshCurrent = indexhealth.FreshCurrent
+	FreshStale   = indexhealth.FreshStale
+	FreshUnknown = indexhealth.FreshUnknown
+)
+
+// Stale reasons: why a stale index is stale.
+const (
+	StaleWorkspaceChanged = indexhealth.StaleWorkspaceChanged
+	StaleOtherVersion     = indexhealth.StaleOtherVersion
 )
 
 // Status is the gathered health report, JSON-ready.
 type Status struct {
-	SchemaVersion string   `json:"schema_version"`
-	IndexedAt     int64    `json:"indexed_at,omitempty"`
-	Freshness     string   `json:"freshness"`
-	Coverage      Coverage `json:"coverage"`
+	// RecordedRoot is the root that the index records, set only when it
+	// is not the workspace of the command. Every other line describes
+	// that root, so a reader must see it. It is sanitized, because it
+	// comes from the database. Without it the JSON keeps its bytes.
+	RecordedRoot string `json:"recorded_root,omitempty"`
+	// rootNotice is the text of the root line. The JSON holds only
+	// RecordedRoot, because the route is advice for a terminal.
+	rootNotice string
+	// staleRoute replaces the plain index run of a stale index when a
+	// build in the workspace is refused, because that run would fail.
+	staleRoute string
+
+	SchemaVersion string `json:"schema_version"`
+	IndexedAt     int64  `json:"indexed_at,omitempty"`
+	Freshness     string `json:"freshness"`
+	// StaleReason says why a stale index is stale (indexhealth
+	// StaleWorkspaceChanged or StaleOtherVersion). Any other freshness
+	// leaves it out, so the JSON of a current index keeps its bytes.
+	StaleReason string   `json:"stale_reason,omitempty"`
+	Coverage    Coverage `json:"coverage"`
 
 	Symbols     int            `json:"symbols"`
 	Edges       int            `json:"edges"`
@@ -80,9 +90,12 @@ type Status struct {
 	// controlled config and flows to terminals and MCP clients.
 	DistillAgent string `json:"distill_agent,omitempty"`
 
-	// GatePolicyMode is the mode of policy.yaml. GateHookMode is the mode
-	// of the Claude Code gate hook that setup manages, or "" when none
-	// runs. The two can differ, and a reader must see the difference.
+	// GatePolicyMode is the mode of policy.yaml. GateHookMode is the
+	// marker mode of the Claude Code gate hook that setup manages, or ""
+	// when setup manages none. It keeps that mode also for a hook that
+	// cannot start, because setup keeps it, so a reader pairs it with the
+	// Claude Code entry of Clients. The policy mode and the hook mode can
+	// differ, and a reader must see the difference.
 	// Both hook fields come from the reader of the Claude Code inspection,
 	// so they agree with the Claude Code entry of Clients.
 	GatePolicyMode string `json:"gate_policy_mode"`
@@ -117,42 +130,69 @@ type Status struct {
 	// compatibility evidence, and the limitations the adapter reports.
 	// Additive: the fields above keep their Claude Code meaning.
 	Clients []integration.Inspection `json:"clients,omitempty"`
+
+	// LessonChecks is the lesson-capability/1 report: the requested
+	// modes of lessons.yaml against the installed lesson-check hook
+	// paths. It is nil when no lesson-check or exploration hook is
+	// installed and lessons.yaml uses no lesson-check key, so such a
+	// repository keeps its JSON bytes.
+	LessonChecks *lessoncheck.CapabilityReport `json:"lesson_checks,omitempty"`
+	// lessonPins are the pin counts that the pins line of the lesson
+	// checks block prints. The JSON holds the report only.
+	lessonPins pinCounts
 }
 
 // Gather assembles the health report from the store and the workspace.
+// root is the root that the report describes. The CLI, the console, and
+// the MCP server pass the root that the index records, or the workspace
+// when the index records none. The freshness then compares the index
+// with that root, so a stale route into that root refreshes the index.
 func Gather(st *store.Store, root string) (*Status, error) {
 	return gather(integration.Builtin(), st, root)
+}
+
+// GatherAs is Gather for the running binary self. The lesson-check
+// report identifies each hook binary against it. Gather reads the
+// identity from the build information of the running binary.
+func GatherAs(st *store.Store, root string, self integration.BinaryIdentity) (*Status, error) {
+	return gatherAs(integration.Builtin(), st, root, self)
 }
 
 // gather is Gather over one registry, so a test can hand it a registry
 // with a fake client and check the client-neutral rendering.
 func gather(reg *integration.Registry, st *store.Store, root string) (*Status, error) {
-	// Unknown until a recorded fingerprint proves otherwise: a non-git
-	// workspace has no change signal, and unknown must not read as
-	// current.
-	s := &Status{Freshness: FreshUnknown}
+	return gatherAs(reg, st, root, integration.SelfIdentity(""))
+}
+
+// gatherAs is GatherAs over one registry.
+func gatherAs(reg *integration.Registry, st *store.Store, root string,
+	self integration.BinaryIdentity,
+) (*Status, error) {
+	// The shared reader gives the facts that orient also shows. A
+	// recorded fingerprint decides the freshness; without one it stays
+	// unknown, because a non-git workspace has no change signal.
+	// The fingerprint leaves out the files of the database that st reads,
+	// as the index run did when it stored its fingerprint.
+	health, err := indexhealth.Read(st, root, func(root string) string { return index.WorkspaceState(root, st.Path()) },
+		index.OtherVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Status{
+		IndexedAt:   health.IndexedAt,
+		Freshness:   health.Freshness,
+		StaleReason: health.StaleReason,
+		Coverage:    health.Coverage,
+		EdgeOrigins: health.EdgeOrigins,
+	}
 
 	for _, m := range []struct {
 		key string
 		fn  func(v string)
 	}{
 		{store.MetaSchemaVersion, func(v string) { s.SchemaVersion = v }},
-		{store.MetaIndexedAt, func(v string) { s.IndexedAt = parseUnix(v) }},
-		{store.MetaReviewsMinedAt, func(v string) { s.ReviewsMinedAt = parseUnix(v) }},
-		{store.MetaIndexSummary, func(v string) {
-			var c Coverage
-			if json.Unmarshal([]byte(v), &c) == nil {
-				c.Known = true
-				s.Coverage = c
-			}
-		}},
-		{store.MetaIndexedState, func(v string) {
-			if v == index.WorkspaceState(root) {
-				s.Freshness = FreshCurrent
-			} else {
-				s.Freshness = FreshStale
-			}
-		}},
+		{store.MetaReviewsMinedAt, func(v string) { s.ReviewsMinedAt = indexhealth.ParseUnix(v) }},
 	} {
 		v, err := st.GetMeta(m.key)
 		if err != nil {
@@ -170,10 +210,6 @@ func gather(reg *integration.Registry, st *store.Store, root string) (*Status, e
 	}
 
 	s.Symbols, s.Edges, s.Lessons = stats.Symbols, stats.Edges, stats.Lessons
-
-	if s.EdgeOrigins, err = st.EdgeOriginCounts(); err != nil {
-		return nil, err
-	}
 
 	if s.EffectsDirect, s.EffectsPropagated, err = st.EffectOriginCounts(); err != nil {
 		return nil, err
@@ -223,15 +259,117 @@ func gather(reg *integration.Registry, st *store.Store, root string) (*Status, e
 		s.GateHookError = s.Clients[i].HookDocumentError
 	}
 
+	// The lesson-check report joins the same inspection, so its hook
+	// state agrees with the per-client view.
+	gatherLessonChecks(s, root, self)
+
 	return s, nil
 }
 
+// NoteOwnership records the facts of the database that the report reads.
+// The surface sets them, because only the surface knows the workspace
+// that the user named. An index that records another root gets the root
+// line, and a state that refuses a build in the workspace replaces the
+// index run of the stale line with its route. Both read the state as a
+// CLI command does (ownership.State.Command).
+func (s *Status) NoteOwnership(o ownership.State) {
+	// The own database reads no disk here: a status runs often.
+	if o.Recorded == "" || o.Root == ownership.RootSame {
+		return
+	}
+
+	if notice := RootNotice(o); notice != "" {
+		s.RecordedRoot, s.rootNotice = render.Sanitize(o.Recorded), notice
+	}
+
+	s.staleRoute = o.Command().RefusedBuildRoute()
+}
+
+// NoteWorkspaceMatch records that the index matches the workspace of the
+// surface, also when the root that the report describes changed. The MCP
+// server knows this when its refresh skips under the index of another
+// root, and its note says so. The workspace line then reads current,
+// because a run in that root would make the index differ from the code
+// that the server serves. An index of another version stays stale,
+// because only a rebuild adds the facts that it lacks.
+func (s *Status) NoteWorkspaceMatch() {
+	if s.Freshness == FreshStale && s.StaleReason == StaleWorkspaceChanged {
+		s.Freshness, s.StaleReason = FreshCurrent, ""
+	}
+}
+
+// RootNotice says that the index records another root than the
+// workspace, so a report describes that root. It returns "" when the two
+// are one directory. The CLI status and the MCP status resource print it
+// as the root line, so both say the same for one pair. The words and the
+// subject follow the refusal of a pin write.
+//
+// The notice names only a route that makes the index record this
+// workspace. A route into the recorded root would print the same report
+// again, so the notice then has no route.
+func RootNotice(o ownership.State) string {
+	// A directory inside a recorded root outside git counts as that root,
+	// because a command there runs in that repository.
+	s := o.Command()
+	if s.Recorded == "" || s.Root == ownership.RootNone || s.Root == ownership.RootSame {
+		return ""
+	}
+
+	subject := "this database"
+	if s.File == ownership.FileDefault {
+		subject = "the index of this checkout"
+	}
+
+	root := render.Sanitize(s.Recorded)
+	notice := fmt.Sprintf("%s %s, so this report describes %s, not this workspace", subject, RecordedClause(s), root)
+
+	switch d := ownership.Decide(s.Facts); d.Route {
+	case ownership.RouteIndexHere, ownership.RouteIndexHereDB, ownership.RouteMoveHere:
+		notice += "; " + s.Route(d.Route, ownership.SurfaceCommand)
+	}
+
+	return notice
+}
+
+// RecordedClause names the root that the database records, as "records
+// another repository (R)". A root that is gone gets its own words. Every
+// note on another root uses it, so the notes name the root in one way.
+// The root comes from the database, so the clause sanitizes it.
+func RecordedClause(o ownership.State) string {
+	what := "records another repository"
+	if o.Root == ownership.RootGone {
+		what = "records a directory that no longer exists"
+	}
+
+	return what + " (" + render.Sanitize(o.Recorded) + ")"
+}
+
 // Print renders the report as aligned text, the RFC's status layout.
+// The root line comes first, because it says which repository every
+// later line describes.
 func Print(w io.Writer, s *Status) {
+	// One clock read per report, so every age on it uses the same now.
+	now := time.Now()
+
+	if s.rootNotice != "" {
+		fmt.Fprintf(w, "root           %s\n", s.rootNotice)
+	}
+
 	fresh := s.Freshness
 	switch s.Freshness {
 	case FreshStale:
-		fresh = "STALE — run `seamark index`"
+		route := "run `seamark index`"
+		if s.staleRoute != "" {
+			route = s.staleRoute
+		}
+
+		// The index of another version can match the workspace, so the
+		// line names the reason: a reader would otherwise find nothing
+		// changed.
+		fresh = "STALE — " + route
+		if s.StaleReason == StaleOtherVersion {
+			fresh = "STALE — this index was built by another seamark version; " + route
+		}
 	case FreshUnknown:
 		fresh = "freshness unknown (no git fingerprint) — reindex when in doubt"
 	}
@@ -242,12 +380,13 @@ func Print(w io.Writer, s *Status) {
 	case !s.Coverage.Known:
 		fmt.Fprintf(w, "parsed         unknown — reindex with this seamark to record coverage\n")
 	case s.Coverage.ParseErrors > 0:
-		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config) — %d PARSE ERRORS:\n"+
+		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config, %d with no language extractor) — %d PARSE ERRORS:\n"+
 			"               those files are invisible to every answer\n",
-			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped, s.Coverage.ParseErrors)
+			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped, s.Coverage.FilesUnsupported,
+			s.Coverage.ParseErrors)
 	default:
-		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config)\n",
-			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped)
+		fmt.Fprintf(w, "parsed         %d of %d seen files (%d skipped by config, %d with no language extractor)\n",
+			s.Coverage.FilesParsed, s.Coverage.FilesSeen, s.Coverage.FilesSkipped, s.Coverage.FilesUnsupported)
 	}
 
 	// A deleted path is a state of the working tree. The index misses
@@ -261,13 +400,13 @@ func Print(w io.Writer, s *Status) {
 	}
 
 	fmt.Fprintf(w, "symbols        %d, %d edges — call resolution %s\n",
-		s.Symbols, s.Edges, originSummary(s.EdgeOrigins))
+		s.Symbols, s.Edges, indexhealth.OriginSummary(s.EdgeOrigins, 0))
 	fmt.Fprintf(w, "effects        %d direct-sink symbols, %d by propagation\n",
 		s.EffectsDirect, s.EffectsPropagated)
 
 	if s.History.Decisions > 0 {
 		fmt.Fprintf(w, "history        %d decisions; evidence median age %s (oldest %s)\n",
-			s.History.Decisions, age(s.History.MedianTS), age(s.History.OldestTS))
+			s.History.Decisions, indexhealth.Age(s.History.MedianTS, now), indexhealth.Age(s.History.OldestTS, now))
 	} else {
 		fmt.Fprintf(w, "history        none mined — co-change and decisions are empty\n")
 	}
@@ -280,7 +419,7 @@ func Print(w io.Writer, s *Status) {
 	switch {
 	case s.ReviewsMinedAt > 0:
 		fmt.Fprintf(w, "reviews        %d lessons from %d review findings; last mined %s ago\n",
-			s.Lessons, reviewFindings, age(s.ReviewsMinedAt))
+			s.Lessons, reviewFindings, indexhealth.Age(s.ReviewsMinedAt, now))
 	case reviewFindings > 0 || s.Lessons > 0:
 		// Mined by a seamark from before the freshness stamp existed:
 		// the evidence is real, its age is not knowable.
@@ -317,6 +456,7 @@ func Print(w io.Writer, s *Status) {
 	printSkills(w, s)
 	printApprovals(w, s)
 	printClients(w, s)
+	printLessonChecks(w, s)
 }
 
 // printClients renders the per-client block: one line per client with
@@ -419,7 +559,8 @@ func summarizeGateHooks(s *Status) integration.GateSummary {
 // warn hook still follows an enforcing policy file. The legacy Claude
 // Code fields stay in the JSON. The text reads the broader view, because
 // a Codex gate hook blocks a Codex command whatever .claude/settings.json
-// says.
+// says. A report-only line names the cause that the inspection read: a
+// discarded exit status, or a hook that the client runs in the background.
 func printGate(w io.Writer, s *Status) {
 	g := summarizeGateHooks(s)
 	names := func(ids []string) string { return strings.Join(ids, ", ") }
@@ -436,8 +577,8 @@ func printGate(w io.Writer, s *Status) {
 				s.GatePolicyError, names(g.Warn))
 		case integration.GateEffectReportOnly:
 			fmt.Fprintf(w, "gate           POLICY BROKEN (%s)\n"+
-				"               the report-only hook discards its exit status (%s): nothing blocks, and nothing is being checked\n",
-				s.GatePolicyError, names(g.ReportOnly))
+				"               the report-only hook %s (%s): nothing blocks, and nothing is being checked\n",
+				s.GatePolicyError, g.ReportOnlyCause(g.ReportOnly), names(g.ReportOnly))
 		case integration.GateEffectUnknown:
 			// Broken policy AND an unknown hook: the effective behaviour is
 			// unknown, not "no hook".
@@ -455,13 +596,21 @@ func printGate(w io.Writer, s *Status) {
 	case integration.GateEffectUnknown:
 		fmt.Fprintf(w, "gate           policy mode %s; %s\n", s.GatePolicyMode, unknownGate(g))
 	case integration.GateEffectNone:
-		fmt.Fprintf(w, "gate           policy mode %s; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n",
-			s.GatePolicyMode)
+		// A setup run does not repair a matcher that never fires, so
+		// this line offers no setup run. The clients line and the warning
+		// of each inert client already name the cause and the repair, so
+		// this line does not repeat them.
+		if len(g.Inert) > 0 {
+			fmt.Fprintf(w, "gate           policy mode %s; no gate hook runs for shell commands\n", s.GatePolicyMode)
+		} else {
+			fmt.Fprintf(w, "gate           policy mode %s; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n",
+				s.GatePolicyMode)
+		}
 	case integration.GateEffectReportOnly:
 		// A verdict blocks only by exit status 2, so the policy mode cannot
 		// make such a hook block.
-		fmt.Fprintf(w, "gate           report-only (%s hook discards its exit status); nothing blocks, whatever policy mode %s says\n",
-			names(g.ReportOnly), s.GatePolicyMode)
+		fmt.Fprintf(w, "gate           report-only (%s hook %s); nothing blocks, whatever policy mode %s says\n",
+			names(g.ReportOnly), g.ReportOnlyCause(g.ReportOnly), s.GatePolicyMode)
 	case integration.GateEffectBlocks:
 		if len(g.Warn) > 0 {
 			fmt.Fprintf(w, "gate           enforce for %s (hook carries --enforce; blocking verdicts exit 2); "+
@@ -474,7 +623,7 @@ func printGate(w io.Writer, s *Status) {
 	}
 
 	if len(g.ReportOnly) > 0 && g.Effect() > integration.GateEffectReportOnly {
-		fmt.Fprintf(w, "               the %s hook discards its exit status, so it never blocks\n", names(g.ReportOnly))
+		fmt.Fprintf(w, "               the %s hook %s, so it never blocks\n", names(g.ReportOnly), g.ReportOnlyCause(g.ReportOnly))
 	}
 
 	// The unknown line above already names an unreadable document and a
@@ -509,65 +658,4 @@ func unknownGate(g integration.GateSummary) string {
 	}
 
 	return strings.Join(parts, "; ")
-}
-
-// originSummary renders the call-edge confidence distribution as
-// percentages of the CALL edges (the only kind with resolution
-// uncertainty), largest share first.
-func originSummary(origins map[string]int) string {
-	calls := 0
-	for _, n := range origins {
-		calls += n
-	}
-
-	if calls == 0 {
-		return "none"
-	}
-
-	keys := make([]string, 0, len(origins))
-	for k := range origins {
-		keys = append(keys, k)
-	}
-
-	sort.Slice(keys, func(i, j int) bool {
-		if origins[keys[i]] != origins[keys[j]] {
-			return origins[keys[i]] > origins[keys[j]]
-		}
-
-		return keys[i] < keys[j] // deterministic order for equal counts
-	})
-
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%d%% %s", origins[k]*100/calls, k))
-	}
-
-	return strings.Join(parts, " · ") + fmt.Sprintf(" (%d calls)", calls)
-}
-
-// age renders a Unix timestamp as a coarse relative age.
-func age(ts int64) string {
-	if ts <= 0 {
-		return "unknown"
-	}
-
-	d := time.Since(time.Unix(ts, 0))
-
-	switch {
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 48*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
-}
-
-func parseUnix(v string) int64 {
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0
-	}
-
-	return n
 }

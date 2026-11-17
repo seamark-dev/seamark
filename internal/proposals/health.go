@@ -76,6 +76,8 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 			if _, live := cfg.FindPin(reviews.ProposalKey(p)); !live {
 				h.Pruned = true
 			}
+
+			h.Chosen = p.ScopeChosen
 		}
 
 		var living []model.Finding
@@ -105,7 +107,7 @@ func Health(st *store.Store, root string, ps []model.Proposal) (map[int64]report
 			// without this line, a confirmed delivery miss is
 			// invisible everywhere after the extraction summary.
 			for _, f := range facts {
-				if line := f.BlockedLine(); line != "" {
+				if line := f.BlockedLine(p.Status); line != "" {
 					if h.Blocked != "" {
 						h.Blocked += "; "
 					}

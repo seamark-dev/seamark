@@ -9,7 +9,7 @@ import (
 // schemaVersion is the schema this binary understands and writes. Bump it
 // together with a new migrations entry — never alone: a version without a
 // migration would leave every existing database behind.
-const schemaVersion = 6
+const schemaVersion = 8
 
 // migration is one ordered upgrade step: run brings a database from any
 // version below `to` up to `to`.
@@ -33,6 +33,8 @@ var migrations = []migration{
 	{to: 4, run: addProposalTriggerPaths},
 	{to: 5, run: addProposalTriggerChecked},
 	{to: 6, run: addProposalTriggerPromptVersion},
+	{to: 7, run: addProposalSourceAndProvenance},
+	{to: 8, run: addProposalScopeChosen},
 }
 
 // addFindingSource (v1 → v2): finding.source arrived with fix mining —
@@ -125,6 +127,48 @@ func addProposalTriggerPromptVersion(tx *sql.Tx) error {
 	return err
 }
 
+// addProposalSourceAndProvenance (v6 → v7) adds the source and the
+// provenance of a proposal row. Every existing row came from review
+// findings, so the default 'findings' keeps its meaning. The empty
+// provenance default means "no provenance". One step adds both columns,
+// so each database at version 7 has the same proposal table.
+func addProposalSourceAndProvenance(tx *sql.Tx) error {
+	for _, col := range []struct{ name, ddl string }{
+		{"source", `ALTER TABLE proposal ADD COLUMN source TEXT NOT NULL DEFAULT 'findings'`},
+		{"provenance", `ALTER TABLE proposal ADD COLUMN provenance TEXT NOT NULL DEFAULT ''`},
+	} {
+		has, err := hasColumn(tx, "proposal", col.name)
+		if err != nil {
+			return err
+		}
+
+		if !has {
+			if _, err := tx.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// addProposalScopeChosen (v7 → v8) lets the ledger record that a person
+// chose the regions of a row. The stored regions cannot say it, and an
+// inferred scope must not replace a chosen set without a review. The zero
+// default means "no person chose them", so existing rows need no rewrite.
+func addProposalScopeChosen(tx *sql.Tx) error {
+	has, err := hasColumn(tx, "proposal", "scope_chosen_at")
+	if err != nil {
+		return err
+	}
+
+	if !has {
+		_, err = tx.Exec(`ALTER TABLE proposal ADD COLUMN scope_chosen_at INTEGER NOT NULL DEFAULT 0`)
+	}
+
+	return err
+}
+
 // refuseNewer rejects a database stamped by a newer seamark BEFORE any
 // DDL has run — guessing at unknown schema would risk the durable
 // decisions it holds. A missing meta table means fresh or pre-versioning;
@@ -151,14 +195,30 @@ func refuseNewer(db *sql.DB) error {
 	return checkNotNewer(stored)
 }
 
+// NewerSchemaError is the refusal of a database that a newer seamark
+// stamped. It is a type, so a caller such as the MCP server can add its
+// own advice with errors.As and the text stays the same for the CLI.
+type NewerSchemaError struct {
+	// Stored is the schema version of the database.
+	Stored int
+	// Supported is the schema version of this binary.
+	Supported int
+}
+
+// Error returns the refusal text. The text tells the user to keep the
+// database, because it holds proposal decisions that no rebuild restores.
+func (e *NewerSchemaError) Error() string {
+	return fmt.Sprintf(
+		"store: database schema is v%d but this seamark understands v%d — "+
+			"upgrade seamark (the database was left untouched; do not delete it: "+
+			"it holds your proposal decisions)", e.Stored, e.Supported,
+	)
+}
+
 // checkNotNewer is the shared newer-database refusal.
 func checkNotNewer(stored int) error {
 	if stored > schemaVersion {
-		return fmt.Errorf(
-			"store: database schema is v%d but this seamark understands v%d — "+
-				"upgrade seamark (the database was left untouched; do not delete it: "+
-				"it holds your proposal decisions)", stored, schemaVersion,
-		)
+		return &NewerSchemaError{Stored: stored, Supported: schemaVersion}
 	}
 
 	return nil

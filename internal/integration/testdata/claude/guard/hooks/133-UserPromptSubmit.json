@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000020",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000020.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000021",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use the Agent tool with subagent_type \"writer\" and run_in_background set to true, and ask it to create the new file sentinel/slow-child.txt with the single line: child\nDo not use any tool yourself. Then reply with the single word that the subagent replied."
+}

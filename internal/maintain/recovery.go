@@ -19,6 +19,7 @@ const (
 	reasonUnproven     = "the reviewed result is no longer proven; reconcile .seamark/lessons.yaml and the ledger by hand"
 	reasonFileUnread   = "the pin file cannot be read, so the reviewed result cannot be proven"
 	reasonTargetGone   = "the retargeted pin is not in the file with the reviewed content"
+	reasonScopeGone    = "the edited pin is not in the file with the reviewed content"
 	reasonOldKeyBack   = "a pin with the earlier regions is in the file again"
 	reasonPrunedBack   = "a pin with the pruned key is in the file again"
 	reasonKeyTaken     = "another applied proposal now records the target key"
@@ -28,12 +29,12 @@ const (
 
 // PlanRecovery plans the ledger-only completion of a partial operation.
 // It is confirmable only while a fresh observation proves the reviewed
-// result: the pin file reads without error; for a retarget, every target
-// entry is present with exactly the reviewed content, every earlier key
-// is absent, and no other applied row records a target key; for a prune,
-// no pruned key is present; every ledger row still holds its planned
-// values; and the write gate is on, because a completion writes the
-// ledger. It writes nothing.
+// result: the pin file reads without error; for a retarget or a scope
+// edit, every target entry is present with exactly the reviewed content,
+// every earlier key is absent unless a new order keeps the key, and no
+// other applied row records a target key; for a prune, no pruned key is
+// present; every ledger row still holds its planned values; and the write
+// gate is on, because a completion writes the ledger. It writes nothing.
 func PlanRecovery(deps Deps, r *Recovery) (*Plan, error) {
 	if r == nil {
 		return nil, errors.New("maintain: no recovery")
@@ -120,8 +121,16 @@ func fileProof(doc *pinfile.Document, r *Recovery) [][]string {
 
 	after := pinfile.Parse(r.After)
 
+	gone := reasonTargetGone
+	if r.Action == ActionScope {
+		gone = reasonScopeGone
+	}
+
 	for i, e := range r.Edits {
-		if hasKey(doc, e.Ref.Key) {
+		// A scope edit that only changes the order has the new entry under
+		// the old key. The content check below then proves that the old
+		// entry is gone.
+		if hasKey(doc, e.Ref.Key) && (e.Delete || e.Ref.Key != r.NewKeys[i]) {
 			reason := reasonOldKeyBack
 			if e.Delete {
 				reason = reasonPrunedBack
@@ -138,7 +147,7 @@ func fileProof(doc *pinfile.Document, r *Recovery) [][]string {
 		got := withKey(doc, r.NewKeys[i])
 
 		if len(want) != 1 || len(got) != 1 || want[0].Raw != got[0].Raw {
-			reasons[i] = append(reasons[i], reasonTargetGone)
+			reasons[i] = append(reasons[i], gone)
 		}
 	}
 
@@ -146,15 +155,15 @@ func fileProof(doc *pinfile.Document, r *Recovery) [][]string {
 }
 
 // keyProof checks that no applied row outside the recovery records a
-// retarget key. A row can become applied after the partial operation,
-// for example a pending twin of the written pin. A completion would then
-// give two applied proposals one key. It uses the plan-time rule of
-// appliedKeys and returns the failed checks per item.
+// retarget or scope key. A row can become applied after the partial
+// operation, for example a pending twin of the written pin. A completion
+// would then give two applied proposals one key. It uses the plan-time
+// rule of appliedKeys and returns the failed checks per item.
 func keyProof(reader *store.Store, r *Recovery) ([][]string, error) {
 	reasons := make([][]string, len(r.Items))
 
 	// fileProof already refuses a proof whose keys and items disagree.
-	if r.Action != ActionRetarget || len(r.NewKeys) != len(r.Items) {
+	if r.Action == ActionPrune || len(r.NewKeys) != len(r.Items) {
 		return reasons, nil
 	}
 

@@ -15,6 +15,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/store"
 )
 
 // client drives a Server over in-memory pipes with real LSP framing.
@@ -29,6 +32,13 @@ type client struct {
 func startServer(t *testing.T, root string) *client {
 	t.Helper()
 
+	return startServerWith(t, Options{Root: root, Version: "test", Logf: t.Logf})
+}
+
+// startServerWith is startServer with all options of the server.
+func startServerWith(t *testing.T, opts Options) *client {
+	t.Helper()
+
 	clientIn, srvOut := io.Pipe()
 	srvIn, clientOut := io.Pipe()
 
@@ -40,7 +50,7 @@ func startServer(t *testing.T, root string) *client {
 	}
 
 	go func() {
-		c.done <- Serve(Options{Root: root, Version: "test", Logf: t.Logf}, srvIn, srvOut)
+		c.done <- Serve(opts, srvIn, srvOut)
 	}()
 
 	t.Cleanup(func() {
@@ -84,12 +94,26 @@ func (c *client) request(method string, params any) json.RawMessage {
 
 	c.nextID++
 	id := c.nextID
-	c.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+
+	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+	require.NoError(c.t, err)
+
+	// The pipe has no buffer. A server that publishes a notification stops
+	// reading until the client reads it, so this write must not stop the
+	// read below. Without that, a test deadlocks instead of failing.
+	written := make(chan error, 1)
+
+	go func() {
+		_, err := fmt.Fprintf(c.toSrv, "Content-Length: %d\r\n\r\n%s", len(body), body)
+		written <- err
+	}()
 
 	for {
 		msg := c.readMessage()
 		if int(msg.ID) == id {
+			require.NoError(c.t, <-written)
 			require.Nil(c.t, msg.Error, "request %s failed: %+v", method, msg.Error)
+
 			return msg.Result
 		}
 	}
@@ -404,4 +428,143 @@ func TestUnknownMethodAndOutsideURI(t *testing.T) {
 	msg = c.readMessage()
 	require.NotNil(t, msg.Error)
 	assert.Contains(t, msg.Error.Message, "outside the workspace")
+}
+
+// TestDidSaveKeepsTheRootOfAnotherDatabase covers a server under the
+// database of another repository. A save does not rebuild there, because
+// the server has no flag that allows the move. Reads keep their answers.
+func TestDidSaveKeepsTheRootOfAnotherDatabase(t *testing.T) {
+	origin, other := fixtureRepo(t), fixtureRepo(t)
+	dbPath := store.DefaultPath(origin)
+
+	_, err := index.Run(index.Options{Root: origin})
+	require.NoError(t, err)
+
+	// A new file gives the workspace another fingerprint, so only the
+	// guard stops the rebuild.
+	require.NoError(t, os.WriteFile(filepath.Join(other, "new.go"), []byte("package main\n"), 0o644))
+
+	before, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+
+	resolved, err := filepath.EvalSymlinks(origin)
+	require.NoError(t, err)
+
+	c := startServerWith(t, Options{Root: other, DBPath: dbPath, Version: "test", Logf: t.Logf})
+
+	c.request("initialize", map[string]any{"rootUri": "file://" + other})
+	c.notify("textDocument/didSave", map[string]any{"textDocument": map[string]any{"uri": uri(other, "a.go")}})
+
+	hover := c.request("textDocument/hover", map[string]any{
+		"textDocument": map[string]any{"uri": uri(other, "a.go")},
+		"position":     map[string]any{"line": 5, "character": 6},
+	})
+	assert.Contains(t, string(hover), "func helper()", "the reads keep working")
+
+	after, err := os.ReadFile(dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "the save writes nothing")
+
+	recorded, err := store.ProbeRoot(dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, resolved, recorded)
+}
+
+// TestDidSaveKeepsARootOnADetachedDisk covers a recorded root that is gone
+// with a file outside this workspace. A stat cannot tell a detached disk
+// from a moved repository, so a save does not take the root.
+func TestDidSaveKeepsARootOnADetachedDisk(t *testing.T) {
+	origin, other := fixtureRepo(t), fixtureRepo(t)
+	dbPath := filepath.Join(t.TempDir(), "shared.db")
+
+	resolved, err := filepath.EvalSymlinks(origin)
+	require.NoError(t, err)
+
+	_, err = index.Run(index.Options{Root: origin, DBPath: dbPath})
+	require.NoError(t, err)
+	require.NoError(t, os.Rename(origin, origin+".away"))
+
+	c := startServerWith(t, Options{Root: other, DBPath: dbPath, Version: "test", Logf: t.Logf})
+
+	c.request("initialize", map[string]any{"rootUri": "file://" + other})
+	c.notify("textDocument/didSave", map[string]any{"textDocument": map[string]any{"uri": uri(other, "a.go")}})
+
+	hover := c.request("textDocument/hover", map[string]any{
+		"textDocument": map[string]any{"uri": uri(other, "a.go")},
+		"position":     map[string]any{"line": 5, "character": 6},
+	})
+	assert.Contains(t, string(hover), "func helper()", "the reads keep working")
+
+	recorded, err := store.ProbeRoot(dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, resolved, recorded)
+}
+
+func TestModifiedFilesIgnoresHiddenUntrackedConfig(t *testing.T) {
+	// status.showUntrackedFiles=no drops new files from git status. A saved
+	// new file must still read as modified, so it gets diagnostics.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root := fixtureRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "pkg"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "new.go"), []byte("package main\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", "fresh.go"), []byte("package pkg\n"), 0o644))
+
+	cmd := exec.Command("git", "config", "status.showUntrackedFiles", "no")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
+	modified, err := (&Server{root: root}).modifiedFiles()
+	require.NoError(t, err)
+
+	assert.True(t, modified("new.go"), "an untracked file")
+	assert.True(t, modified("pkg/fresh.go"), "a file under an untracked directory")
+	assert.True(t, modified("a.go"), "a modified tracked file")
+	assert.False(t, modified("b.go"), "an unchanged tracked file")
+}
+
+func TestModifiedFilesKeepsGitIndex(t *testing.T) {
+	// The server reads git status on each save. A touch changes no
+	// content, so the read must not rewrite .git/index and take
+	// .git/index.lock away from a concurrent git command of the user.
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if k == "GIT_OPTIONAL_LOCKS" || strings.HasPrefix(k, "GIT_CONFIG_") {
+			t.Setenv(k, "")
+			require.NoError(t, os.Unsetenv(k))
+		}
+	}
+
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	root := fixtureRepo(t)
+	gitIndex := filepath.Join(root, ".git", "index")
+
+	at := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(filepath.Join(root, "b.go"), at, at))
+
+	beforeInfo, err := os.Stat(gitIndex)
+	require.NoError(t, err)
+
+	beforeBytes, err := os.ReadFile(gitIndex)
+	require.NoError(t, err)
+
+	modified, err := (&Server{root: root}).modifiedFiles()
+	require.NoError(t, err)
+
+	assert.True(t, modified("a.go"), "a modified tracked file")
+	assert.False(t, modified("b.go"), "a touched tracked file has no change")
+
+	afterInfo, err := os.Stat(gitIndex)
+	require.NoError(t, err)
+
+	afterBytes, err := os.ReadFile(gitIndex)
+	require.NoError(t, err)
+
+	assert.True(t, os.SameFile(beforeInfo, afterInfo), ".git/index has a new inode")
+	assert.Equal(t, beforeInfo.ModTime(), afterInfo.ModTime(), ".git/index has a new mtime")
+	assert.Equal(t, beforeBytes, afterBytes, ".git/index has new bytes")
 }

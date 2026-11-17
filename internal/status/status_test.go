@@ -4,21 +4,32 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/seamark-dev/seamark/internal/approve"
+	"github.com/seamark-dev/seamark/internal/index"
+	"github.com/seamark-dev/seamark/internal/indexhealth"
 	"github.com/seamark-dev/seamark/internal/integration"
 	"github.com/seamark-dev/seamark/internal/integration/inspecttest"
 	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/ownership"
 	"github.com/seamark-dev/seamark/internal/skills"
 	"github.com/seamark-dev/seamark/internal/store"
 )
+
+// The hook fixtures of this file name /bin/seamark, which a test machine
+// does not need to hold. The inspection reads it as a hook that can start.
+func init() {
+	integration.TreatHookBinaryAsPresent("/bin/seamark")
+}
 
 func seededStore(t *testing.T) (st *store.Store, root string) {
 	t.Helper()
@@ -112,6 +123,173 @@ func TestPrintSurfacesTheUncomfortableParts(t *testing.T) {
 	assert.Contains(t, out, "               codex   no hooks installed; MCP registration not registered")
 }
 
+// TestPrintNamesUnreadableCoverageUnknown proves that a summary the
+// indexer cannot write prints as unknown coverage. An empty object once
+// printed "0 of 0 seen files", which reads as a full and empty index.
+func TestPrintNamesUnreadableCoverageUnknown(t *testing.T) {
+	for _, summary := range []string{
+		`{}`,
+		`{"files_seen":3,"files_parsed":5,"parse_errors":0}`,
+	} {
+		st, root := seededStore(t)
+		require.NoError(t, st.SetMeta(store.MetaIndexSummary, summary))
+
+		s, err := Gather(st, root)
+		require.NoError(t, err)
+		assert.False(t, s.Coverage.Known, summary)
+
+		var b bytes.Buffer
+		Print(&b, s)
+
+		assert.Contains(t, b.String(),
+			"parsed         unknown — reindex with this seamark to record coverage\n", summary)
+		assert.NotContains(t, b.String(), "seen files", summary)
+	}
+}
+
+// TestPrintGivesAFutureTimeNoAge proves that a time after now prints as
+// unknown. A clock skew once printed a negative age such as "-5m".
+func TestPrintGivesAFutureTimeNoAge(t *testing.T) {
+	future := time.Now().Add(2 * time.Hour).Unix()
+	s := &Status{History: store.HistoryWindow{Decisions: 1, MedianTS: future, OldestTS: future}}
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	assert.Contains(t, b.String(), "history        1 decisions; evidence median age unknown (oldest unknown)\n")
+	assert.NotContains(t, b.String(), "age -", "no negative age")
+}
+
+// TestPrintGivesPastTimesAnAge proves that the history and review ages
+// use the clock of the report. Each time has a margin inside its unit,
+// so a slow run prints the same text.
+func TestPrintGivesPastTimesAnAge(t *testing.T) {
+	now := time.Now()
+	s := &Status{
+		History: store.HistoryWindow{
+			Decisions: 2,
+			MedianTS:  now.Add(-3*time.Hour - 30*time.Minute).Unix(),
+			OldestTS:  now.Add(-50 * time.Hour).Unix(),
+		},
+		ReviewsMinedAt: now.Add(-5*time.Minute - 30*time.Second).Unix(),
+	}
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	assert.Contains(t, b.String(), "history        2 decisions; evidence median age 3h (oldest 2d)\n")
+	assert.Contains(t, b.String(), "reviews        0 lessons from 0 review findings; last mined 5m ago\n")
+}
+
+// TestPrintNamesEveryOrigin proves that status prints every call-edge
+// origin. Only orient folds the origins after a limit, because its header
+// must stay short.
+func TestPrintNamesEveryOrigin(t *testing.T) {
+	s := &Status{EdgeOrigins: map[string]int{
+		model.OriginSamePackage: 40, model.OriginQualified: 20, model.OriginUniqueName: 15,
+		model.OriginSameClass: 10, "o1": 7, "o2": 5, "o3": 3,
+	}}
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	assert.Contains(t, b.String(), "symbols        0, 0 edges — call resolution "+
+		"40.0% same-package · 20.0% qualified · 15.0% unique-name · 10.0% same-class · "+
+		"7.0% o1 · 5.0% o2 · 3.0% o3 (100 calls)\n")
+	assert.NotContains(t, b.String(), "more origins")
+}
+
+// TestGatherAgreesWithTheSharedReader proves that status reads the health
+// facts through the reader that orient uses, so the two cannot disagree.
+func TestGatherAgreesWithTheSharedReader(t *testing.T) {
+	st, root := seededStore(t)
+	require.NoError(t, st.SetMeta(store.MetaIndexedAt, "1700000000"))
+	require.NoError(t, st.SetMeta(store.MetaIndexedState, "a fingerprint of another workspace"))
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+
+	h, err := indexhealth.Read(st, root, func(root string) string { return index.WorkspaceState(root, st.Path()) },
+		index.OtherVersion)
+	require.NoError(t, err)
+
+	assert.Equal(t, h.Coverage, s.Coverage)
+	assert.Equal(t, h.IndexedAt, s.IndexedAt)
+	assert.Equal(t, h.Freshness, s.Freshness)
+	assert.Equal(t, FreshStale, s.Freshness)
+	assert.Equal(t, h.EdgeOrigins, s.EdgeOrigins)
+}
+
+// TestGatherCallsAnIndexOfAnotherVersionStale proves that status calls an
+// index that another seamark version built stale with its reason, also
+// when the workspace fingerprint matches, and names the rebuild: the text
+// line and the JSON stale_reason. A database that records another
+// repository keeps the route of that state. After an index run status
+// reads current, and the JSON has no reason.
+func TestGatherCallsAnIndexOfAnotherVersionStale(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.go"), []byte("package a\n\nfunc A() {}\n"), 0o644))
+	gitInit(t, root)
+
+	sum, err := index.Run(index.Options{Root: root})
+	require.NoError(t, err)
+
+	st, err := store.Open(sum.DBPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "2"))
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, FreshStale, s.Freshness)
+	assert.Equal(t, StaleOtherVersion, s.StaleReason)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.True(t, strings.HasPrefix(b.String(),
+		"workspace      STALE — this index was built by another seamark version; run `seamark index` (schema v"), b.String())
+
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"freshness":"stale","stale_reason":"other-version"`)
+
+	s.staleRoute = "run `seamark index` in /srv/origin"
+	b.Reset()
+	Print(&b, s)
+	assert.True(t, strings.HasPrefix(b.String(), "workspace      STALE — this index was built by another seamark version; "+
+		"run `seamark index` in /srv/origin (schema v"), b.String())
+
+	_, err = index.Run(index.Options{Root: root})
+	require.NoError(t, err)
+
+	s, err = Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, FreshCurrent, s.Freshness)
+	assert.Empty(t, s.StaleReason)
+
+	data, err = json.Marshal(s)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "stale_reason", "a current index keeps its JSON")
+}
+
+// gitInit makes root a git repository with one commit of its files, so
+// an index run records a fingerprint.
+func gitInit(t *testing.T, root string) {
+	t.Helper()
+
+	for _, args := range [][]string{{"init", "-b", "main"}, {"add", "-A"}, {"commit", "-m", "initial"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v\n%s", args, out)
+	}
+}
+
 func TestGatherReadsTheDeletedCount(t *testing.T) {
 	st, root := seededStore(t)
 
@@ -141,13 +319,15 @@ func TestPrintNamesUnstagedDeletionsApartFromParseErrors(t *testing.T) {
 		{1, "deleted        1 tracked file in the working tree (deletion not staged)\n"},
 		{47, "deleted        47 tracked files in the working tree (deletions not staged)\n"},
 	} {
-		s := &Status{Coverage: Coverage{Known: true, FilesSeen: 632, FilesParsed: 580, FilesSkipped: 5, FilesDeleted: tc.deleted}}
+		s := &Status{Coverage: Coverage{
+			Known: true, FilesSeen: 632, FilesParsed: 580, FilesSkipped: 5, FilesUnsupported: 47, FilesDeleted: tc.deleted,
+		}}
 
 		var b bytes.Buffer
 		Print(&b, s)
 		out := b.String()
 
-		parsed := "parsed         580 of 632 seen files (5 skipped by config)\n"
+		parsed := "parsed         580 of 632 seen files (5 skipped by config, 47 with no language extractor)\n"
 		assert.Contains(t, out, parsed+tc.want+"symbols", "the note follows the coverage line")
 		assert.NotContains(t, out, "PARSE ERRORS", "a deleted path is not a parse error")
 
@@ -159,7 +339,7 @@ func TestPrintNamesUnstagedDeletionsApartFromParseErrors(t *testing.T) {
 
 func TestPrintKeepsUnstagedDeletionsApartFromParseErrorLines(t *testing.T) {
 	s := &Status{Coverage: Coverage{
-		Known: true, FilesSeen: 632, FilesParsed: 578, FilesSkipped: 5, FilesDeleted: 47, ParseErrors: 2,
+		Known: true, FilesSeen: 632, FilesParsed: 578, FilesSkipped: 5, FilesUnsupported: 47, FilesDeleted: 47, ParseErrors: 2,
 	}}
 
 	var b bytes.Buffer
@@ -168,7 +348,7 @@ func TestPrintKeepsUnstagedDeletionsApartFromParseErrorLines(t *testing.T) {
 	// The note has its own label after the parse-error lines, so it
 	// does not read as one more line of the PARSE ERRORS statement.
 	assert.Contains(t, b.String(),
-		"parsed         578 of 632 seen files (5 skipped by config) — 2 PARSE ERRORS:\n"+
+		"parsed         578 of 632 seen files (5 skipped by config, 47 with no language extractor) — 2 PARSE ERRORS:\n"+
 			"               those files are invisible to every answer\n"+
 			"deleted        47 tracked files in the working tree (deletions not staged)\n"+
 			"symbols")
@@ -187,6 +367,27 @@ func TestGatherReportsBrokenPolicy(t *testing.T) {
 	var b bytes.Buffer
 	Print(&b, s)
 	assert.Contains(t, b.String(), "POLICY BROKEN")
+}
+
+func TestGatherReportsAPolicyItCannotRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file with mode 0000")
+	}
+
+	st, root := seededStore(t)
+	policyPath := filepath.Join(root, ".seamark", "policy.yaml")
+
+	require.NoError(t, os.WriteFile(policyPath, []byte("mode: enforce\n"), 0o644))
+	require.NoError(t, os.Chmod(policyPath, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(policyPath, 0o644) })
+
+	s, err := Gather(st, root)
+	require.NoError(t, err)
+	assert.Equal(t, "gate: "+policyPath+": permission denied", s.GatePolicyError)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "gate           POLICY BROKEN (gate: "+policyPath+": permission denied)")
 }
 
 func TestGatherResolvesTheCodexAgentThroughTheRegistry(t *testing.T) {
@@ -233,7 +434,7 @@ func TestPrintSeparatesFixMiningFromReviews(t *testing.T) {
 	// say so instead of dressing fix findings up as review evidence.
 	require.NoError(t, st.ReplaceFixFindings([]model.Finding{
 		{ID: 1, Path: "a.go", Body: "fix: reset state", Source: "fix:subject"},
-	}))
+	}, false))
 
 	s, err := Gather(st, root)
 	require.NoError(t, err)
@@ -298,6 +499,11 @@ func TestGatherReportsUnreadableHookConfig(t *testing.T) {
 	Print(&b, s)
 	assert.Contains(t, b.String(), "UNREADABLE",
 		"an unreadable hook config is not the same finding as no hook")
+
+	// The gate line names the reason once, as the legacy path does.
+	assert.Contains(t, b.String(), "gate           policy mode warn; hook configuration UNREADABLE (claude: .claude/settings.json: invalid character")
+	assert.NotContains(t, b.String(), "UNREADABLE (claude: unreadable")
+	assert.NotContains(t, b.String(), "unreadable (unreadable")
 }
 
 func TestStatusJSONRoundTrips(t *testing.T) {
@@ -477,6 +683,25 @@ func gatherFixture(t *testing.T, f inspecttest.Fixture) (s *Status, out string) 
 	return s, b.String()
 }
 
+// withoutInert returns a copy of the report with every Inert and
+// HooksOff mark cleared. Neither mark has a JSON form, so a round trip
+// drops it, and the rest of the report must survive.
+func withoutInert(s *Status) *Status {
+	c := *s
+	c.Clients = slices.Clone(s.Clients)
+
+	for i := range c.Clients {
+		c.Clients[i].HooksOff = false
+		c.Clients[i].Capabilities = slices.Clone(c.Clients[i].Capabilities)
+
+		for j := range c.Clients[i].Capabilities {
+			c.Clients[i].Capabilities[j].Inert = false
+		}
+	}
+
+	return &c
+}
+
 func TestGatherFollowsTheInspectionMatrix(t *testing.T) {
 	// One fixture matrix for init, doctor, and status: the per-client
 	// view carries the typed states, and the text carries the words
@@ -535,7 +760,7 @@ func TestGatherFollowsTheInspectionMatrix(t *testing.T) {
 
 			var back Status
 			require.NoError(t, json.Unmarshal(data, &back))
-			assert.Equal(t, s, &back)
+			assert.Equal(t, withoutInert(s), &back)
 			assert.Contains(t, string(data), `"clients":[`)
 			assert.Contains(t, string(data), `"declared":[`)
 
@@ -767,5 +992,147 @@ func TestGatherReadsTheClaudeManagedGateModeByTheInspectionRule(t *testing.T) {
 			Print(&b, s)
 			assert.Contains(t, b.String(), "gate           enforce (claude hook carries --enforce; blocking verdicts exit 2)")
 		})
+	}
+}
+
+func TestGatherCountsNoGateHookWhileTheClaudeHooksAreOff(t *testing.T) {
+	// disableAllHooks turns every project hook off, so the enforce hook
+	// runs for no command. The gate line must not claim blocking.
+	st, root := seededStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"disableAllHooks": true, "hooks":{"PreToolUse":[`+
+			`{"matcher":"Bash","hooks":[{"type":"command","command":"`+inspecttest.Binary+` gate --enforce --hook"}]}]}}`), 0o644))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(), "gate           policy mode warn; no gate hook runs for shell commands\n")
+	assert.NotContains(t, b.String(), "enforce (claude hook carries")
+}
+
+// TestPrintGateLeavesOutAClientWhoseHooksAreOff proves what status says
+// about a client whose hooks are off while another client's gate hook runs.
+// The gate line names only the hook that runs, and the clients list carries
+// the warning. The docs describe these lines, so they must not drift.
+func TestPrintGateLeavesOutAClientWhoseHooksAreOff(t *testing.T) {
+	st, root := seededStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"),
+		[]byte(`{"disableAllHooks": true, "hooks":{"PreToolUse":[`+
+			`{"matcher":"Bash","hooks":[{"type":"command","command":"`+inspecttest.Binary+` gate --enforce --hook"}]}]}}`), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "hooks.json"),
+		[]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
+			`{"type":"command","command":"`+inspecttest.Binary+` gate --hook --client codex"}]}]}}`), 0o644))
+	require.NoError(t, inspecttest.Named("current").Write(root))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	var b bytes.Buffer
+	Print(&b, s)
+
+	out := b.String()
+
+	var gateLine string
+
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(line, "gate ") {
+			gateLine = line
+		}
+	}
+
+	assert.Equal(t, "gate           hook installed (codex); policy mode warn governs", gateLine)
+	assert.NotContains(t, gateLine, "claude")
+	assert.NotContains(t, out, "no gate hook runs for shell commands")
+	assert.Contains(t, out, "disableAllHooks: true turns off the project hooks of Claude Code")
+}
+
+func TestGatherOffersInitWhileTheHooksAreOffAndNoGateHookIsInstalled(t *testing.T) {
+	// Both clients turn their hooks off, and neither has a gate hook. No
+	// hook is present to call inert, so the line keeps the setup route.
+	st, root := seededStore(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".claude"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".claude", "settings.json"), []byte(`{"disableAllHooks": true}`), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".codex"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".codex", "config.toml"), []byte("[features]\nhooks = false\n"), 0o644))
+
+	s, err := gather(inspecttest.Registry(), st, root)
+	require.NoError(t, err)
+
+	var b bytes.Buffer
+	Print(&b, s)
+	assert.Contains(t, b.String(),
+		"gate           policy mode warn; no gate hook installed (`seamark init`, or `seamark init --client <name>`)\n")
+	assert.NotContains(t, b.String(), "no gate hook runs for shell commands")
+}
+
+// TestPrintNamesTheRecordedRootAndItsRoute proves the two lines that the
+// facts of the database change. An index of another root opens with the
+// root line, and a stale index names the route of a state that refuses a
+// build here, because a plain index run would fail. The root comes from
+// the database, so both lines sanitize it. The own database keeps both
+// lines as they were.
+func TestPrintNamesTheRecordedRootAndItsRoute(t *testing.T) {
+	st, root := seededStore(t)
+
+	printed := func(o ownership.State) (string, *Status) {
+		s, err := Gather(st, root)
+		require.NoError(t, err)
+
+		s.Freshness = FreshStale
+		s.NoteOwnership(o)
+
+		var b bytes.Buffer
+		Print(&b, s)
+
+		return b.String(), s
+	}
+
+	foreign := ownership.State{
+		Facts:     ownership.Facts{File: ownership.FileOther, Root: ownership.RootFound, Owner: ownership.OwnerRoot, RootDefault: true, RootOwnsFile: true},
+		Workspace: "/w", Recorded: "/r\x1b[31m", DB: "/r/.seamark/index.db",
+	}
+
+	out, s := printed(foreign)
+	assert.True(t, strings.HasPrefix(out, "root           this database records another repository (/r[31m), "+
+		"so this report describes /r[31m, not this workspace\n"+
+		"workspace      STALE — run `seamark index` in /r[31m (schema v"), out)
+	assert.NotContains(t, out, "\x1b")
+	assert.Equal(t, "/r[31m", s.RecordedRoot)
+
+	for name, own := range map[string]ownership.State{
+		"no facts":         {},
+		"the own database": {Facts: ownership.Facts{File: ownership.FileDefault, Root: ownership.RootSame}, Workspace: "/w", Recorded: "/w"},
+	} {
+		out, s := printed(own)
+		assert.True(t, strings.HasPrefix(out, "workspace      STALE — run `seamark index` (schema v"), "%s: %s", name, out)
+		assert.Empty(t, s.RecordedRoot, name)
+	}
+}
+
+// TestNoteWorkspaceMatchClearsOnlyAChangedTree proves the bound of the
+// match that a surface proves. A changed tree reads current, and its
+// reason goes, so the JSON keeps the bytes of a current index. An index of
+// another version stays stale, because only a rebuild adds its facts. An
+// unknown or a current freshness stays as it is.
+func TestNoteWorkspaceMatchClearsOnlyAChangedTree(t *testing.T) {
+	for _, tc := range []struct {
+		name, freshness, reason   string
+		wantFreshness, wantReason string
+	}{
+		{"a changed tree", FreshStale, StaleWorkspaceChanged, FreshCurrent, ""},
+		{"another version", FreshStale, StaleOtherVersion, FreshStale, StaleOtherVersion},
+		{"no fingerprint", FreshUnknown, "", FreshUnknown, ""},
+		{"a current index", FreshCurrent, "", FreshCurrent, ""},
+	} {
+		s := &Status{Freshness: tc.freshness, StaleReason: tc.reason}
+		s.NoteWorkspaceMatch()
+
+		assert.Equal(t, tc.wantFreshness, s.Freshness, tc.name)
+		assert.Equal(t, tc.wantReason, s.StaleReason, tc.name)
 	}
 }

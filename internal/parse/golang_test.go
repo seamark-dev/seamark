@@ -174,7 +174,58 @@ func (w *W) Run() {
 	// The operand w.db is a selector, not an identifier: the call must be
 	// marked Selector with no qualifier, so the resolver never treats it
 	// as a bare same-package function reference.
-	assert.Equal(t, CallRef{Name: "Close", Line: 6, Selector: true}, run.Calls[0])
+	// Root keeps the start of the operand chain for the resolver, and the
+	// qualifier stays empty.
+	assert.Equal(t, CallRef{Name: "Close", Line: 6, Selector: true, Root: "w"}, run.Calls[0])
+}
+
+// TestGoSelectorOperandRoot proves which operand shapes give a root. The
+// walk follows call functions and selector operands only. Every other node
+// ends it with "", because its value can have any type.
+func TestGoSelectorOperandRoot(t *testing.T) {
+	src := `package p
+
+func F() {
+	strings.NewReplacer("a", "b").Replace("s")
+	os.Stdout.Close()
+	w.db.Flush()
+	mcp.New(1).Serve()
+	x.(T).Assert()
+	xs[0].Index()
+	pkg.G[int]().Inst()
+	pkg.H[map[string]int]().TypeArgs()
+	(&T{}).Paren()
+	T{}.Lit()
+	func() T { return T{} }().FuncLit()
+	plain.Ident()
+}
+`
+	ex, err := NewGoExtractor()
+	require.NoError(t, err)
+	defer ex.Close()
+
+	res, err := ex.Extract("p.go", []byte(src))
+	require.NoError(t, err)
+
+	type got struct{ qualifier, root string }
+
+	roots := map[string]got{}
+	for _, c := range symbolByFQN(t, res, "F").Calls {
+		roots[c.Name] = got{c.Qualifier, c.Root}
+	}
+
+	assert.Equal(t, got{"", "strings"}, roots["Replace"], "a chain from a package call")
+	assert.Equal(t, got{"", "os"}, roots["Close"], "a chain from a package variable")
+	assert.Equal(t, got{"", "w"}, roots["Flush"], "a chain from a local value")
+	assert.Equal(t, got{"", "mcp"}, roots["Serve"], "a chain from a constructor call")
+	assert.Equal(t, got{"", ""}, roots["Assert"], "a type assertion ends the walk")
+	assert.Equal(t, got{"", ""}, roots["Index"], "an index ends the walk")
+	assert.Equal(t, got{"", ""}, roots["Inst"], "an index or an instantiation ends the walk")
+	assert.Equal(t, got{"", ""}, roots["TypeArgs"], "a type argument list ends the walk")
+	assert.Equal(t, got{"", ""}, roots["Paren"], "a parenthesized operand ends the walk")
+	assert.Equal(t, got{"", ""}, roots["Lit"], "a composite literal ends the walk")
+	assert.Equal(t, got{"", ""}, roots["FuncLit"], "a function literal ends the walk")
+	assert.Equal(t, got{"plain", ""}, roots["Ident"], "a plain identifier is the qualifier, not a root")
 }
 
 func TestImportLocalNamePrediction(t *testing.T) {
@@ -326,4 +377,74 @@ func (Box[T]) Len() int { return 0 }
 	for _, fqn := range []string{"Box", "Box.Put", "Box.Len"} {
 		symbolByFQN(t, res, fqn)
 	}
+}
+
+// TestVarInitializerCalls proves that a package-level var carries the
+// calls of its initializer, also inside function literals and in a
+// grouped block, that every name of a spec carries all calls of that spec,
+// and that a const or a var without a call carries none.
+func TestVarInitializerCalls(t *testing.T) {
+	src := `package p
+
+import "os"
+
+var runners = map[string]func(string) error{
+	"write": func(p string) error {
+		return os.WriteFile(p, nil, 0o600)
+	},
+	"audit": func(p string) error { return audit(p) },
+}
+
+var (
+	ready = setup()
+	plain = 4
+)
+
+var left, right = pick(), os.Getenv("X")
+
+var prepare = audit
+
+const Size = len("abc")
+
+func audit(p string) error {
+	var local = setup()
+	_ = local
+	return nil
+}
+
+func setup() bool { return true }
+
+func pick() int { return 1 }
+`
+	ex, err := NewGoExtractor()
+	require.NoError(t, err)
+	defer ex.Close()
+
+	res, err := ex.Extract("p.go", []byte(src))
+	require.NoError(t, err)
+
+	runners := symbolByFQN(t, res, "runners")
+	assert.Equal(t, model.KindVar, runners.Symbol.Kind)
+	assert.ElementsMatch(t, []CallRef{
+		{Qualifier: "os", Name: "WriteFile", Line: 7, Selector: true},
+		{Name: "audit", Line: 9},
+	}, runners.Calls)
+
+	assert.Equal(t, []CallRef{{Name: "setup", Line: 13}}, symbolByFQN(t, res, "ready").Calls,
+		"a spec in a grouped block carries its own calls only")
+	assert.Empty(t, symbolByFQN(t, res, "plain").Calls)
+
+	both := []CallRef{
+		{Name: "pick", Line: 17},
+		{Qualifier: "os", Name: "Getenv", Line: 17, Selector: true},
+	}
+	assert.ElementsMatch(t, both, symbolByFQN(t, res, "left").Calls, "every name carries every call of its spec")
+	assert.ElementsMatch(t, both, symbolByFQN(t, res, "right").Calls, "every name carries every call of its spec")
+
+	assert.Empty(t, symbolByFQN(t, res, "prepare").Calls, "a function value without a call is no call")
+	assert.Empty(t, symbolByFQN(t, res, "Size").Calls, "const initializers are not mined")
+
+	assert.NotContains(t, fqns(res), "local", "a function-local var is no symbol")
+	assert.Contains(t, symbolByFQN(t, res, "audit").Calls, CallRef{Name: "setup", Line: 24},
+		"the call of a local var initializer stays with its function")
 }

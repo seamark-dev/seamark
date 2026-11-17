@@ -1,9 +1,9 @@
 // Package inspecttest holds the one fixture matrix that the
 // integration, doctor, status, and init tests share. Each fixture puts
 // a workspace into one inspection state and states what every consumer
-// must report for it, so the four commands are checked against one
-// account of setup and never drift apart. It is test support only:
-// nothing in the shipped binary imports it.
+// must report for it. So the tests check the four commands against one
+// account of setup, and the commands cannot disagree. It is test
+// support only: nothing in the shipped binary imports it.
 package inspecttest
 
 import (
@@ -18,6 +18,13 @@ import (
 
 // Binary is the seamark path the fixtures install hooks with.
 const Binary = "/usr/local/bin/seamark"
+
+// The fixtures name Binary, which a test machine does not need to hold.
+// So every test package that imports this package reads a fixture hook
+// as one that the client can start.
+func init() {
+	integration.TreatHookBinaryAsPresent(Binary)
+}
 
 // SharedID is the registry ID of the test-only client that shares the
 // Codex skill directory. It exists so the matrix can pin how a shared
@@ -49,10 +56,10 @@ type Fixture struct {
 	// Findings are substrings that the client's finding reasons must
 	// contain, one finding per entry.
 	Findings []string
-	// InitFindings are the substrings init's output must contain instead
-	// of Findings, when init changes the state it inspects: setup
-	// installs the managed hook, so a definition that ran alone now runs
-	// beside it. Nil means Findings.
+	// InitFindings are the substrings that init's output must contain
+	// instead of Findings, when init changes the state it inspects. For
+	// example, setup installs the managed hook, so a definition that ran
+	// alone now runs beside it. Nil means Findings.
 	InitFindings []string
 	// Words are substrings of the client's rendered state that every
 	// consumer prints: the hooks phrase, the registration, the grants,
@@ -65,7 +72,7 @@ type Fixture struct {
 	// current"); empty when the fixture says nothing about it.
 	Skills string
 	// Absent are substrings that must appear in no consumer's output:
-	// a credential a hook command carries.
+	// a credential a hook command carries, or a word printed twice.
 	Absent []string
 	// Invoker is the expected name of the resolved inference command;
 	// empty means the default Claude preset.
@@ -96,10 +103,10 @@ func Registry() *integration.Registry {
 	return reg
 }
 
-// SharedClient describes the test-only client: it reads the Codex skill
-// directory, decodes edits, and has a setup adapter that reports an
-// installed edit hook with pending trust and no native evidence. It
-// plans nothing and registers no MCP server.
+// SharedClient describes the test-only client. It reads the Codex skill
+// directory and decodes edits. Its setup adapter reports an installed
+// edit hook with pending trust and no native evidence. It plans nothing
+// and registers no MCP server.
 func SharedClient() integration.Client {
 	return integration.Client{
 		ID:        SharedID,
@@ -167,14 +174,15 @@ func Named(name string) Fixture {
 // hook command; no consumer may print it.
 const Secret = "sk-live-1234567890abcdef"
 
-// Fixtures returns the matrix. The names follow the plan's list of
+// Fixtures returns the matrix. The first fixtures cover the inspection
 // states: absent, current, partial, foreign, malformed, restricted,
 // pending trust, unknown verification, shared skills, and missing
 // invoker. The other fixtures hold the limitations that the adapters
 // report:
 //
 //   - hooks turned off;
-//   - a handler that runs twice;
+//   - a local copy of the managed lessons handler with other fields,
+//     which Claude Code runs once, with the fields of one copy;
 //   - a wrapped handler in the personal file;
 //   - an enforcing inline handler beside the managed warn hook;
 //   - a gate command under a matcher that never fires;
@@ -219,8 +227,7 @@ func Fixtures() []Fixture {
 
 				// The lessons hook alone, as a user who removed the gate hook
 				// leaves it.
-				return write(root, ".codex/hooks.json", `{"hooks":{"PreToolUse":[{"matcher":"apply_patch","hooks":[`+
-					`{"type":"command","command":"`+Binary+` lessons --hook --client codex"}]}]}}`)
+				return WriteFile(root, ".codex/hooks.json", PreToolUseDocument("apply_patch", Binary+" lessons --hook --client codex"))
 			},
 			Client: integration.CodexID,
 			States: map[integration.Capability]integration.CapabilityState{
@@ -233,7 +240,7 @@ func Fixtures() []Fixture {
 		{
 			Name: "foreign",
 			Write: func(root string) error {
-				return write(root, ".claude/skills/seamark-plan-change/SKILL.md",
+				return WriteFile(root, ".claude/skills/seamark-plan-change/SKILL.md",
 					"---\nname: seamark-plan-change\ndescription: mine\n---\nMine.\n")
 			},
 			Client: integration.ClaudeID,
@@ -243,18 +250,20 @@ func Fixtures() []Fixture {
 		},
 		{
 			Name:   "malformed",
-			Write:  func(root string) error { return write(root, ".claude/settings.json", "{not json") },
+			Write:  func(root string) error { return WriteFile(root, ".claude/settings.json", "{not json") },
 			Client: integration.ClaudeID,
 			States: map[integration.Capability]integration.CapabilityState{
 				integration.CapabilityToolGrants: integration.StateUnreadable, integration.CapabilityEdits: integration.StateUnreadable,
 				integration.CapabilityCommands: integration.StateUnreadable, integration.CapabilityResets: integration.StateUnreadable,
 			},
-			Words: []string{"hooks unreadable", "unreadable"},
+			Words: []string{"hooks unreadable (.claude/settings.json: invalid character 'n' looking for beginning of object key string)"},
+			// The word "unreadable" appears once per reason.
+			Absent: []string{"unreadable (unreadable"},
 		},
 		{
 			Name: "restricted",
 			Write: func(root string) error {
-				return write(root, ".codex/config.toml", "[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n\n"+
+				return WriteFile(root, ".codex/config.toml", "[mcp_servers.seamark]\ncommand = \"seamark\"\nargs = [\"mcp\"]\n\n"+
 					"[mcp_servers.seamark.tools.why]\napproval_mode = \"prompt\"\n")
 			},
 			Client: integration.CodexID,
@@ -297,7 +306,7 @@ func Fixtures() []Fixture {
 		{
 			Name: "missing invoker",
 			Write: func(root string) error {
-				return write(root, ".seamark/config.yaml", "agent:\n  argv: [\"no-such-agent-binary-xyz\"]\n")
+				return WriteFile(root, ".seamark/config.yaml", "agent:\n  argv: [\"no-such-agent-binary-xyz\"]\n")
 			},
 			Client:         integration.ClaudeID,
 			States:         allAbsent(),
@@ -311,7 +320,7 @@ func Fixtures() []Fixture {
 					return err
 				}
 
-				return write(root, ".codex/config.toml", "[features]\nhooks = false\n")
+				return WriteFile(root, ".codex/config.toml", "[features]\nhooks = false\n")
 			},
 			Client: integration.CodexID,
 			States: map[integration.Capability]integration.CapabilityState{
@@ -328,24 +337,30 @@ func Fixtures() []Fixture {
 					return err
 				}
 
-				return write(root, ".claude/settings.local.json", `{"hooks":{"PreToolUse":[{"matcher":"Edit|Write|MultiEdit","hooks":[`+
-					`{"type":"command","command":"`+Binary+` lessons --hook"}]}]}}`)
+				return WriteFile(root, ".claude/settings.local.json", PreToolUseDocument("Edit|Write|MultiEdit", Binary+" lessons --hook"))
 			},
 			Client: integration.ClaudeID,
 			States: map[integration.Capability]integration.CapabilityState{
 				integration.CapabilityEdits: integration.StateCurrent, integration.CapabilityCommands: integration.StateCurrent,
 			},
 			GateMode: "warn", ManagedGateMode: "warn",
-			Findings: []string{"runs twice"},
-			Words:    []string{"gate (warn) + lessons hooks installed"},
+			// The copy has the handler key of the managed lessons hook and
+			// no timeout. Claude Code runs it once, with the fields of one
+			// of the two copies.
+			Findings: []string{"Claude Code runs it once, with the fields of one copy that setup cannot name"},
+			// The init test runs another binary, so Merge rewrites the
+			// managed command. The copy then has another handler key, and
+			// Claude Code runs both.
+			InitFindings: []string{"the managed lessons hook runs too, so the hook runs twice"},
+			Words:        []string{"gate (warn) + lessons hooks installed"},
 		},
 		{
 			// A wrapped enforcing gate only in the personal file: it runs,
 			// it enforces, and setup does not manage it.
 			Name: "local wrapper",
 			Write: func(root string) error {
-				return write(root, ".claude/settings.local.json", `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
-					`{"type":"command","command":"test -x `+Binary+` && `+Binary+` gate --enforce --hook"}]}]}}`)
+				return WriteFile(root, ".claude/settings.local.json",
+					PreToolUseDocument("Bash", "test -x "+Binary+" && "+Binary+" gate --enforce --hook"))
 			},
 			Client: integration.ClaudeID,
 			States: map[integration.Capability]integration.CapabilityState{
@@ -365,7 +380,7 @@ func Fixtures() []Fixture {
 					return err
 				}
 
-				return write(root, ".codex/config.toml", "[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n"+
+				return WriteFile(root, ".codex/config.toml", "[[hooks.PreToolUse]]\nmatcher = \"Bash\"\n"+
 					"[[hooks.PreToolUse.hooks]]\ntype = \"command\"\ncommand = \"seamark gate --enforce --hook --client codex\"\n")
 			},
 			Client: integration.CodexID,
@@ -378,26 +393,25 @@ func Fixtures() []Fixture {
 		},
 		{
 			// seamark's own gate command under a matcher that never fires for
-			// Bash: it gates nothing, and the finding says why.
+			// Bash: it gates nothing, and the finding names the matcher to set.
+			// Setup keeps the matcher, so the hook is partial, not missing.
 			Name: "never fires",
 			Write: func(root string) error {
-				return write(root, ".claude/settings.json", `{"hooks":{"PreToolUse":[{"matcher":"Edit","hooks":[`+
-					`{"type":"command","command":"`+Binary+` gate --enforce --hook"}]}]}}`)
+				return WriteFile(root, ".claude/settings.json", PreToolUseDocument("Edit", Binary+" gate --enforce --hook"))
 			},
 			Client: integration.ClaudeID,
 			States: map[integration.Capability]integration.CapabilityState{
-				integration.CapabilityEdits: integration.StateAbsent, integration.CapabilityCommands: integration.StateAbsent,
+				integration.CapabilityEdits: integration.StateAbsent, integration.CapabilityCommands: integration.StatePartial,
 			},
-			Findings: []string{`under PreToolUse "Edit", which never runs for PreToolUse Bash`},
-			Words:    []string{"no hooks installed"},
+			Findings: []string{`under PreToolUse "Edit", which never runs for Bash; setup does not change the matcher`},
+			Words:    []string{`gate hook never runs from .claude/settings.json: its matcher "Edit" does not fire for Bash`},
 		},
 		{
 			// seamark's own enforcing gate under a "*" matcher. Claude Code
 			// runs it for Bash, so a plain re-run must keep --enforce.
 			Name: "star enforce",
 			Write: func(root string) error {
-				return write(root, ".claude/settings.json", `{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[`+
-					`{"type":"command","command":"`+Binary+` gate --enforce --hook"}]}]}}`)
+				return WriteFile(root, ".claude/settings.json", PreToolUseDocument("*", Binary+" gate --enforce --hook"))
 			},
 			Client: integration.ClaudeID,
 			States: map[integration.Capability]integration.CapabilityState{
@@ -425,8 +439,8 @@ func Fixtures() []Fixture {
 			// credential is not.
 			Name: "redacted wrapper",
 			Write: func(root string) error {
-				return write(root, ".claude/settings.json", `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[`+
-					`{"type":"command","command":"hook-runner --token=`+Secret+` `+Binary+` gate --hook"}]}]}}`)
+				return WriteFile(root, ".claude/settings.json",
+					PreToolUseDocument("Bash", "hook-runner --token="+Secret+" "+Binary+" gate --hook"))
 			},
 			Client: integration.ClaudeID,
 			States: map[integration.Capability]integration.CapabilityState{
@@ -453,6 +467,16 @@ func allAbsent() map[integration.Capability]integration.CapabilityState {
 	return out
 }
 
+// PreToolUseDocument returns a hook document with one PreToolUse entry:
+// one matcher and one "command" hook. Many fixtures and inspection tests
+// need this shape, and a JSON string written by hand breaks with one
+// wrong character. The function does not escape its arguments, so they
+// must hold no JSON special character such as a double quote or a
+// backslash.
+func PreToolUseDocument(matcher, command string) string {
+	return `{"hooks":{"PreToolUse":[{"matcher":"` + matcher + `","hooks":[{"type":"command","command":"` + command + `"}]}]}}`
+}
+
 // apply runs the real setup for one client intent.
 func apply(root string, intent integration.ClientSetup) error {
 	plan, err := integration.PlanSetup(Registry(), integration.SetupRequest{
@@ -477,8 +501,10 @@ func installSkills(root, mode string) error {
 	return skills.Install(io.Discard, root, targets, false)
 }
 
-// write writes one repository-relative file, creating its parents.
-func write(root, rel, body string) error {
+// WriteFile writes one repository-relative file and creates its parent
+// directories. The fixtures and the inspection tests share it, so each
+// test writes a workspace file in one way.
+func WriteFile(root, rel, body string) error {
 	abs := filepath.Join(root, filepath.FromSlash(rel))
 
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {

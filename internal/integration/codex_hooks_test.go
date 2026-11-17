@@ -74,38 +74,65 @@ func TestCodexEditsDecodeTheCompletePathSet(t *testing.T) {
 			assert.Equal(t, "apply_patch", event.NativeTool)
 			assert.Equal(t, "thr_synthetic_0001", event.SessionID, "the session still joins the log records")
 			assert.NotEmpty(t, event.MatchID)
+			assert.Equal(t, "turn_synthetic_0001", event.Turn)
 
-			// The decoder reads no receiver yet: the reset of a subagent is
-			// unverified, so suppression stays off by policy.
-			assert.Nil(t, event.Context, "no receiving context means suppression stays off")
+			// A parent edit names the root lane. No reset of a Codex context
+			// is verified, so the context is not resettable and suppression
+			// stays off by policy.
+			require.NotNil(t, event.Context)
+			assert.Equal(t, ReceivingContext{ID: "18:thr_synthetic_0001", Lane: LaneRoot}, *event.Context)
 		})
 	}
 }
 
-func TestCodexEditsReadNoReceiverFromASubagentEdit(t *testing.T) {
+func TestCodexEditsNameTheLaneWithoutSuppression(t *testing.T) {
 	// A native run of codex-cli 0.154.0 showed that an edit inside a
 	// subagent carries agent_id and agent_type with the parent session id.
-	// The decoder reads no receiver from it yet: the reset of a subagent
-	// is unverified, so suppression stays off by policy. The test pins
-	// that the identity is in the event and left unread, so a receiver
-	// change starts from this fixture and not from a guess.
+	// The decoder names the child lane from it. The reset of a subagent is
+	// unverified, so the context is not resettable and suppression stays
+	// off by policy.
 	payload := codexFixture(t, "pre_tool_use_apply_patch_subagent.json")
 
 	var identity struct {
 		AgentID   string `json:"agent_id"`
 		AgentType string `json:"agent_type"`
+		TurnID    string `json:"turn_id"`
 	}
 
 	require.NoError(t, json.Unmarshal(payload, &identity))
 	require.NotEmpty(t, identity.AgentID, "the fixture carries the subagent identity")
 	require.NotEmpty(t, identity.AgentType)
 
-	event, err := codexEdits{}.DecodeEdit(payload)
+	child, err := codexEdits{}.DecodeEdit(payload)
 	require.NoError(t, err)
 
-	assert.Equal(t, "thr_synthetic_0001", event.SessionID, "a subagent edit reports the parent session")
-	assert.Equal(t, []string{"/workspace/repo/src/child.txt"}, event.Paths, "the model wrote an absolute path")
-	assert.Nil(t, event.Context, "no receiver is read until a native check verifies the reset of a subagent")
+	assert.Equal(t, "thr_synthetic_0001", child.SessionID, "a subagent edit reports the parent session")
+	assert.Equal(t, []string{"/workspace/repo/src/child.txt"}, child.Paths, "the model wrote an absolute path")
+	assert.Equal(t, identity.TurnID, child.Turn, "the subagent has its own turn")
+
+	require.NotNil(t, child.Context)
+	assert.Equal(t, ReceivingContext{ID: receiverID("thr_synthetic_0001", identity.AgentID), Lane: LaneChild},
+		*child.Context)
+
+	// The parent edit of the same session names the root lane. The two
+	// receivers differ, and neither is resettable.
+	parent, err := codexEdits{}.DecodeEdit(codexFixture(t, "pre_tool_use_apply_patch_update.json"))
+	require.NoError(t, err)
+	require.NotNil(t, parent.Context)
+
+	assert.Equal(t, LaneRoot, parent.Context.Lane)
+	assert.NotEqual(t, parent.Context.ID, child.Context.ID, "a child lane never gets the ID of its parent")
+	assert.False(t, parent.Context.Resettable)
+	assert.False(t, child.Context.Resettable)
+
+	// An event without session_id names no receiver, also with agent_id.
+	orphan := strings.Replace(string(patchEvent(t, "*** Begin Patch\n*** Delete File: a.go\n*** End Patch\n")),
+		`"session_id":"thr_1"`, `"agent_id":"agent_1"`, 1)
+	require.NotContains(t, orphan, "session_id")
+
+	event, err := codexEdits{}.DecodeEdit([]byte(orphan))
+	require.NoError(t, err)
+	assert.Nil(t, event.Context)
 }
 
 func TestCodexEditsNeverReportAPartialPathSet(t *testing.T) {
@@ -229,7 +256,7 @@ func TestCodexResetsNameNoContext(t *testing.T) {
 	event, err := codexResets{}.DecodeReset(codexFixture(t, "post_compact.json"))
 	require.NoError(t, err)
 	assert.Equal(t, ResetEvent{}, event,
-		"the edit decoder reads no receiver yet, so no state exists that a reset can clear")
+		"the edit decoder names no resettable receiver, so no state exists that a reset can clear")
 
 	// Only the installed event is a reset. The session start that follows
 	// a compaction is another event, and setup installs no hook for it.

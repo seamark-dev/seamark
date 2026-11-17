@@ -23,7 +23,23 @@ const (
 	deliveryStateFile     = "lessons-hook-state.json"
 	deliveryLockFile      = "lessons-hook-state.lock"
 	maxDeliveryStateBytes = 1 << 20
+	// deliveryResetLockWait bounds the wait of a reset for the state lock.
+	// One lock covers every context, so a lease of another session can
+	// hold it. A failed reset keeps the delivered pins hidden after a
+	// compaction until the TTL ends. A series of subagent leases can hold
+	// the lock for longer than 200 ms, so the reset waits 2 s. The reset
+	// hook runs this reset and the exploration reset one after the other,
+	// and two waits of 2 s stay inside the 10 s hook timeout. A failed
+	// lease only repeats advice, so a lease never waits. The value equals
+	// exploreResetLockWait, so both resets of one compaction follow one rule.
+	deliveryResetLockWait = 2 * time.Second
 )
+
+// deliveredPinScheme labels the delivered key of a pin. The label keeps
+// the key apart from lessonDeliveryDigest: the state of an earlier binary
+// holds content digests, and such an entry must never match a pin
+// version. A change of the parts is a new label.
+const deliveredPinScheme = "delivered-pin/1"
 
 // LegacyClientID is the client of the session-keyed entry points
 // BeginHookDelivery and ResetHookDelivery. Claude Code was the only
@@ -55,6 +71,12 @@ type deliveryState struct {
 	Contexts map[string]deliveryContextState `json:"contexts"`
 }
 
+// deliveryContextState is the state of one receiving context. Delivered
+// holds opaque keys (DeliveryItem.digest). A key of an earlier scheme
+// stays until a reset or the TTL removes it, and it matches no current
+// key. So a new scheme repeats a reminder once and never hides one. It
+// also keeps the file version: an older binary refuses another version
+// and then repeats advice on every edit.
 type deliveryContextState struct {
 	Generation uint64          `json:"generation"`
 	UpdatedAt  time.Time       `json:"updated_at"`
@@ -70,10 +92,43 @@ type deliveryStateFileShape struct {
 	Sessions map[string]json.RawMessage      `json:"sessions"`
 }
 
-// HookDeliveryLease is a locked selection of lessons not yet delivered in
-// one provider context window. Commit must be called only after the selected
-// context has been emitted successfully. Close releases the cross-process
-// lock without marking anything delivered.
+// DeliveryItem is one selected lesson of an edit delivery.
+type DeliveryItem struct {
+	// Lesson is what the reminder renders.
+	Lesson model.Lesson
+	// PinVersion is the version of a pin (Config.PinVersion). It is empty
+	// for a mined lesson, because a mined lesson has no version.
+	PinVersion string
+}
+
+// digest is the key of the item in the delivered set. A pin gets the key
+// of its version, so a change of its note, scope, mode, or check delivers
+// it again. A cosmetic edit of lessons.yaml keeps the key. A mined lesson
+// keeps its content key, so its delivered entries stay valid.
+func (item DeliveryItem) digest() string {
+	if item.PinVersion == "" {
+		return lessonDeliveryDigest(item.Lesson)
+	}
+
+	return composeDigest(deliveredPinScheme, item.PinVersion)
+}
+
+// unversionedItems gives each lesson the item of a lesson without a pin
+// version, in order.
+func unversionedItems(lessons []model.Lesson) []DeliveryItem {
+	items := make([]DeliveryItem, len(lessons))
+	for i, lesson := range lessons {
+		items[i].Lesson = lesson
+	}
+
+	return items
+}
+
+// HookDeliveryLease is a locked view of the lessons delivered in one
+// provider context window. Select picks the lessons not yet delivered.
+// Commit must be called only after the selected context has been emitted
+// successfully. Close releases the cross-process lock without marking
+// anything delivered.
 type HookDeliveryLease struct {
 	dir        string
 	lock       *os.File
@@ -83,31 +138,52 @@ type HookDeliveryLease struct {
 	inject     []model.Lesson
 	suppressed []model.Lesson
 	injectSHA  []string
+	// injectPins holds the pin version of each pin in inject, in order.
+	injectPins []string
 	committed  bool
 }
 
 // BeginHookDelivery is BeginContextDelivery for the session-keyed Claude
 // Code hook: the session is the receiver and the client is LegacyClientID.
+// The lessons carry no pin version, so each one gets its content key.
 func BeginHookDelivery(root, sessionID string, lessons []model.Lesson) (*HookDeliveryLease, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("hook delivery session id is empty")
 	}
 
-	return BeginContextDelivery(root, DeliveryContext{ClientID: LegacyClientID, ReceiverID: sessionID}, lessons)
+	return BeginContextDelivery(root, DeliveryContext{ClientID: LegacyClientID, ReceiverID: sessionID},
+		unversionedItems(lessons))
 }
 
-// BeginContextDelivery selects lessons for once-per-context delivery and keeps
-// the state lock until Commit or Close. State leasing is supported on Unix,
-// the platforms Seamark currently releases for. Other platforms return an
-// error so callers inject normally instead of relying on unsafe, unlocked
-// read-modify-write state. Callers must always fail open on any error: this
-// state is an optimization, never permission to hide advice.
-func BeginContextDelivery(root string, dc DeliveryContext, lessons []model.Lesson) (*HookDeliveryLease, error) {
+// BeginContextDelivery opens the lease of a context and selects items in
+// one call. See OpenContextDelivery for the lock and for the rule on errors.
+func BeginContextDelivery(root string, dc DeliveryContext, items []DeliveryItem) (*HookDeliveryLease, error) {
+	lease, err := OpenContextDelivery(root, dc)
+	if err != nil {
+		return nil, err
+	}
+
+	lease.Select(items)
+
+	return lease, nil
+}
+
+// OpenContextDelivery reads the delivered set of a context for
+// once-per-context delivery and keeps the state lock until Commit or Close.
+// The open is apart from Select, so a caller can read the delivered set
+// under the lock before it decides what to select. It makes one lock
+// attempt, because a failed lease only repeats advice. State leasing is
+// supported on Unix, the platforms Seamark currently releases for. Other
+// platforms return an error so callers inject normally instead of relying
+// on unsafe, unlocked read-modify-write state. Callers must always fail
+// open on any error: this state is an optimization, never permission to
+// hide advice.
+func OpenContextDelivery(root string, dc DeliveryContext) (*HookDeliveryLease, error) {
 	if !dc.valid() {
 		return nil, fmt.Errorf("hook delivery context names no client or no receiver")
 	}
 
-	dir, lock, err := openDeliveryState(root)
+	dir, lock, err := openDeliveryState(root, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -134,31 +210,54 @@ func BeginContextDelivery(root string, dc DeliveryContext, lessons []model.Lesso
 		current.Delivered = make(map[string]bool)
 	}
 
-	lease := &HookDeliveryLease{
+	return &HookDeliveryLease{
 		dir: dir, lock: lock, state: state, contextSHA: contextSHA, context: current,
-	}
+	}, nil
+}
 
-	pending := make(map[string]bool, len(lessons))
+// Select splits items into the lessons to inject and the lessons that this
+// context already has. It also suppresses a key that repeats inside items.
+// It reads no file, so a caller can run it under the lock of a hook. A
+// lease selects once: a second call adds to the first selection.
+func (l *HookDeliveryLease) Select(items []DeliveryItem) {
+	pending := make(map[string]bool, len(items))
 
-	for _, lesson := range lessons {
-		digest := lessonDeliveryDigest(lesson)
+	for _, item := range items {
+		digest := item.digest()
 
-		if current.Delivered[digest] || pending[digest] {
-			lease.suppressed = append(lease.suppressed, lesson)
+		if l.context.Delivered[digest] || pending[digest] {
+			l.suppressed = append(l.suppressed, item.Lesson)
 			continue
 		}
 
 		pending[digest] = true
-		lease.inject = append(lease.inject, lesson)
-		lease.injectSHA = append(lease.injectSHA, digest)
-	}
+		l.inject = append(l.inject, item.Lesson)
+		l.injectSHA = append(l.injectSHA, digest)
 
-	return lease, nil
+		if item.PinVersion != "" {
+			l.injectPins = append(l.injectPins, item.PinVersion)
+		}
+	}
+}
+
+// PinDelivered reports whether this context already has the pin version in
+// its current generation. It compares the delivered-pin key only, so an
+// entry of a mined lesson or of an earlier binary never matches: at worst
+// a pin repeats, and advice never stays hidden.
+func (l *HookDeliveryLease) PinDelivered(version string) bool {
+	return l.context.Delivered[DeliveryItem{PinVersion: version}.digest()]
 }
 
 // Inject returns the lessons that still need to reach this context window.
 func (l *HookDeliveryLease) Inject() []model.Lesson {
 	return l.inject
+}
+
+// InjectedPinVersions returns the version of each pin in Inject, in order.
+// A caller names the injected pins by this list, not by Inject. Two
+// versions of a pin can render one lesson, so a lesson cannot name a pin.
+func (l *HookDeliveryLease) InjectedPinVersions() []string {
+	return l.injectPins
 }
 
 // Suppressed returns matching lessons already delivered in this context.
@@ -173,7 +272,7 @@ func (l *HookDeliveryLease) Generation() uint64 {
 }
 
 // Commit marks the selected lessons delivered. It is intentionally separate
-// from BeginHookDelivery so a failed stdout write never creates false state.
+// from Select so a failed stdout write never creates false state.
 func (l *HookDeliveryLease) Commit() error {
 	if l.committed || len(l.injectSHA) == 0 {
 		l.committed = true
@@ -226,29 +325,43 @@ func ResetHookDelivery(root, sessionID string) error {
 // its delivered lesson set. A client's context-reset hook calls this after the
 // client summarizes old context, so the lessons can reach the agent again. A
 // context that names no client or no receiver resets nothing: a partial
-// identity must not reset an unrelated context.
+// identity must not reset an unrelated context. ResetContextGeneration
+// holds the rule; this wrapper keeps the API of the callers that need no
+// generation.
 func ResetContextDelivery(root string, dc DeliveryContext) error {
+	_, err := ResetContextGeneration(root, dc)
+
+	return err
+}
+
+// ResetContextGeneration is ResetContextDelivery that also returns the
+// new generation of the context. The reset record of the firing log
+// carries it, so a reader can join the records of one generation. The
+// generation is zero when nothing was reset: an invalid context, no
+// state file, or an error. The reset waits deliveryResetLockWait for the
+// lock, so a short lease of another session does not fail it.
+func ResetContextGeneration(root string, dc DeliveryContext) (uint64, error) {
 	if !dc.valid() {
-		return nil
+		return 0, nil
 	}
 	// Do not create state merely because init installs the lifecycle hook. A
 	// file exists only after once-per-context delivery has actually been used.
 	if _, err := os.Lstat(filepath.Join(root, ".seamark", deliveryStateFile)); os.IsNotExist(err) {
-		return nil
+		return 0, nil
 	} else if err != nil {
-		return err
+		return 0, err
 	}
 
-	dir, lock, err := openDeliveryState(root)
+	dir, lock, err := openDeliveryState(root, deliveryResetLockWait)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = unlockDeliveryFile(lock); _ = lock.Close() }()
 
 	path := filepath.Join(dir, deliveryStateFile)
 	state, err := readDeliveryState(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	now := time.Now().UTC()
@@ -265,10 +378,20 @@ func ResetContextDelivery(root string, dc DeliveryContext) error {
 	current.Delivered = make(map[string]bool)
 	state.Contexts[key] = current
 
-	return writeDeliveryState(path, state)
+	// A failed write leaves the old generation on disk, so the new value
+	// is not reported.
+	if err := writeDeliveryState(path, state); err != nil {
+		return 0, err
+	}
+
+	return current.Generation, nil
 }
 
-func openDeliveryState(root string) (string, *os.File, error) {
+// openDeliveryState opens and locks the state lock file. When another
+// process holds the lock, the open tries again until wait ends, and then
+// it returns an error. A wait of zero is one attempt: a lease passes
+// zero, and a reset passes deliveryResetLockWait.
+func openDeliveryState(root string, wait time.Duration) (string, *os.File, error) {
 	dir := filepath.Join(root, ".seamark")
 
 	if info, err := os.Lstat(dir); err == nil {
@@ -300,7 +423,7 @@ func openDeliveryState(root string) (string, *os.File, error) {
 		return "", nil, err
 	}
 
-	if err := lockDeliveryFile(lock); err != nil {
+	if err := lockDeliveryFileWithin(lock, wait); err != nil {
 		_ = lock.Close()
 		return "", nil, err
 	}
@@ -420,6 +543,8 @@ func pruneDeliveryState(state *deliveryState, now time.Time) {
 	}
 }
 
+// lessonDeliveryDigest is the content key of a lesson. It reads the
+// rendered text only, so it cannot see the mode or the check of a pin.
 func lessonDeliveryDigest(lesson model.Lesson) string {
 	identity := (FiredLesson{Region: lesson.Region, Symptom: lesson.Symptom}).canonicalIdentity()
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(identity.Region+"\x00"+identity.Symptom)))

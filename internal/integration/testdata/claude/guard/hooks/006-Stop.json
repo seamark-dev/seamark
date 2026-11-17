@@ -1,0 +1,15 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000001",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "blocked\n\nThe Edit call was blocked by a policy hook (`seamark`, lesson `frozen-sentinel`), which says files under `sentinel/` must stay as committed. The Read succeeded, and I did not retry the Edit or try another way, as you instructed.",
+  "background_tasks": [],
+  "session_crons": []
+}

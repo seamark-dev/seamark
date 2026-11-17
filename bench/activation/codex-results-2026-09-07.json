@@ -208,7 +208,7 @@
         "output_tokens": 4148,
         "reasoning_output_tokens": 959
       },
-      "thread_id": "01a07d09-b145-7712-8e50-cea9229cdc63",
+      "thread_id": "00000000-0000-7000-8000-000000000001",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:04:31.933138+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -311,7 +311,7 @@
         "output_tokens": 8675,
         "reasoning_output_tokens": 3978
       },
-      "thread_id": "01a07d0a-a540-7f92-82c7-9b68d9a2b333",
+      "thread_id": "00000000-0000-7000-8000-000000000002",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:06:45.795922+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -389,7 +389,7 @@
         "output_tokens": 7289,
         "reasoning_output_tokens": 3487
       },
-      "thread_id": "01a07d0d-1e4b-78b1-9858-fd33d405e8ee",
+      "thread_id": "00000000-0000-7000-8000-000000000003",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:09:01.460485+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -517,7 +517,7 @@
         "output_tokens": 5635,
         "reasoning_output_tokens": 3543
       },
-      "thread_id": "01a07d0f-2fc2-7db0-9d87-3172196845a9",
+      "thread_id": "00000000-0000-7000-8000-000000000004",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:10:51.365029+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -662,7 +662,7 @@
         "output_tokens": 4379,
         "reasoning_output_tokens": 2691
       },
-      "thread_id": "01a07d10-dd06-7de0-83d6-746f3e0cf6fd",
+      "thread_id": "00000000-0000-7000-8000-000000000005",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:12:24.120177+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -818,7 +818,7 @@
         "output_tokens": 7760,
         "reasoning_output_tokens": 3469
       },
-      "thread_id": "01a07d0d-192d-7722-825e-14238fb1a9f3",
+      "thread_id": "00000000-0000-7000-8000-000000000006",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:09:38.966325+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -941,7 +941,7 @@
         "output_tokens": 4456,
         "reasoning_output_tokens": 1540
       },
-      "thread_id": "01a07d0f-c20c-7172-bed2-bffe9ff37d6c",
+      "thread_id": "00000000-0000-7000-8000-000000000007",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:11:32.496776+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1062,7 +1062,7 @@
         "output_tokens": 7046,
         "reasoning_output_tokens": 2336
       },
-      "thread_id": "01a07d11-7d8d-7e73-a1d0-d4becf813fc2",
+      "thread_id": "00000000-0000-7000-8000-000000000008",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:14:13.183618+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1156,7 +1156,7 @@
         "output_tokens": 5498,
         "reasoning_output_tokens": 2376
       },
-      "thread_id": "01a07d13-f14c-7262-bd6a-eec99ad42b7a",
+      "thread_id": "00000000-0000-7000-8000-000000000009",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:16:19.197962+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1235,7 +1235,7 @@
         "output_tokens": 12520,
         "reasoning_output_tokens": 6139
       },
-      "thread_id": "01a07d15-7407-76e1-881d-63bdce586f9f",
+      "thread_id": "00000000-0000-7000-8000-000000000010",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:20:00.887817+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1283,7 +1283,7 @@
         "output_tokens": 3396,
         "reasoning_output_tokens": 1555
       },
-      "thread_id": "01a07d0d-2c14-7703-a800-d24c7974f7c1",
+      "thread_id": "00000000-0000-7000-8000-000000000011",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:08:08.223001+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1330,7 +1330,7 @@
         "output_tokens": 4061,
         "reasoning_output_tokens": 2033
       },
-      "thread_id": "01a07d0e-5fb8-79a0-a7b7-e0b3a88e6f79",
+      "thread_id": "00000000-0000-7000-8000-000000000012",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:09:30.433181+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1388,7 +1388,7 @@
         "output_tokens": 2458,
         "reasoning_output_tokens": 1458
       },
-      "thread_id": "01a07d0f-a0d0-7553-9a93-a5b5dbc469bc",
+      "thread_id": "00000000-0000-7000-8000-000000000013",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:10:25.409097+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1446,7 +1446,7 @@
         "output_tokens": 4866,
         "reasoning_output_tokens": 1660
       },
-      "thread_id": "01a07d10-7797-72d1-adf5-37541bc0fcf9",
+      "thread_id": "00000000-0000-7000-8000-000000000014",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:12:14.301763+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1514,7 +1514,7 @@
         "output_tokens": 3640,
         "reasoning_output_tokens": 1746
       },
-      "thread_id": "01a07d12-20ec-7d03-b188-005083afe41e",
+      "thread_id": "00000000-0000-7000-8000-000000000015",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:13:39.077205+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1546,7 +1546,7 @@
         "output_tokens": 397,
         "reasoning_output_tokens": 41
       },
-      "thread_id": "01a07d13-6c06-79a3-8f41-c59e1eef85da",
+      "thread_id": "00000000-0000-7000-8000-000000000016",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:13:55.617237+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1572,7 +1572,7 @@
         "output_tokens": 356,
         "reasoning_output_tokens": 45
       },
-      "thread_id": "01a07d13-ad23-7df2-8839-8e8ee7b7607d",
+      "thread_id": "00000000-0000-7000-8000-000000000017",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:14:12.748771+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1598,7 +1598,7 @@
         "output_tokens": 259,
         "reasoning_output_tokens": 84
       },
-      "thread_id": "01a07d09-5f73-7592-9342-5b320a7a3950",
+      "thread_id": "00000000-0000-7000-8000-000000000018",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:02:50.053003+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",
@@ -1624,7 +1624,7 @@
         "output_tokens": 504,
         "reasoning_output_tokens": 99
       },
-      "thread_id": "01a07d13-efc7-76e3-b8c2-a2c0ec94e1d2",
+      "thread_id": "00000000-0000-7000-8000-000000000019",
       "exit_code": 0,
       "finished_at": "2026-09-07T18:14:33.552542+00:00",
       "fixture_head": "ab7d97437cded1c83fcbfb873aee1d806f28356f",

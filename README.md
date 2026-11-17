@@ -35,8 +35,11 @@ Seamark helps you put that knowledge to work:
 
 - **Learn from your own repository.** Turn past fixes and code review feedback
   into proposed lessons, with links back to the evidence. You decide what to keep.
-- **Bring lessons to the next edit.** Hooks deliver relevant reminders when
+- **Bring lessons back to the agent.** Hooks deliver relevant reminders when
   your AI coding agent edits matching files, including in a new session.
+  The agent reads a reminder with the edit result, so the reminder can
+  guide the next step. For guidance before an edit, use `seamark lessons --prepare` or
+  the `change_set` tool.
 - **Find changes that belong together.** Use Git history to spot a generated
   client, another implementation, or a test that often changes with your code.
 - **Keep the knowledge with your project.** Accepted lessons live in a YAML
@@ -57,7 +60,8 @@ guide to go further.
 | Capability | What it gives you | Try it |
 | --- | --- | --- |
 | [**Lessons from your history**](#learn-from-your-repository) | Proposed lessons from fix commits and pull-request reviews, each linked to its evidence. You decide which to keep. | `seamark index --reviews` · [Lessons guide](docs/lessons.md) |
-| **Reminders at the edit** | Hooks give your AI coding agent an accepted lesson when it edits a matching file, also in a new session. | `seamark lessons --file path/to/file` · [Agent setup](docs/agent-integrations.md) |
+| [**Executable lessons**](#executable-lessons) (new in v0.9.0) | A pin can carry a check that Seamark runs on the working tree, and optionally on each edit before the write. | `seamark lessons --verify` · [Lessons guide](docs/lessons.md#executable-lessons-advisory-check-and-enforce) |
+| **Reminders with the edit result** | Hooks give your AI coding agent an accepted lesson when it edits a matching file, also in a new session. The agent reads it with the edit result and can use it in the next step. | `seamark lessons --file path/to/file` · [Agent setup](docs/agent-integrations.md) |
 | [**Repository evidence over MCP**](#mcp-tools) | Five tools tell your agent where to start, why code is there, which files usually change together, and what a diff can reach. | `seamark orient` · [History and analysis](docs/repository-history.md) |
 | [**Agent skills**](#agent-skills) (optional) | Three skills tell your agent when to use Seamark to explore, plan, and review a change. | `seamark init --client claude --skills` · [Skills guide](skills/README.md) |
 | **Workspace console** (experimental) | One full-screen view of the index, integrations, evidence, proposals, pins, and settings. Every change starts from a preview. | `seamark tui` · [Console guide](docs/tui.md) |
@@ -66,7 +70,8 @@ guide to go further.
 
 ## Get started
 
-These instructions are for **v0.7.0 or newer**.
+These instructions are for **v0.9.0 or newer**. Lesson preparation, the
+delivery reading, and the executable lesson checks are new in v0.9.0.
 
 Install the latest published version on macOS or Linux:
 
@@ -128,7 +133,7 @@ The learning workflow is simple:
 
 **Past fixes and reviews → proposed lessons → your review → reminders during edits.**
 
-Mine pull-request review comments and fix commits, then list the findings:
+Mine pull-request review comments and fix commits, then list the review lessons:
 
 ```bash
 seamark index --reviews
@@ -137,9 +142,10 @@ seamark lessons --list
 
 Review comments come from GitHub through the GitHub CLI (`gh`), authenticated
 for the repository. Without it, the run keeps the fix commits of local Git
-history and reports the reviews as skipped. To stay offline, use
-`seamark index --fixes-only` instead. A new repository or one with little
-relevant feedback may have few findings. You can also
+history and reports the reviews as skipped. Fix findings do not appear in
+`seamark lessons --list`; `seamark lessons --distill` reads them. To stay
+offline, use `seamark index --fixes-only` instead. A new repository or one
+with little relevant feedback may have few findings. You can also
 [write a lesson by hand](docs/lessons.md#tuning-what-surfaces-lessonsyaml).
 
 To turn findings into proposed lessons, Seamark can use your installed AI
@@ -168,22 +174,60 @@ By default, this prints a YAML block. Paste it under `pin:` in
 [`distill.write`](docs/configuration.md#configuration) first.
 
 Inspect what applies to a file with `seamark lessons --file path/to/file`.
-Your configured hooks deliver matching reminders during supported edits.
+Your configured hooks deliver matching reminders during supported edits,
+after the agent has constructed the call. For earlier guidance, use
+`seamark lessons --prepare path/to/file` before building a change.
 `seamark report --open` opens a local report of proposals and accepted lessons;
 `seamark lessons --stats` shows which reminders have been delivered.
+The `seamark lessons --delivery` reading counts the delivery
+records of each pin version in the audit logs. It counts a write as
+prevented only when a written deny on a natively verified path, today
+Claude Code `Write` and `Edit` and Codex `apply_patch`, has no later
+execution record. These paths carry one limit: the client lets the write
+run after its 10 s hook timeout.
+See the [lesson guide](docs/lessons.md) for executable checks and limits.
 
 [Learning guide: review, tune, dismiss, and update lessons →](docs/lessons.md)
 
 `seamark tui` (experimental) opens a full-screen console for one workspace:
 index state, agent integrations, evidence refresh, distillation runs that
 you can stop, proposal decisions, the installed pins with a previewed
-retarget or prune, manual pins that you create, edit, or remove, trigger
+retarget, prune, or scope edit of a linked pin, manual pins that you
+create, edit, or remove, trigger
 extraction for the proposals you select, delivery statistics, focused
 settings of `config.yaml` and `lessons.yaml` (threshold, budgets,
 repetition mode, and mutes), a selection sample that compares the
 lessons of explicit paths before and after a reviewed change, and doctor
-checks. Browsing never writes; every change, fetch, and agent run starts
-from a preview that names its exact effects. [Workspace console →](docs/tui.md)
+checks. Browsing never writes; pin, settings and decision changes,
+fetches and agent runs start from a preview of their effects. Explicit
+verification runs at once and records its audit, not a pin change.
+[Workspace console →](docs/tui.md)
+
+### Executable lessons
+
+A pin can also carry a check that Seamark runs. You define the check by
+hand in `.seamark/lessons.yaml`: `forbid-path-change/1` reports any
+change in the scope of the pin, and `no-added-pattern/1` reports an
+added line that matches a Go regular expression. The mode of the pin
+says when the check runs. `advisory` only shows the guidance. `check`
+runs the check when you verify the work. `enforce` also checks each
+covered edit before the tool writes it.
+
+```bash
+seamark lessons --set-mode check --pin <pin-ref> --check <check-id>
+seamark lessons --verify                               # exit 2 on a violation
+seamark check --lessons                                # the policy check and the lesson checks
+seamark init --client claude --lesson-checks enforce   # install the hooks for each covered edit
+```
+
+`--set-mode` follows `distill.write`, as `--apply` does. A mode installs
+no hook: `seamark init --lesson-checks check` installs the hooks that
+check an edit after it runs, and `--lesson-checks enforce` also installs
+the guard that asks the client to deny a violation before the write. A recording verifies that
+native deny for Claude Code `Write` and `Edit` only, and the client lets
+the write run after its 10 s hook timeout. See
+[Executable lessons](docs/lessons.md#executable-lessons-advisory-check-and-enforce)
+for the scope, the exit codes, and the limits.
 
 ## Agent skills
 
@@ -259,7 +303,7 @@ diff policies are available, but they are not the main onboarding path.
 See the [policy guide](docs/policies.md) before enabling enforcement.
 
 Next, we plan to build on lesson delivery and the agent integration framework
-with unified hook management. This is future work, not part of v0.8.0.
+with unified hook management. This is future work, not part of v0.9.0.
 See [current status](docs/STATUS.md) and the [changelog](CHANGELOG.md).
 
 ## Privacy and local data
@@ -293,11 +337,48 @@ extend the [effect catalogue](docs/configuration.md#effect-catalogue).
 Source builds need Go 1.25 or newer and a C compiler:
 
 ```bash
-make test
-make lint
-make build
-make smoke
+make verify   # one full gate: ordinary tests, race tests, lint, smoke
 ```
+
+`make verify` ends with the smoke test, which builds `bin/seamark`; run
+`make build` alone when you only need the binary.
+
+During editing, run only the packages you changed; a focused run is
+cached like any other `go test`:
+
+```bash
+make test TEST_PKGS=./internal/cli TEST_RUN='TestCheckLessons|TestLessonsVerify'
+make test-race TEST_PKGS=./internal/lessoncheck
+```
+
+A literal `$` in `TEST_RUN` or `TEST_FLAGS` must be doubled for Make:
+`TEST_RUN='^TestFoo$$'` reaches `go test` as `^TestFoo$`.
+
+`make test` and `make test-race` print a bounded summary: status, wall
+time, package and test counts, the slowest uncached packages, and the
+directory holding the complete evidence (`events.jsonl`, `stderr.log`,
+`output.log`, `summary.json`). A failed run names the failing packages
+and tests, keeps the beginning and end of each diagnostic, and points at
+the same directory. Read the summary and the named failures first; never
+paste `events.jsonl` into an agent. `RAW=1 make test` runs plain
+`go test` with its ordinary output.
+
+`make verify` runs each full suite once, in order, even under parallel make,
+and refuses `TEST_PKGS`, `TEST_RUN` or `TEST_FLAGS` that would narrow it.
+One owner runs it before review; several agents may run focused packages
+at once. Docs-only changes do not need the Go suites.
+
+`TEST_GOCACHE` overrides the Go build/result cache (the default is
+`go env GOCACHE`), `TEST_LOG_DIR` overrides where run directories are
+written, and `TEST_TIMEOUT` changes the per-package timeout (10m). On a
+constrained host, bound parallelism with
+`TEST_FLAGS='-count=1 -p=2 -parallel=2'`: `-p` caps packages and
+`-parallel` caps tests inside each package.
+
+Native client checks, recordings, captures and benchmarks keep their own
+targets and output paths; `make verify` does not replace the release
+prerequisites in
+[agent integrations](docs/agent-integrations.md#release-checklist).
 
 See the [Makefile](Makefile) for additional checks and benchmark commands.
 

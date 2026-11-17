@@ -257,6 +257,87 @@ func TestRecoveryRefusesATargetKeyThatAnotherRowNowRecords(t *testing.T) {
 	assert.Equal(t, ledger, f.ledger(), "p1 keeps its earlier regions")
 }
 
+// partialScope commits the scope edit while another writer appends a line
+// to the written file and the ledger write fails. The restore is then
+// refused, so the result carries a recovery.
+func partialScope(t *testing.T, f *fixture, edit AuthorRequest) Result {
+	t.Helper()
+
+	p := f.scopePlan(f.deps(), edit)
+	require.True(t, p.Confirmable, "blocked: %v", p.Blocked)
+
+	deps := f.deps()
+	deps.Files = &fileSeam{after: func() { f.write(string(p.Change.After)+"# another writer\n", f.mode()) }}
+	deps.Ledger = &ledgerSeam{Store: f.st, err: errors.New("injected: database is locked")}
+
+	res, err := Commit(deps, p)
+	require.NoError(t, err)
+	require.True(t, res.Partial())
+	require.Equal(t, refusedRestore, res.RestoreRefused)
+	require.NotNil(t, res.Recovery)
+
+	return res
+}
+
+// A completion would give two applied proposals one key, so a row that takes
+// the new key after the partial edit refuses it.
+func TestRecoveryOfAScopeEditRefusesATakenKey(t *testing.T) {
+	f := authorFixture(t)
+	res := partialScope(t, f, f.linkedDraft("web"))
+
+	f.propose(model.Proposal{Signature: "s2", Rule: "linked-rule", Region: "web", Status: model.ProposalApplied})
+
+	ledger := f.ledger()
+
+	rp, err := PlanRecovery(f.deps(), res.Recovery)
+	require.NoError(t, err)
+	assert.False(t, rp.Confirmable)
+	assert.Equal(t, ItemBlocked, rp.Items[0].Status)
+	assert.Equal(t, reasonKeyTaken, rp.Items[0].Reason)
+	assert.Contains(t, rp.Blocked, reasonUnproven)
+
+	_, err = CommitRecovery(f.deps(), rp)
+	require.ErrorIs(t, err, ErrNotConfirmable)
+	assert.Equal(t, ledger, f.ledger())
+}
+
+// A new order keeps the key, so the new entry stands under the old key. The
+// proof must not read that key as the old pin back, and the own row must not
+// read as another owner of the key.
+func TestRecoveryCompletesANewOrderOfTheRegions(t *testing.T) {
+	const twoRegions = `pin:
+  - rule: two
+    region: api
+    regions: [api, web]
+    note: A note.
+`
+
+	f := newFixture(t, nil)
+	f.write(twoRegions, 0o644)
+	f.propose(model.Proposal{
+		Signature: "s1", Rule: "two", Region: "api", Regions: []string{"api", "web"}, Note: "A note.",
+		Status: model.ProposalApplied,
+	})
+
+	res := partialScope(t, f, scopeDraft(f.ref("two", ""), "web", "api"))
+
+	rp, err := PlanRecovery(f.deps(), res.Recovery)
+	require.NoError(t, err)
+	require.True(t, rp.Confirmable, "blocked: %v %v", rp.Blocked, rp.Items[0].Reason)
+
+	lessons := f.lessons()
+
+	done, err := CommitRecovery(f.deps(), rp)
+	require.NoError(t, err)
+	assert.True(t, done.LedgerDone)
+	assert.Equal(t, lessons, f.lessons(), "the recovery writes the ledger only")
+
+	row := f.row(1)
+	assert.Equal(t, []string{"web", "api"}, row.Regions)
+	assert.Equal(t, scopeAt, row.ScopeChosen)
+	f.holdsLink("two", 1)
+}
+
 func TestRecoveryRefusesAProofThatBrokeAfterThePreview(t *testing.T) {
 	f := retargetFixture(t)
 	_, res := partial(t, f, f.request(ActionRetarget, "Guard-Empty-Datasets"), "# another writer\n")

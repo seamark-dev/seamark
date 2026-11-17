@@ -128,7 +128,7 @@ func TestCodexInspection(t *testing.T) {
 					"%s: the native check is defined and has not run", entry.Capability)
 			default:
 				assert.Equal(t, VerificationVerified, entry.Verification.Level,
-					"%s: the compatibility record holds a native run", entry.Capability)
+					"%s: the native compatibility evidence holds a run", entry.Capability)
 			}
 
 			if entry.Capability == CapabilitySkills {
@@ -199,6 +199,7 @@ func TestCodexParseErrorNamesTheHookDocumentOnce(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, StateUnreadable, commands.State)
 	assert.Equal(t, "unreadable ("+insp.HookDocumentError+")", commands.Detail)
+	assert.Equal(t, "hooks unreadable ("+insp.HookDocumentError+")", insp.DescribeHooks(), "the word appears once")
 
 	_, err := codexSetup{}.Plan(root, testBinary, ClientSetup{ClientID: CodexID, Hooks: true})
 	require.Error(t, err)

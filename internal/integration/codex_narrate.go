@@ -17,9 +17,11 @@ import (
 // composition of the documents apart from their narration, so a
 // wording change touches no plan.
 
-// codexHooksDetail names the managed hooks in init's words, from the
-// specs that were merged: "gate + lessons hooks", or the one that was.
-func codexHooksDetail(specs []hooks.Spec) string {
+// hooksDetail names the managed hooks in init's words, from the specs
+// that were merged: "gate + lessons hooks", or the one that was. Claude
+// Code and Codex share it, so a hooks line names the specs that it
+// installs.
+func hooksDetail(specs []hooks.Spec) string {
 	names := make([]string, 0, len(specs))
 
 	for _, spec := range specs {
@@ -39,42 +41,57 @@ func codexHooksDetail(specs []hooks.Spec) string {
 // tool must never require opening the file to find out.
 func narrateCodexHooks(w io.Writer, binary string, specs []hooks.Spec, change codexHooksChange, preview bool) {
 	switch {
-	case len(specs) == 0:
-		fmt.Fprintf(w, "  kept    %s (no hook installed: the seamark hooks run from definitions that setup does not manage)\n", codexHooksFile)
-	case !change.changed:
-		fmt.Fprintf(w, "  kept    %s (seamark hooks already wired)\n", codexHooksFile)
+	case !change.changed():
+		fmt.Fprintf(w, "  kept    %s (%s)\n", codexHooksFile, change.keptDetail(specs))
 	case change.created:
-		fmt.Fprintf(w, "  %s %s (%s)\n", verb("wrote  ", "would write", preview), codexHooksFile, codexHooksDetail(specs))
+		fmt.Fprintf(w, "  %s %s (%s)\n", verb("wrote  ", "would write", preview), codexHooksFile, change.detail(specs))
 	default:
-		fmt.Fprintf(w, "  %s %s (%s)\n", verb("updated", "would update", preview), codexHooksFile, codexHooksDetail(specs))
+		fmt.Fprintf(w, "  %s %s (%s)\n", verb("updated", "would update", preview), codexHooksFile, change.detail(specs))
 	}
 
-	for _, spec := range specs {
-		where := spec.Event
-		if spec.Matcher != "" {
-			where += " " + spec.Matcher
-		}
+	narrateHookSpecs(w, binary, specs)
+	change.lessons.narrateCommands(w)
 
-		fmt.Fprintf(w, "          %-30s %s\n", where, spec.Command(binary))
-	}
-
-	// The note states only what changed, the hook flag. Whether anything
-	// still blocks is the effective-mode line's job: a kept enforce
-	// policy blocks whatever the flag says.
 	if change.removedEnforce {
-		fmt.Fprintf(w, "  note    %s --enforce from the Codex gate hook: the hook follows .seamark/policy.yaml\n"+
-			"          instead — re-run with --gate-mode enforce to restore the baked-in flag\n",
-			verb("removed", "would remove", preview))
+		narrateRemovedEnforce(w, "the Codex gate hook", preview)
 	}
+
+	change.lessons.narrateLine(w)
 }
 
 // codexHooksChange says what the plan does to hooks.json.
 type codexHooksChange struct {
-	changed bool // the plan writes the file
 	created bool // the file does not exist yet
+	// hooksChanged is true when the merge of the gate and lesson hooks
+	// changes the file.
+	hooksChanged bool
 	// removedEnforce is true when the merge removes --enforce from an
 	// owned gate command.
 	removedEnforce bool
+	// lessons is what the plan does to the lesson-check hooks.
+	lessons lessonChange
+}
+
+// changed reports whether the plan writes the file: the merge of the
+// managed hooks or the lesson-check change alters it.
+func (c codexHooksChange) changed() bool { return c.hooksChanged || c.lessons.changed() }
+
+// detail says what the write does, in init's words. A plan without a
+// lesson-check change names the managed hooks, as init always did.
+func (c codexHooksChange) detail(specs []hooks.Spec) string {
+	return withLessonDetail(hooksDetail(specs), c.hooksChanged, c.lessons)
+}
+
+// keptDetail says why setup keeps the file, in init's words. The plan
+// and the narration both use it, so the kept line and the plan detail
+// agree. Without a managed hook, the hooks run from definitions that
+// setup does not manage.
+func (c codexHooksChange) keptDetail(specs []hooks.Spec) string {
+	if len(specs) == 0 && len(c.lessons.specs) == 0 {
+		return "no hook installed: the seamark hooks run from definitions that setup does not manage"
+	}
+
+	return "seamark hooks already wired"
 }
 
 // codexWriteDetail says what the write adds, in init's words.

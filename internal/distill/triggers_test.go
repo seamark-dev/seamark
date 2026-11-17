@@ -188,7 +188,7 @@ func TestRecomputeRegionsVanishedTriggerNeverWidens(t *testing.T) {
 	require.Len(t, facts, 1)
 	assert.Equal(t, "", facts[0].Region)
 	assert.False(t, facts[0].Selected)
-	assert.Contains(t, facts[0].BlockedLine(), "absent from the working tree")
+	assert.Contains(t, facts[0].BlockedLine(model.ProposalProposed), "absent from the working tree")
 }
 
 func TestDirectVanishedTriggerExplainsWhyItIsBlocked(t *testing.T) {
@@ -201,8 +201,47 @@ func TestDirectVanishedTriggerExplainsWhyItIsBlocked(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, facts, 1)
 	assert.True(t, facts[0].Direct)
-	assert.Contains(t, facts[0].BlockedLine(), "directly cited by the evidence")
-	assert.Contains(t, facts[0].BlockedLine(), "not deliverable")
+	assert.Contains(t, facts[0].BlockedLine(model.ProposalProposed), "directly cited by the evidence")
+	assert.Contains(t, facts[0].BlockedLine(model.ProposalProposed), "not deliverable")
+}
+
+// TestBlockedLineRouteFollowsTheRow keeps the hand edit out of an applied
+// proposal, because a hand edit of its regions unlinks its pin. Every
+// other row keeps its old words.
+func TestBlockedLineRouteFollowsTheRow(t *testing.T) {
+	const (
+		cited = "trigger api/handler.go — directly cited by the evidence but not deliverable: " +
+			"the region set is full or the path is absent from the working tree; "
+		cochange = "trigger api/schemas.py — confirmed by co-change (38 shared commits) but not deliverable: " +
+			"the region set is full or the path is absent from the working tree; "
+		console = "review the trigger or edit its regions in seamark tui, Lessons › Pins, with i"
+		hand    = "review the trigger or edit regions in .seamark/lessons.yaml by hand"
+	)
+
+	direct := TriggerFact{Path: "api/handler.go", Direct: true}
+	history := TriggerFact{Path: "api/schemas.py", Together: 38}
+
+	cases := []struct {
+		name   string
+		fact   TriggerFact
+		status string
+		want   string
+	}{
+		{"applied, cited", direct, model.ProposalApplied, cited + console},
+		{"applied, co-change", history, model.ProposalApplied, cochange + console},
+		{"pending", history, model.ProposalProposed, cochange + hand},
+		{"dismissed", history, model.ProposalDismissed, cochange + hand},
+		{"superseded", direct, model.ProposalSuperseded, cited + hand},
+		{"no status", direct, "", cited + hand},
+		{"selected", TriggerFact{Path: "a.go", Direct: true, Selected: true}, model.ProposalApplied, ""},
+		{"unconfirmed", TriggerFact{Path: "a.go"}, model.ProposalApplied, ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.fact.BlockedLine(tc.status))
+		})
+	}
 }
 
 func TestRecomputeRegionsLeavesUnconfirmedTriggersAlone(t *testing.T) {
@@ -250,7 +289,7 @@ func TestRecomputeRegionsNarrowsToConfirmedTriggerInsideCoverage(t *testing.T) {
 	require.Len(t, facts, 1)
 	assert.Equal(t, 20, facts[0].Together, "confirmation is still reported")
 	assert.True(t, facts[0].Selected)
-	assert.Empty(t, facts[0].BlockedLine(), "selected facts are deliverable")
+	assert.Empty(t, facts[0].BlockedLine(model.ProposalApplied), "selected facts are deliverable")
 }
 
 func TestAddDeliveryRegionEnforcesCapAndCollapsesChildren(t *testing.T) {

@@ -6,7 +6,8 @@
 // rules, or proposal validation; those stay in the shared engines.
 //
 // Dependency direction is deliberate. This package may import agent,
-// skills, approve, hooks, and gate contracts. It must not import the
+// skills, approve, hooks, and gate contracts, and the operation types of
+// lessoncheck, which the guard decoders return. It must not import the
 // CLI, doctor, status, MCP, report, or distill packages, because they
 // consume the registry and an import in the other direction is a cycle.
 package integration
@@ -21,6 +22,7 @@ import (
 
 	"github.com/seamark-dev/seamark/internal/agent"
 	"github.com/seamark-dev/seamark/internal/gate"
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
 	"github.com/seamark-dev/seamark/internal/skills"
 )
 
@@ -55,17 +57,36 @@ const (
 	CapabilityInvocation Capability = "invocation"
 )
 
+// The lesson-check capabilities. They are in Capabilities, so Declared
+// lists them. They are not in ConfiguredCapabilities, because
+// completeCapabilities adds an entry for each element of that list to
+// every inspection. The TUI Overview would then show new items for
+// every repository, also for one without lesson checks. The
+// lesson-check capability report shows their install state instead.
+const (
+	// CapabilityLessonVerify decodes the pre-edit and the post-edit
+	// events, so the hooks can record a baseline and verify the result.
+	CapabilityLessonVerify Capability = "lesson-verify"
+	// CapabilityLessonGuard decodes a pending edit completely and
+	// encodes a deny before the write.
+	CapabilityLessonGuard Capability = "lesson-guard"
+	// CapabilityLessonExploration decodes structured read events for
+	// exploration advice.
+	CapabilityLessonExploration Capability = "lesson-exploration"
+)
+
 // Capabilities lists every capability in stable presentation order.
 var Capabilities = []Capability{
 	CapabilitySkills, CapabilitySetup, CapabilityMCPRegistration, CapabilityToolGrants,
 	CapabilityEdits, CapabilityCommands, CapabilityResets, CapabilityInvocation,
+	CapabilityLessonVerify, CapabilityLessonGuard, CapabilityLessonExploration,
 }
 
 // ConfiguredCapabilities lists the capabilities that have project
 // configuration an inspection can classify, in presentation order.
-// Setup is the umbrella for the three setup operations, and invocation
-// has no project document: the invoker resolver reports it. Both are
-// declared, never configured.
+// Setup groups the three setup operations, and invocation has no
+// project document: the invoker resolver reports it. Both are declared,
+// never configured.
 var ConfiguredCapabilities = []Capability{
 	CapabilitySkills, CapabilityMCPRegistration, CapabilityToolGrants,
 	CapabilityEdits, CapabilityCommands, CapabilityResets,
@@ -93,6 +114,18 @@ type SetupSupport struct {
 	// ApproveTools means the adapter can add the exact per-tool grants.
 	// It is independent of RegisterMCP.
 	ApproveTools bool `json:"approve_tools"`
+	// LessonVerify means the adapter can install the lesson-check hooks
+	// of check mode: the pre-edit baseline and the post-edit
+	// verification. init installs them only on an explicit
+	// `--lesson-checks` request.
+	LessonVerify bool `json:"lesson_verify"`
+	// LessonGuard means the adapter can install the pre-write guard of
+	// enforce mode. Enforce installs the post-edit verification too, so
+	// it needs LessonVerify.
+	LessonGuard bool `json:"lesson_guard"`
+	// LessonExploration means the adapter can install the exploration
+	// hook on a structured read.
+	LessonExploration bool `json:"lesson_exploration"`
 }
 
 // Client describes one coding agent. Built-in descriptors are assembled
@@ -130,6 +163,19 @@ type Client struct {
 	// Invocation returns the one-shot inference command for a workspace
 	// root. It is pure: no PATH lookup, no login, no process start.
 	Invocation func(root string) (agent.CommandSpec, error)
+	// Explores translates native structured read events and the advice
+	// reply after them. It is nil for a client without a tested
+	// structured read path. It declares CapabilityLessonExploration.
+	Explores ExploreHooks
+	// Guards translates a pending native edit into a complete operation
+	// and encodes the deny reply. It is nil for a client without a
+	// pre-write guard. It declares CapabilityLessonGuard.
+	Guards GuardHooks
+	// Completions translates the native event after an edit tool ran
+	// and encodes the post-edit findings. It is nil for a client without
+	// a post-edit observation. CapabilityLessonVerify needs it and
+	// Guards, because the check-mode baseline uses the guard decoder.
+	Completions CompletionHooks
 }
 
 // Supports reports whether the descriptor declares a capability.
@@ -151,6 +197,14 @@ func (c Client) Supports(capability Capability) bool {
 		return c.Resets != nil
 	case CapabilityInvocation:
 		return c.Invocation != nil
+	case CapabilityLessonVerify:
+		// The baseline before the edit comes from the guard decoder, and
+		// the observation after it from the completion decoder.
+		return c.Guards != nil && c.Completions != nil
+	case CapabilityLessonGuard:
+		return c.Guards != nil
+	case CapabilityLessonExploration:
+		return c.Explores != nil
 	default:
 		return false
 	}
@@ -232,11 +286,80 @@ type ResetHooks interface {
 	DecodeReset(payload []byte) (ResetEvent, error)
 }
 
+// ExploreHooks translates a client's structured read events for
+// exploration advice. DecodeExplore turns one native payload into the
+// path that the agent read. It returns ErrNotApplicable for an event of
+// another tool or another lifecycle stage, and ErrMalformedEvent for a
+// read event without a path. A decoder never reads paths out of shell
+// text, search results, or tool output, because only a structured read
+// names its file without inference.
+//
+// EncodeExploreAdvice turns rendered advisory text into the native,
+// nonblocking reply. read is the ExploreEvent.Read value, because the
+// reply names the event that it answers.
+//
+// ExploreMechanism names the native reply path, as AdviceMechanism does
+// for edit advice. The firing log records it.
+type ExploreHooks interface {
+	DecodeExplore(payload []byte) (ExploreEvent, error)
+	EncodeExploreAdvice(text string, read bool) (HookReply, error)
+	ExploreMechanism() string
+}
+
+// GuardHooks translates a client's pending edit for the lesson-check
+// guard. DecodeGuard turns one native payload into the complete
+// operation: every file it changes and the content it writes. A
+// decoder returns the complete operation or an error, never a part of
+// the edit. A partial edit looks like a smaller edit, and the guard
+// could then allow it.
+//
+// On success PathsComplete is true: the decoder named every path. The
+// paths are raw, as the client wrote them. The handler resolves them
+// with delivery.NormalizePaths and clears PathsComplete when that
+// rejects a path that can lie inside the worktree.
+//
+// DecodeGuard returns ErrNotApplicable for a tool outside the covered
+// list, ErrUnsupportedGrammar when the decoder cannot name every path,
+// and ErrMalformedEvent for every other request that it cannot read.
+// With an error, the Operation holds the event identity only: the
+// client, the tool, the session, the match, the directory, and the
+// receiver, when the payload names them. It holds no FileOp, and
+// PathsComplete is false. The handler needs that identity for the deny
+// text and the audit record.
+//
+// A decoder takes the client ID from its own descriptor, never from the
+// payload, so a payload cannot choose how it is judged.
+//
+// EncodeDeny renders the deny reasons in the native blocking form. The
+// reply blocks the tool, also when reasons is empty.
+type GuardHooks interface {
+	DecodeGuard(payload []byte) (lessoncheck.Operation, error)
+	EncodeDeny(reasons []string) HookReply
+}
+
+// CompletionHooks translates the native event after a covered edit
+// tool ran. DecodeCompletion turns one native payload into the outcome
+// of the tool and the paths of its input. It returns ErrNotApplicable
+// for another event or another tool, and ErrMalformedEvent or
+// ErrUnsupportedGrammar when it cannot name every path. With an error,
+// the Completion holds no path. It holds the event identity and the
+// outcome when the payload names them, so the post-edit record still
+// joins the guard record of the same call by its match.
+//
+// EncodeFindings renders the post-edit findings in the native reply.
+// outcome is the Completion.Outcome value, because a client can answer a
+// failed tool through another event name. The reply never blocks and
+// never asks the client to undo the edit, because the tool already ran.
+type CompletionHooks interface {
+	DecodeCompletion(payload []byte) (lessoncheck.Completion, error)
+	EncodeFindings(text string, outcome lessoncheck.ToolOutcome) (HookReply, error)
+}
+
 // ReceivingContext identifies the conversation that can see injected
-// advice. It is the actual receiver, not merely a shared parent
-// session: a subagent reports the session id of its parent, and that
-// id alone is not a context of its own. An adapter that cannot name
-// the actual receiver leaves the context nil, and suppression stays off.
+// advice. It is the actual receiver, not only a shared parent session.
+// A subagent reports the session id of its parent, and that id alone is
+// not a context of its own. An adapter that cannot name the actual
+// receiver leaves the context nil, and suppression stays off.
 type ReceivingContext struct {
 	// ID is the client-native identity, kept in memory only. Persisted
 	// state stores a repository-scoped digest, never the raw value.
@@ -244,6 +367,11 @@ type ReceivingContext struct {
 	// Resettable is true when the adapter's compatibility checks
 	// established that a reset event reaches this exact context.
 	Resettable bool
+	// Lane names the place of the receiver in its session: LaneRoot for
+	// the session itself, LaneChild for an agent inside it. Only
+	// ReceivingContextOf sets it. The audit records it apart from
+	// Resettable, because a known lane does not make suppression safe.
+	Lane string
 }
 
 // EventMeta carries the identity every native event shares. Values are
@@ -264,6 +392,10 @@ type EventMeta struct {
 	// Context is the receiving context, or nil when the adapter cannot
 	// identify one. Nil disables once-per-context suppression.
 	Context *ReceivingContext
+	// Turn is the client's turn identity (Claude prompt_id, Codex
+	// turn_id), or empty when the event carries none. It stays in memory
+	// only: the audit log gets a digest of it, never the raw value.
+	Turn string
 }
 
 // EditEvent is one normalized edit opportunity: the complete set of
@@ -277,6 +409,19 @@ type EditEvent struct {
 	Paths []string
 }
 
+// ExploreEvent is one normalized structured read: the file that the
+// agent asked to read. The exploration hook advises on that file only.
+type ExploreEvent struct {
+	EventMeta
+	// Paths holds exactly one path for a read, as the client reported
+	// it. The shared normalization resolves it against CWD.
+	Paths []string
+	// Read is false when the native event reports a failed read. The
+	// advice then says that the file was not read, because the path can
+	// name a file that does not exist yet.
+	Read bool
+}
+
 // CommandEvent is one validated shell-command event. Command is the
 // shell text the gate evaluates; patch text never reaches this type.
 type CommandEvent struct {
@@ -288,6 +433,11 @@ type CommandEvent struct {
 // again after a native reset such as compaction.
 type ResetEvent struct {
 	Context ReceivingContext
+	// SessionID is the client's session identifier. The reset record of
+	// the audit log joins the edit records of that session through it.
+	SessionID string
+	// Turn is the client's turn identity, by the rule of EventMeta.Turn.
+	Turn string
 }
 
 // HookReply is what a hook run writes back to the client. Advice is
@@ -424,6 +574,11 @@ type VerificationEvidence struct {
 	// Surface names the native surface the check exercised, for example
 	// "PreToolUse apply_patch".
 	Surface string `json:"surface,omitempty"`
+	// Limit is a known gap of a verified claim, in words for the user.
+	// For example, a client can let the write run after its hook
+	// timeout. The claim holds only inside the limit, so each surface
+	// that shows the claim shows the limit too.
+	Limit string `json:"limit,omitempty"`
 }
 
 // VerifiedEvidence builds evidence at VerificationVerified. It rejects
@@ -439,10 +594,28 @@ func VerifiedEvidence(clientVersion, surface string) (VerificationEvidence, erro
 	return e, nil
 }
 
+// mustVerifiedEvidence builds verified evidence from constants. The
+// contract tests validate every entry, so a blank scope is a
+// programming error.
+func mustVerifiedEvidence(clientVersion, surface string) VerificationEvidence {
+	e, err := VerifiedEvidence(clientVersion, surface)
+	if err != nil {
+		panic("integration: " + err.Error())
+	}
+
+	return e
+}
+
 // Validate checks that verified evidence names its tested version and
-// surface. Other levels carry optional scope, so they always pass.
+// surface. Other levels carry optional scope, so they pass unless they
+// carry a limit. A limit narrows a verified claim, so it has no meaning
+// on a lower level.
 func (e VerificationEvidence) Validate() error {
 	if e.Level != VerificationVerified {
+		if e.Limit != "" {
+			return errors.New("evidence below verified names a limit")
+		}
+
 		return nil
 	}
 
@@ -477,11 +650,18 @@ type CapabilityInspection struct {
 	// supplemental: consumers must read the typed fields, never parse it.
 	// It never names the client: the consumer adds the client label.
 	Detail string `json:"detail,omitempty"`
-	// Action is the command or edit that changes the state, from the
-	// same adapter knowledge that installs the artifact; empty when
-	// nothing needs to change. init, doctor, and status print it as
-	// the corrective action, so the three never disagree on the fix.
+	// Action is the command or edit that changes the state. It comes
+	// from the same adapter knowledge that installs the artifact, and it
+	// is empty when nothing needs to change. init, doctor, and status
+	// print it as the corrective action, so the three never disagree on
+	// the fix.
 	Action string `json:"action,omitempty"`
+	// Inert is true when the hook is present and the client never runs
+	// it. Its binary cannot start, its managed matcher never fires, or an
+	// if field sits on an event without a tool. Narration reads this
+	// field, so it never parses Detail. The field has no JSON form, so
+	// the clients list keeps its bytes.
+	Inert bool `json:"-"`
 }
 
 // Validate checks one capability inspection. It rejects incomplete
@@ -531,12 +711,24 @@ type Inspection struct {
 	// GateMode is the mode the client's gate hooks run in, from every
 	// definition that certainly runs one, managed or not. It is enforce
 	// when any enforces, and warn when any follows the policy file. It is
-	// GateModeReportOnly when each one discards its exit status. It is
-	// empty when none runs or the document cannot be read. One enforcing
+	// GateModeReportOnly when each one is report-only: it discards its
+	// exit status, or the client runs it in the background. It is empty
+	// when none runs or the document cannot be read. One enforcing
 	// definition blocks whatever the managed hook says. The repository
 	// policy file can still enforce on top of a warn hook, and never on
 	// top of a report-only one.
 	GateMode string `json:"gate_mode,omitempty"`
+	// GateBackground is true when GateMode is GateModeReportOnly because
+	// the client runs each such definition in the background. Status then
+	// names that cause instead of a discarded exit status. It has no JSON
+	// form, so clients[] keeps its bytes. A view read back from JSON says
+	// "discards its exit status", as status always did.
+	GateBackground bool `json:"-"`
+	// HooksOff is true when a client setting turns every project hook
+	// off. The gate hook of the client then runs for no command, so the
+	// gate summary counts a client with a gate hook as inert. It has no
+	// JSON form, because the findings already report the setting.
+	HooksOff bool `json:"-"`
 	// PossibleGateMode is the mode of the definitions that can run a
 	// gate hook, by the rule of GateMode. The reader cannot tell whether
 	// they do. It is empty without such a definition. A reader must not
@@ -558,6 +750,73 @@ type Inspection struct {
 	// adapter sees: trust it cannot read, a receiving context it does not
 	// identify, a second source that runs the same hook.
 	Findings []Finding `json:"findings,omitempty"`
+	// LessonHooks is what the adapter reads about its lesson-check and
+	// exploration hooks. It is nil when the hook sources hold no such
+	// hook, so a view without them survives a JSON round trip.
+	// LessonCheckPaths turns it into the paths of lesson-capability/1.
+	// It has no JSON form: status --json reports the capability report
+	// under its own key, so clients[] keeps its bytes.
+	LessonHooks *LessonHookInspection `json:"-"`
+}
+
+// LessonHookInspection is the offline reading of one client's
+// lesson-check and exploration hook sources. It holds the facts only.
+// LessonCheckPaths derives the reasons, and
+// lessoncheck.CapabilityReportOf derives the states. The document error
+// and the trust come from the other fields of the inspection, so the
+// two readings never disagree.
+type LessonHookInspection struct {
+	// Entries lists every owned lesson-check and exploration command of
+	// the hook document that setup manages, in document order.
+	Entries []LessonHookEntry
+	// ReportOnly lists each definition of the pre-write hook whose deny
+	// cannot block, the managed document first. Such a definition is
+	// one that setup does not own and that discards the exit status, or
+	// any definition that runs in the background. Setup and doctor keep
+	// the document and the command, so their steps name the definition.
+	ReportOnly []ReportOnlyDefinition
+	// HooksDisabled is true when the project configuration turns every
+	// hook of the client off.
+	HooksDisabled bool
+	// SourceUnreadable means a supplemental hook source cannot be read
+	// or parsed. Its effect on installed hooks is unknown.
+	SourceUnreadable bool
+}
+
+// ReportOnlyDefinition is one definition of the pre-write hook whose
+// deny cannot block. ReportOnlySteps turns it into the step that makes
+// the hook block again.
+type ReportOnlyDefinition struct {
+	// Path names the hook source, for example .claude/settings.local.json
+	// or the inline [hooks] of the Codex configuration.
+	Path string
+	// Command is the command of the definition, as the document holds it.
+	Command string
+	// Background is the key that makes the client run the definition in
+	// the background, or "" when the definition discards the exit
+	// status. A definition that does both gets "", because removing the
+	// key alone leaves the status discarded.
+	Background string
+	// Managed is true for an owned command in the document that setup
+	// manages. Setup removes its background key, so a rerun of init is
+	// the step, not a removal.
+	Managed bool
+}
+
+// LessonHookEntry is one owned lesson-check or exploration command.
+type LessonHookEntry struct {
+	// Stage is the stage of the hook spec that owns the command.
+	Stage lessoncheck.HookStage
+	// Event is the hook event of the entry, for example "PostToolUse".
+	Event string
+	// Marker is the owned marker that ends the command.
+	Marker string
+	// Binary is the binary path of the command, unquoted.
+	Binary string
+	// Tools lists the tools of the hook spec that the client runs the
+	// entry for. It is empty for an entry that never fires: another type, or
+	// a matcher that names none of the tools.
+	Tools []string
 }
 
 // FindingLevel grades a finding for presentation.
@@ -607,7 +866,7 @@ func enumName(names []string, v int) string {
 
 // enumValue returns the value of an enum name. It rejects "unknown" for
 // an enum whose table does not hold it, and every other name outside
-// the table: a JSON document from a newer binary must fail to decode,
+// the table. A JSON document from a newer binary must fail to decode,
 // not decode to the zero value in silence.
 func enumValue(names []string, kind string, text []byte) (int, error) {
 	i := slices.Index(names, string(text))
@@ -650,6 +909,13 @@ type ClientSetup struct {
 	// it off: that form never read those files, and it must stay as it
 	// was.
 	CheckHookSources bool
+	// LessonChecks is off, check, or enforce. Empty preserves the
+	// installed mode, as GateMode does, so a run without the flag
+	// installs nothing new. It never changes GateMode.
+	LessonChecks string
+	// LessonExploration is off or on. Empty preserves the installed
+	// choice.
+	LessonExploration string
 }
 
 // SetupRequest is one complete setup run. Selection is resolved once,
@@ -701,8 +967,8 @@ type GuardKind int
 // The guard kinds.
 const (
 	// GuardDocument guards a native document that setup owns and may
-	// rewrite. No component of its path may be a symbolic link, for the
-	// read too: a link committed in a cloned repository must never
+	// rewrite. No component of its path may be a symbolic link, also for
+	// the read. A link committed in a cloned repository must never
 	// redirect a read or a write of a client's configuration.
 	GuardDocument GuardKind = iota
 	// GuardInput guards a file that setup reads and at most extends, such
@@ -762,24 +1028,27 @@ type FileKeep struct {
 
 // GateModeReportOnly is the mode of a gate hook whose definition
 // discards the exit status of the hook, for example with "|| true" or
-// "&". The hook runs and reports its verdicts. A verdict blocks only by
-// exit status 2, so none blocks, whatever --enforce or the policy file
-// says. Only a definition that setup does not manage has this mode.
+// "&", or that the client runs in the background. The hook runs and
+// reports its verdicts. A verdict blocks only by exit status 2, so none
+// blocks, whatever --enforce or the policy file says. A managed hook
+// gets this mode only from a background key: after a hand edit, or from
+// a Claude Code copy in the local file that runs in its place.
 const GateModeReportOnly = "report-only"
 
 // GateHook is one command-gate hook that the client really runs after
 // the plan is applied. A plan lists every one it knows: the hook setup
 // manages, and a hook in another source that setup found and left as it
 // is. The caller's gate summary reads the list, because one enforcing
-// hook blocks whatever the managed hook's mode says, and a summary that
+// hook blocks whatever the managed hook's mode says. A summary that
 // names only the managed mode would then be false.
 type GateHook struct {
 	// ClientID is filled by the coordinator.
 	ClientID string
 	// Path is the document that holds the hook, repository-relative.
 	Path string
-	// Mode is warn, enforce, or GateModeReportOnly. Only a hook that
-	// setup does not manage can be report-only.
+	// Mode is warn, enforce, or GateModeReportOnly. A managed hook is
+	// report-only only when a Claude Code copy in the background runs in
+	// its place.
 	Mode string
 	// Managed is true for the hook setup installs and updates. False
 	// means another source, which setup never edits.
@@ -789,6 +1058,31 @@ type GateHook struct {
 	// gate command as its arguments. Mode is then the mode the
 	// definition has when it runs.
 	Uncertain bool
+	// Background is true when a report-only hook is report-only because
+	// the client runs it in the background, not because it discards its
+	// exit status. The gate line names that cause.
+	Background bool
+	// Filtered is true when an uncertain hook has a Claude Code if field.
+	// The gate line then names the field as the thing to remove, as
+	// doctor does for the same definition.
+	Filtered bool
+	// HooksOff is true when a client setting turns every project hook
+	// off, so the client does not run this hook. The finding that names
+	// the setting sets it, so the gate line can point at that finding.
+	HooksOff bool
+}
+
+// markHooksOff sets HooksOff on each gate hook when the hooks-off
+// findings of the client are not empty. One finding gives the note and
+// the mark, so a gate line that points at the note always has one.
+func markHooksOff(gateHooks []GateHook, off []Finding) {
+	if len(off) == 0 {
+		return
+	}
+
+	for i := range gateHooks {
+		gateHooks[i].HooksOff = true
+	}
 }
 
 // ClientPlan is one client's read guards, composed writes, kept
@@ -801,7 +1095,10 @@ type ClientPlan struct {
 	Writes    []FileWrite
 	Kept      []FileKeep
 	GateHooks []GateHook
-	Findings  []Finding
+	// UncheckedGateSources lists the hook documents that the client runs
+	// and that the plan did not check for gate hooks.
+	UncheckedGateSources []string
+	Findings             []Finding
 }
 
 // SkillDestination is one skill directory and every selected client
@@ -837,5 +1134,9 @@ type SetupPlan struct {
 	Destinations []SkillDestination
 	// GateHooks lists the gate hooks the selected clients run after apply.
 	GateHooks []GateHook
-	Findings  []Finding
+	// UncheckedGateSources lists the hook documents that a selected client
+	// runs and that the plan did not check for gate hooks. GateHooks can
+	// then miss a hook, so a gate summary must name these documents.
+	UncheckedGateSources []string
+	Findings             []Finding
 }

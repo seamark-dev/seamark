@@ -120,6 +120,10 @@ type Entry struct {
 	// Rule, Region, Regions, and Note are the decoded pin fields.
 	Rule, Region, Note string
 	Regions            []string
+	// Mode and Check are the decoded lesson-check fields. They hold the
+	// raw text, and "" means the key is absent. The listing does not
+	// validate them, because lessoncheck.Validate owns that rule.
+	Mode, Check string
 	// Unknown lists the keys that no reader uses, in file order. They do
 	// not block an edit; a retarget keeps them.
 	Unknown []string
@@ -162,6 +166,11 @@ type Document struct {
 	// ReaderErr is the error of reviews.ParseConfig on Bytes. The listing
 	// keeps every entry that still decodes.
 	ReaderErr error
+	// Config is the result of reviews.ParseConfig on Bytes, and it is nil
+	// when ReaderErr is set. A caller reads it instead of a second parse,
+	// so the listing and the caller use one parse. It is read-only,
+	// because every reader of the Document shares it.
+	Config *reviews.Config
 	// ListErr reports a listing that differs from the pins that the
 	// reader delivers, for example through an alias pin value or a pin
 	// key from a merge key. The listing then cannot show which pins are
@@ -191,6 +200,7 @@ func Parse(data []byte) *Document {
 		FileBlock: a.gate,
 		DecodeErr: a.decodeErr,
 		ReaderErr: a.readerErr,
+		Config:    a.cfg,
 		ListErr:   a.listErr,
 		ErrLine:   a.errLine,
 	}

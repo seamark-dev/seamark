@@ -20,12 +20,14 @@ package store
 import (
 	"database/sql"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	stdpath "path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -47,11 +49,138 @@ const DefaultDBName = "index.db"
 // Store wraps the SQLite index database.
 type Store struct {
 	db *sql.DB
+	// path is the file that the store opened, or "" in memory.
+	path string
+}
+
+// AbsolutePath returns the absolute form of a database path that names the
+// file the system opens. Every rule and every open use this one path, so
+// they judge one file. A relative path starts at the physical working
+// directory, as the system does. filepath.Abs starts at $PWD and cleans
+// ".." without reading links, so behind a link it names another file. So
+// a path with ".." resolves the links of its directory. A path without an
+// absolute form stays as given, because no store can open it.
+func AbsolutePath(path string) string {
+	if path == "" {
+		return path
+	}
+
+	if !filepath.IsAbs(path) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return path
+		}
+
+		if physical, err := filepath.EvalSymlinks(wd); err == nil {
+			wd = physical
+		}
+
+		path = wd + string(filepath.Separator) + path
+	}
+
+	if slices.Contains(strings.Split(filepath.ToSlash(path), "/"), "..") {
+		dir, base := filepath.Split(path)
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, base)
+		}
+	}
+
+	return filepath.Clean(path)
 }
 
 // DefaultPath returns the conventional index location for a workspace root.
 func DefaultPath(root string) string {
 	return filepath.Join(root, DefaultDir, DefaultDBName)
+}
+
+// DatabaseKind says how an index database relates to a workspace root.
+type DatabaseKind int
+
+const (
+	// DatabaseDefault is the default database of the root. The default
+	// path names the file, and the file lies inside the root.
+	DatabaseDefault DatabaseKind = iota
+	// DatabaseLinked is a file outside the root that the default path
+	// names through a link, for example the database of another worktree.
+	DatabaseLinked
+	// DatabaseOther is any other file, for example the --db value of
+	// another repository.
+	DatabaseOther
+)
+
+// SameDirectory reports whether two paths name one directory. A clean
+// comparison comes first, because a path that no longer exists has no
+// identity. File identity then covers a link and a case-insensitive
+// volume, where a path keeps the case that the user typed.
+func SameDirectory(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+
+	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
+}
+
+// LiesInside reports whether the file at path lies below dir. It walks up
+// and compares file identity, because a string test fails for a spelling
+// in another case on a case-insensitive volume. A relative path shows no
+// parent directory, so it never passes.
+func LiesInside(path, dir string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || !filepath.IsAbs(resolved) {
+		return false
+	}
+
+	want, err := os.Stat(dir)
+	if err != nil {
+		return false
+	}
+
+	for p := filepath.Dir(resolved); ; p = filepath.Dir(p) {
+		if info, err := os.Stat(p); err == nil && os.SameFile(info, want) {
+			return true
+		}
+
+		if p == filepath.Dir(p) {
+			return false
+		}
+	}
+}
+
+// ClassifyDatabase relates dbPath to root by file identity. A link
+// spelling names the same file with another string, so a string
+// comparison is not enough. Without two files, the clean paths decide,
+// because a file that does not exist has no identity.
+//
+// The file must also lie inside root to be the default database. A
+// default path that links to the database of another worktree belongs
+// to that worktree, and a rebuild here moves its recorded root. The path
+// must be absolute (AbsolutePath), or the file reads as DatabaseLinked.
+func ClassifyDatabase(root, dbPath string) DatabaseKind {
+	defaultPath := DefaultPath(root)
+
+	given, errGiven := os.Stat(dbPath)
+	want, errWant := os.Stat(defaultPath)
+
+	if errGiven != nil || errWant != nil {
+		if filepath.Clean(dbPath) == filepath.Clean(defaultPath) {
+			return DatabaseDefault
+		}
+
+		return DatabaseOther
+	}
+
+	if !os.SameFile(given, want) {
+		return DatabaseOther
+	}
+
+	if LiesInside(dbPath, root) {
+		return DatabaseDefault
+	}
+
+	return DatabaseLinked
 }
 
 // dsn builds a "file:" DSN. Paths are parsed as URIs: a raw %, ? or #
@@ -69,8 +198,15 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: create index dir: %w", err)
 	}
 
-	return openSchema(dsn(path,
+	st, err := openSchema(dsn(path,
 		"_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"), path)
+	if err != nil {
+		return nil, err
+	}
+
+	st.path = path
+
+	return st, nil
 }
 
 // OpenMemory opens an empty index in memory and writes no file. The
@@ -161,11 +297,17 @@ func OpenReadOnly(path string) (*Store, error) {
 			stored, schemaVersion)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, path: path}, nil
 }
 
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
+
+// Path returns the file that the store opened, as the opener named it, or
+// "" for a store in memory. A reader passes it to the workspace
+// fingerprint, which leaves out the files of the database that a run
+// writes, so the reader computes the fingerprint that the run stored.
+func (s *Store) Path() string { return s.path }
 
 // MetaSchemaVersion is the meta key of the schema version of the
 // database. Open refuses a newer version and writes the current one
@@ -189,7 +331,9 @@ const (
 	// MetaIndexedState holds the workspace fingerprint of the last
 	// index run (index.WorkspaceState). An equal fingerprint lets the
 	// next run skip, and a different one makes the readers report a
-	// stale index.
+	// stale index. A run that saw the workspace change during its reads
+	// stores a mark that equals no fingerprint, so its index reads as
+	// stale.
 	MetaIndexedState = "indexed_state"
 	// MetaHistoryMined holds "true" when the last index run mined the
 	// git history, and "false" when it did not. A skipped run reports
@@ -204,6 +348,40 @@ const (
 	// value differs from the version of the binary.
 	MetaParseCacheVersion = "parse_cache_version"
 )
+
+// MetaGoneFiles holds the gone paths of the last index run as a JSON
+// array of gone keys, sorted and distinct (see goneKey). A gone path is
+// a path that a stored co-change pair names and the workspace no longer
+// has. Rebuild wipes the key with the pairs, and Tx.SetGoneFiles writes
+// it in the same transaction, so the list and the pairs never disagree.
+// The partner and hub reads leave these paths out. No key reads as an
+// empty list, because an index written by an older binary has none.
+const MetaGoneFiles = "gone_files"
+
+// goneFilesSQL is the subquery that gives the gone keys to the
+// co-change reads. A value that is not a JSON array makes the read
+// fail, so a damaged index never reads as "nothing is gone".
+const goneFilesSQL = `(SELECT value FROM json_each(COALESCE(
+	(SELECT value FROM meta WHERE key = '` + MetaGoneFiles + `'), '[]')))`
+
+// notGoneSQL returns the SQL condition that the path from the column
+// expression expr is not gone. CoChangePartners and HotFiles use this
+// one condition, so the two reads always leave out the same paths.
+// SQLite hex() gives the same key as goneKey, also for bytes that are
+// not valid UTF-8.
+func notGoneSQL(expr string) string {
+	return "hex(" + expr + ") NOT IN " + goneFilesSQL
+}
+
+// goneKey returns the key that the gone list stores for path: the
+// upper-case hex of its bytes. History keeps the raw bytes of a path,
+// and these bytes need not be valid UTF-8. JSON text replaces each
+// invalid byte with U+FFFD, so a stored path would not match its pair.
+// The hex key keeps every byte. Keys sort in the byte order of their
+// paths.
+func goneKey(path string) string {
+	return strings.ToUpper(hex.EncodeToString([]byte(path)))
+}
 
 // SetMeta stores an index bookkeeping value (schema version, repo root, …).
 func (s *Store) SetMeta(key, value string) error {
@@ -235,7 +413,11 @@ type Tx struct {
 // Rebuild atomically replaces the derived tables (structure + history +
 // effects). Policy and learning tables (rule, lesson) and meta survive, as
 // they are user/agent state rather than derivations of the current tree.
-// The FTS index is rebuilt after the callback succeeds.
+// The one exception is the gone list (MetaGoneFiles). It describes the
+// co-change rows, so Rebuild wipes it with them. A callback that writes
+// pairs and no list then leaves no list from an earlier run, which would
+// hide a file that came back. The FTS index is rebuilt after the callback
+// succeeds.
 func (s *Store) Rebuild(fn func(tx *Tx) error) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -256,6 +438,10 @@ func (s *Store) Rebuild(fn func(tx *Tx) error) error {
 		}
 	}
 
+	if _, err := tx.Exec(`DELETE FROM meta WHERE key = ?`, MetaGoneFiles); err != nil {
+		return fmt.Errorf("store: wipe %s: %w", MetaGoneFiles, err)
+	}
+
 	if err := fn(&Tx{tx: tx}); err != nil {
 		return err
 	}
@@ -269,6 +455,19 @@ func (s *Store) Rebuild(fn func(tx *Tx) error) error {
 	}
 
 	return nil
+}
+
+// SetMeta stores an index bookkeeping value in the rebuild transaction.
+// The index run writes its meta this way, so the workspace state it
+// records commits with the graph it describes. A meta write after the
+// commit could pair the state of one run with the graph of another.
+func (t *Tx) SetMeta(key, value string) error {
+	_, err := t.tx.Exec(
+		`INSERT INTO meta (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value,
+	)
+
+	return err
 }
 
 // InsertSymbol stores sym and sets sym.ID.
@@ -315,6 +514,40 @@ func (t *Tx) InsertCoChange(c model.CoChange) error {
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert cochange %s/%s: %w", c.FileA, c.FileB, err)
+	}
+
+	return nil
+}
+
+// SetGoneFiles stores the gone list (MetaGoneFiles) in the Rebuild
+// transaction, so it always matches the co-change rows of that run. The
+// list holds the gone key of each path, sorted and distinct. An empty
+// path is dropped, because an empty key matches no file. No path gives
+// "[]".
+func (t *Tx) SetGoneFiles(paths []string) error {
+	list := make([]string, 0, len(paths))
+
+	for _, p := range paths {
+		if p != "" {
+			list = append(list, goneKey(p))
+		}
+	}
+
+	slices.Sort(list)
+	list = slices.Compact(list)
+
+	data, err := json.Marshal(list)
+	if err != nil {
+		return fmt.Errorf("store: encode %s: %w", MetaGoneFiles, err)
+	}
+
+	_, err = t.tx.Exec(
+		`INSERT INTO meta (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		MetaGoneFiles, string(data),
+	)
+	if err != nil {
+		return fmt.Errorf("store: set %s: %w", MetaGoneFiles, err)
 	}
 
 	return nil
@@ -514,8 +747,11 @@ func (s *Store) ReplaceLessons(lessons []model.Lesson, findings []model.Finding)
 
 // ReplaceFixFindings atomically swaps the fix-derived findings — their
 // own lifecycle, independent of the review set — and stamps
-// MetaFixesMinedAt in the same transaction.
-func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
+// MetaFixesMinedAt in the same transaction. noReviewRepository tells
+// that origin names no GitHub repository at the mined root. The write
+// then sets MetaNoReviewRepositoryAt to the fixes stamp, and otherwise
+// deletes it.
+func (s *Store) ReplaceFixFindings(findings []model.Finding, noReviewRepository bool) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: begin fix findings: %w", err)
@@ -545,14 +781,34 @@ func (s *Store) ReplaceFixFindings(findings []model.Finding) error {
 	// Stamp the mine time in the same transaction, as ReplaceLessons
 	// does. A crash between two writes would leave fresh rows with an old
 	// stamp, and the outcome loop trusts the stamp.
+	minedAt := fmt.Sprint(time.Now().Unix())
+
 	_, err = tx.Exec(
 		`INSERT INTO meta (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		MetaFixesMinedAt,
-		fmt.Sprint(time.Now().Unix()),
+		minedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("store: stamp fix mine: %w", err)
+	}
+
+	// Each fix write decides the record again, in the same transaction.
+	// The record then always describes the root whose fix commits this
+	// write stored, and an origin that moved to GitHub clears it at once.
+	if noReviewRepository {
+		_, err = tx.Exec(
+			`INSERT INTO meta (key, value) VALUES (?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			MetaNoReviewRepositoryAt,
+			minedAt,
+		)
+	} else {
+		_, err = tx.Exec(`DELETE FROM meta WHERE key = ?`, MetaNoReviewRepositoryAt)
+	}
+
+	if err != nil {
+		return fmt.Errorf("store: record the review repository state: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -664,14 +920,30 @@ func (s *Store) DistilledCount() (int, error) {
 // proposalCols is the column list every proposal query selects, in
 // scanProposals order.
 const proposalCols = `id, signature, rule, region, regions, trigger_paths, trigger_checked_at,
-trigger_prompt_version, note, members, agent, status, created_at`
+trigger_prompt_version, note, members, agent, status, created_at, source, provenance,
+scope_chosen_at`
 
 // execer is the slice of database/sql shared by *sql.DB and *sql.Tx.
 type execer interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }
 
+// insertProposal is the one insert path of the proposal table. An empty
+// source stores findings, as insertFinding does for a finding without a
+// source, so older callers and state bundles keep their meaning. The
+// stored source goes back into p with the ID, so the caller's row equals
+// the stored row. insertProposal refuses an unknown source, because the
+// finding paths filter on the closed set.
 func insertProposal(db execer, p *model.Proposal) error {
+	source := p.Source
+	if source == "" {
+		source = model.ProposalSourceFindings
+	}
+
+	if !model.ValidProposalSource(source) {
+		return fmt.Errorf("store: proposal %s has unknown source %q", p.Rule, source)
+	}
+
 	if len(p.TriggerPaths) > model.MaxTriggerPaths {
 		return fmt.Errorf("store: proposal %s has %d trigger paths; maximum is %d",
 			p.Rule, len(p.TriggerPaths), model.MaxTriggerPaths)
@@ -694,15 +966,17 @@ func insertProposal(db execer, p *model.Proposal) error {
 
 	res, err := db.Exec(
 		`INSERT INTO proposal (signature, rule, region, regions, trigger_paths, trigger_checked_at,
-		   trigger_prompt_version, note, members, agent, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		   trigger_prompt_version, note, members, agent, status, created_at, source, provenance,
+		   scope_chosen_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Signature, p.Rule, p.Region, regions, triggers, p.TriggerChecked, p.TriggerPromptVersion,
-		p.Note, string(members), p.Agent, p.Status, p.CreatedAt,
+		p.Note, string(members), p.Agent, p.Status, p.CreatedAt, source, p.Provenance, p.ScopeChosen,
 	)
 	if err != nil {
 		return fmt.Errorf("store: insert proposal %s: %w", p.Rule, err)
 	}
 
+	p.Source = source
 	p.ID, err = res.LastInsertId()
 
 	return err
@@ -766,7 +1040,8 @@ func scanProposals(rows *sql.Rows) ([]model.Proposal, error) {
 
 		err := rows.Scan(&p.ID, &p.Signature, &p.Rule, &p.Region, &regions,
 			&triggers, &p.TriggerChecked, &p.TriggerPromptVersion,
-			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt)
+			&p.Note, &members, &p.Agent, &p.Status, &p.CreatedAt, &p.Source, &p.Provenance,
+			&p.ScopeChosen)
 		if err != nil {
 			return nil, err
 		}
@@ -851,8 +1126,13 @@ func (s *Store) transition(ids []int64, from, to string) (int, error) {
 // longer exists in the current grouping (its membership changed, so a
 // fresh distill of the new signature supersedes them). Applied and
 // dismissed rows are never touched — they are the decision memory.
+// Only findings rows are candidates: a row of another source has no
+// finding group, so the finding grouping says nothing about it.
 func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT signature FROM proposal WHERE status = 'proposed'`)
+	rows, err := s.db.Query(
+		`SELECT DISTINCT signature FROM proposal WHERE status = 'proposed' AND source = ?`,
+		model.ProposalSourceFindings,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -883,7 +1163,8 @@ func (s *Store) PruneStaleProposals(liveSignatures map[string]bool) (int, error)
 	marks := strings.Repeat(",?", len(stale))[1:]
 
 	res, err := s.db.Exec(
-		`DELETE FROM proposal WHERE status = 'proposed' AND signature IN (`+marks+`)`, stale...,
+		`DELETE FROM proposal WHERE status = 'proposed' AND source = ? AND signature IN (`+marks+`)`,
+		append([]any{model.ProposalSourceFindings}, stale...)...,
 	)
 	if err != nil {
 		return 0, err
@@ -1245,8 +1526,9 @@ func (s *Store) querySymbols(q string, args ...any) ([]model.Symbol, error) {
 }
 
 // FindSymbols resolves a user query to symbols, best matches first. It tries
-// exact FQN, exact name, FQN suffix, then FTS prefix search, deduplicating
-// across stages.
+// exact FQN or name, FQN suffix, then FTS prefix search, deduplicating
+// across stages. Each stage orders its rows before its LIMIT, so the cut
+// is deterministic and keeps the best candidates.
 func (s *Store) FindSymbols(query string, limit int) ([]model.Symbol, error) {
 	if limit <= 0 {
 		limit = 10
@@ -1264,21 +1546,32 @@ func (s *Store) FindSymbols(query string, limit int) ([]model.Symbol, error) {
 		}
 	}
 
-	exact, err := s.querySymbols(
-		`SELECT `+symbolCols+` FROM symbol WHERE fqn = ? OR name = ? LIMIT ?`,
-		query, query, limit,
-	)
+	exact, err := s.ExactSymbols(query, limit)
 	if err != nil {
 		return nil, err
+	}
+
+	// Definitions come first, so same-named definitions can fill the
+	// limit and cut a package of that name, the one hint that the name
+	// is also a package. The best such package takes the last slot. The
+	// lookup runs only when that cut can have happened.
+	if limit >= 2 && len(exact) == limit && !slices.ContainsFunc(exact, isPackage) {
+		pkgs, err := s.querySymbols(exactPackageSQL, query, query, string(model.KindPackage), query)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(pkgs) > 0 {
+			exact[limit-1] = pkgs[0]
+		}
 	}
 
 	add(exact)
 
 	if len(out) < limit {
-		suffix, err := s.querySymbols(
-			`SELECT `+symbolCols+` FROM symbol WHERE fqn LIKE ? ESCAPE '\' LIMIT ?`,
-			"%"+escapeLike(query), limit,
-		)
+		q := escapeLike(query)
+
+		suffix, err := s.querySymbols(suffixSymbolsSQL, "%"+q, "%."+q, "%/"+q, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -1309,6 +1602,71 @@ func (s *Store) FindSymbols(query string, limit int) ([]model.Symbol, error) {
 	}
 
 	return out, nil
+}
+
+// exactSymbolsSQL finds the symbols whose FQN or name equals the query.
+// A package grouping symbol has no file and gets the lowest ids, so
+// without an order it stood before the symbol that has a definition.
+// The keys put a definition first, then an FQN match before a name
+// match, then id. The OR still reads the two indexes; only the matched
+// rows are sorted.
+const exactSymbolsSQL = `SELECT ` + symbolCols + ` FROM symbol
+	WHERE fqn = ? OR name = ?
+	ORDER BY file = '', fqn <> ?, id
+	LIMIT ?`
+
+// exactPackageSQL finds the best package grouping symbol whose FQN or
+// name equals the query: an FQN match first, then id. It reads the same
+// two indexes as exactSymbolsSQL.
+const exactPackageSQL = `SELECT ` + symbolCols + ` FROM symbol
+	WHERE (fqn = ? OR name = ?) AND kind = ?
+	ORDER BY fqn <> ?, id
+	LIMIT 1`
+
+func isPackage(sym model.Symbol) bool { return sym.Kind == model.KindPackage }
+
+// suffixSymbolsSQL finds the symbols whose FQN ends with the query. A
+// suffix at a component boundary ("." or "/" before it) names a whole
+// component, so it comes before a raw string suffix; then a definition
+// first, then id. The boundary keys use LIKE like the filter, so they
+// agree with it on case.
+const suffixSymbolsSQL = `SELECT ` + symbolCols + ` FROM symbol
+	WHERE fqn LIKE ? ESCAPE '\'
+	ORDER BY NOT (fqn LIKE ? ESCAPE '\' OR fqn LIKE ? ESCAPE '\'), file = '', id
+	LIMIT ?`
+
+// ExactSymbols returns at most limit symbols whose FQN or name equals
+// query, in the order of exactSymbolsSQL, with no package reserved:
+// FindSymbols reserves one after it. It is the first step of
+// FindSymbols. A report that offers a why route asks it whether why
+// resolves the route to one symbol, so the check and why use one
+// predicate.
+func (s *Store) ExactSymbols(query string, limit int) ([]model.Symbol, error) {
+	return s.querySymbols(exactSymbolsSQL, query, query, query, limit)
+}
+
+// PackageInRepository reports whether the package grouping symbol pkg
+// groups code of this repository rather than only an import target. The
+// indexer writes a DEFINES edge from a package to each symbol of each
+// parsed file that has its key (a Go directory, a Python module, a JS/TS
+// module), and never from an import target. A Python package with an
+// empty __init__.py, or a Go directory that holds only subdirectories,
+// has no members of its own, but its submodules are under its key and
+// "/". So some symbol with a file under pkg.FQN+"/" counts too. The "."
+// separator would not do: a JS/TS file "next.config.ts" has the key
+// "next.config", and the import target "next" is not this repository's.
+func (s *Store) PackageInRepository(pkg model.Symbol) (bool, error) {
+	var found bool
+
+	// "0" is the byte after "/", so the range holds exactly the FQNs
+	// that start with pkg.FQN+"/".
+	err := s.db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM edge WHERE src = ? AND kind = ?)
+		     OR EXISTS (SELECT 1 FROM symbol WHERE fqn >= ? AND fqn < ? AND file != '')`,
+		pkg.ID, string(model.EdgeDefines), pkg.FQN+"/", pkg.FQN+"0",
+	).Scan(&found)
+
+	return found, err
 }
 
 // escapeLike escapes LIKE wildcards in user input.
@@ -1493,6 +1851,11 @@ type CoChangePartner struct {
 // CoChangePartners returns files that historically change together with
 // file, strongest coupling first. minLift filters chance-level pairs;
 // 1.0 is the neutral threshold.
+//
+// A gone partner (MetaGoneFiles) is left out before LIMIT, so limit
+// counts live partners only. An agent cannot open a gone file. The
+// queried file is never filtered, because an agent that deletes a file
+// still needs its live partners.
 func (s *Store) CoChangePartners(file string, minLift float64, limit int) ([]CoChangePartner, error) {
 	if limit <= 0 {
 		limit = 15
@@ -1503,8 +1866,9 @@ func (s *Store) CoChangePartners(file string, minLift float64, limit int) ([]CoC
 		        together, total, lift
 		 FROM cochange
 		 WHERE (file_a = ? OR file_b = ?) AND lift >= ?
+		   AND `+notGoneSQL(`CASE WHEN file_a = ? THEN file_b ELSE file_a END`)+`
 		 ORDER BY together DESC, lift DESC
-		 LIMIT ?`, file, file, file, minLift, limit,
+		 LIMIT ?`, file, file, file, minLift, file, limit,
 	)
 	if err != nil {
 		return nil, err
@@ -1626,32 +1990,57 @@ const (
 	MetaReviewsMinedAt = "reviews_mined_at"
 )
 
-// EvidenceHorizon returns the timestamp the finding corpus is known
-// current through: the older of the two mining stamps, because a
-// recurrence can arrive through either channel. Zero when either
-// stamp is missing — a store that cannot prove it looked cannot claim
-// nothing was found, so verdicts stay untested until
-// `seamark index --reviews` runs once.
-func (s *Store) EvidenceHorizon() int64 {
-	var horizon int64
+// MetaNoReviewRepositoryAt records that origin names no GitHub
+// repository, so seamark can mine no review findings there. Its value
+// is the fixes stamp of the fix write that found this state. The fix
+// write sets it and deletes it in the same transaction as the fixes
+// stamp.
+const MetaNoReviewRepositoryAt = "no_review_repository_at"
 
-	for i, key := range []string{MetaFixesMinedAt, MetaReviewsMinedAt} {
-		v, err := s.GetMeta(key)
-		if err != nil {
-			return 0
-		}
-
-		ts, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return 0
-		}
-
-		if i == 0 || ts < horizon {
-			horizon = ts
-		}
+// MetaUnix reads a Unix-seconds meta value. It returns 0 when the value
+// is absent or malformed, or when the read fails. A stamp that cannot be
+// read then counts as "never mined".
+func (s *Store) MetaUnix(key string) int64 {
+	v, err := s.GetMeta(key)
+	if err != nil {
+		return 0
 	}
 
-	return horizon
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0
+	}
+
+	return n
+}
+
+// EvidenceHorizon returns the timestamp the finding corpus is known
+// current through. Usually it is the older of the two mining stamps,
+// because a recurrence can arrive through either channel. It is zero
+// when a needed stamp is missing. A store that cannot prove it looked
+// cannot claim that nothing was found.
+//
+// When origin names no GitHub repository, no review finding can
+// arrive. The horizon is then the fixes stamp alone, but only while
+// MetaNoReviewRepositoryAt equals it. A record with another value is
+// stale. A later fix write, for example by an older binary, left it
+// unchanged, so it proves nothing about the current origin.
+func (s *Store) EvidenceHorizon() int64 {
+	fixes := s.MetaUnix(MetaFixesMinedAt)
+	if fixes == 0 {
+		return 0
+	}
+
+	if s.MetaUnix(MetaNoReviewRepositoryAt) == fixes {
+		return fixes
+	}
+
+	reviews := s.MetaUnix(MetaReviewsMinedAt)
+	if reviews == 0 {
+		return 0
+	}
+
+	return min(fixes, reviews)
 }
 
 // RecentDecisions returns the latest repo-wide decisions, newest first.
@@ -1697,16 +2086,25 @@ type HotFile struct {
 
 // HotFiles returns the files most coupled to the rest of the repo by
 // history. Pairs are stored once per (a, b), so both columns count.
+//
+// A pair with a gone side (MetaGoneFiles) does not count. So a gone file
+// is never a hub, and a live hub counts only the partners that an agent
+// can open.
 func (s *Store) HotFiles(limit int) ([]HotFile, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 
 	rows, err := s.db.Query(
-		`SELECT f, COUNT(*) AS partners, MAX(lift)
-		 FROM (SELECT file_a AS f, lift FROM cochange WHERE lift >= 1.0
+		`WITH live AS (
+		   SELECT file_a, file_b, lift FROM cochange
+		   WHERE lift >= 1.0
+		     AND `+notGoneSQL("file_a")+`
+		     AND `+notGoneSQL("file_b")+`)
+		 SELECT f, COUNT(*) AS partners, MAX(lift)
+		 FROM (SELECT file_a AS f, lift FROM live
 		       UNION ALL
-		       SELECT file_b AS f, lift FROM cochange WHERE lift >= 1.0)
+		       SELECT file_b AS f, lift FROM live)
 		 GROUP BY f ORDER BY partners DESC, f LIMIT ?`, limit,
 	)
 	if err != nil {
@@ -1961,6 +2359,17 @@ type Stats struct {
 	Tagged int
 	// Lessons counts clustered review-feedback patterns (M6).
 	Lessons int
+}
+
+// LessonCount returns the number of stored lessons. A caller that needs
+// only this count uses it, because Stats runs six COUNT queries. The
+// error is the plain query error, as in Stats.
+func (s *Store) LessonCount() (int, error) {
+	var n int
+
+	err := s.db.QueryRow("SELECT COUNT(*) FROM lesson").Scan(&n)
+
+	return n, err
 }
 
 // Stats returns row counts of the derived tables.

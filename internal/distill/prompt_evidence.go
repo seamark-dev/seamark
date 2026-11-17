@@ -6,10 +6,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/seamark-dev/seamark/internal/model"
 	"github.com/seamark-dev/seamark/internal/redact"
+	"github.com/seamark-dev/seamark/internal/render"
 )
 
 const (
@@ -309,11 +309,7 @@ func truncatePromptText(text string, maxChars int) string {
 		cut -= len(suffix)
 	}
 
-	for cut > 0 && !utf8.RuneStart(text[cut]) {
-		cut--
-	}
-
-	truncated := strings.TrimSpace(text[:cut])
+	truncated := strings.TrimSpace(render.CutBytes(text, cut))
 	if maxChars <= len(suffix) {
 		return truncated
 	}

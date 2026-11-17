@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 
@@ -31,7 +32,8 @@ Semantic health — coverage, edge confidence, freshness — is
 				return err
 			}
 
-			report := doctor.Run(ws.Root, ws.DBPath, version)
+			// A diagnosis only reads, and its report shows --db as written.
+			report := doctor.Run(ws.Root, cmp.Or(opts.dbGiven, ws.DBPath), version)
 
 			if asJSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())

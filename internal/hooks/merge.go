@@ -29,10 +29,29 @@ type Spec struct {
 	// recognizes them like Marker and rewrites them to it, so a re-run
 	// migrates an existing hook and never adds a duplicate beside it.
 	Legacy []string
+	// OtherForms lists the markers of the same hook in the form of another
+	// client, which this client also runs. The readers recognize them like
+	// Marker. Merge does not rewrite them, because a document can hold
+	// several of them. ReduceOtherForms decides which one stays.
+	OtherForms []string
 	// Status is the message the client shows while the hook runs.
+	// Empty means no message: Merge then writes no statusMessage key.
 	Status string
 	// Timeout is the hook timeout in seconds.
 	Timeout int
+	// BackgroundKeys lists the handler keys that make the client run the
+	// hook in the background. Merge removes each such key with the value
+	// true from seamark's own entry. Only the gate and the pre-write
+	// lesson-check specs set it: the client must wait for them, because a
+	// gate verdict or a guard deny blocks only by exit status 2, and the
+	// baseline must exist before the write.
+	BackgroundKeys []string
+}
+
+// Foreground reports whether the hook must run in the foreground, so
+// that its exit status reaches the client before the action.
+func (s Spec) Foreground() bool {
+	return len(s.BackgroundKeys) > 0
 }
 
 // Command returns the full hook command for a binary path.
@@ -48,8 +67,14 @@ func (s Spec) Tools() []string {
 }
 
 // Markers returns every spelling that identifies the hook: the current
-// marker first, then the legacy ones.
+// marker first, then the legacy ones, then the forms of another client.
 func (s Spec) Markers() []string {
+	return append(s.ownMarkers(), s.OtherForms...)
+}
+
+// ownMarkers returns the current marker and the legacy ones: the
+// spellings that Merge rewrites to the current marker.
+func (s Spec) ownMarkers() []string {
 	return append([]string{s.Marker}, s.Legacy...)
 }
 
@@ -67,7 +92,8 @@ func ClaudeSpecs(gateMode string) []Spec {
 			Name:  "gate",
 			Event: "PreToolUse", Matcher: "Bash",
 			Marker: GateMarker(gateMode), Legacy: []string{GateMarker(other)},
-			Status: "seamark gate: classifying command", Timeout: 15,
+			Status: "seamark gate: classifying command", Timeout: GateTimeout,
+			BackgroundKeys: ClaudeBackgroundKeys,
 		},
 		{
 			Name:  "lessons",
@@ -89,17 +115,20 @@ func ClaudeSpecs(gateMode string) []Spec {
 // finds it at index 0. Codex names its shell tool Bash in the event and
 // in the matcher; the opposite mode's marker is listed as legacy, so a
 // mode switch rewrites the existing gate hook in place. Codex reports
-// every file edit as the apply_patch tool. A matcher is a regular
-// expression, and "apply_patch" also matches the documented aliases
-// Edit and Write. The timeout is seconds, as in Claude Code.
+// every file edit as the apply_patch tool. Codex also runs a gate hook
+// in the Claude Code form, without the client selector, and the Claude
+// codec reads its input. Such a hook blocks, so the gate spec lists both
+// Claude Code markers as other forms. CodexMatcher holds the rule
+// that Codex uses to read a matcher, with the aliases Edit and Write of
+// apply_patch. The timeout is seconds, as in Claude Code.
 //
-// The list holds no context-reset hook. The Codex edit decoder reads
-// no receiver yet: the event names one, but the reset of a subagent is
-// unverified, so suppression stays off by policy and a reset has
+// The list holds no context-reset hook. The Codex edit decoder names
+// the receiver, but no reset of a Codex context is verified. So the
+// receiver is never resettable, suppression stays off, and a reset has
 // nothing to clear. A hook without an effect still costs the user a
 // trust review and one process for each compaction. The reset command
-// and its decoder exist, and the hook joins the list when the edit
-// decoder names a receiver with a verified reset.
+// and its decoder exist. The hook joins the list when a native check
+// verifies that reset.
 func CodexSpecs(gateMode string) []Spec {
 	other := ModeEnforce
 	if gateMode == ModeEnforce {
@@ -111,7 +140,9 @@ func CodexSpecs(gateMode string) []Spec {
 			Name:  "gate",
 			Event: "PreToolUse", Matcher: "Bash",
 			Marker: CodexGateMarker(gateMode), Legacy: []string{CodexGateMarker(other)},
-			Status: "seamark gate: classifying command", Timeout: 15,
+			OtherForms: []string{GateMarker(ModeWarn), GateMarker(ModeEnforce)},
+			Status:     "seamark gate: classifying command", Timeout: GateTimeout,
+			BackgroundKeys: CodexBackgroundKeys,
 		},
 		{
 			Name:  "lessons",
@@ -169,6 +200,10 @@ type Merged struct {
 	// Rewritten lists each owned command that Merge replaced, in
 	// document order.
 	Rewritten []Rewrite
+	// Removed lists each background key that Merge removed from an owned
+	// entry, in spec order. Setup reports each removal, because Codex
+	// asks the user to review a changed hook again.
+	Removed []BackgroundRemoval
 }
 
 // Rewrite is one owned command that Merge replaced with the command of
@@ -212,22 +247,24 @@ func Merge(settings map[string]any, bin string, specs []Spec) (Merged, error) {
 
 		want := spec.Command(bin)
 
-		found, rewritten := applyExisting(eventHooks, spec.Markers(), want)
+		found, rewritten, removed := applyExisting(eventHooks, spec, want)
 		if found {
-			merged.Changed = merged.Changed || len(rewritten) > 0
+			merged.Changed = merged.Changed || len(rewritten) > 0 || len(removed) > 0
 			merged.Rewritten = append(merged.Rewritten, rewritten...)
+			merged.Removed = append(merged.Removed, removed...)
 
 			continue
 		}
 
-		entry := map[string]any{
-			"hooks": []any{map[string]any{
-				"type":          "command",
-				"command":       want,
-				"timeout":       spec.Timeout,
-				"statusMessage": spec.Status,
-			}},
+		hook := map[string]any{"type": "command", "command": want, "timeout": spec.Timeout}
+
+		// Both clients document the status message as optional. A spec
+		// without one gets no key, so the client shows its own default.
+		if spec.Status != "" {
+			hook["statusMessage"] = spec.Status
 		}
+
+		entry := map[string]any{"hooks": []any{hook}}
 		if spec.Matcher != "" {
 			entry["matcher"] = spec.Matcher
 		}
@@ -369,35 +406,77 @@ func ClaudeMatcher(matcher, tool string) bool {
 	return err == nil && pattern.MatchString(tool)
 }
 
-// CodexMatcher is Codex's documented matcher rule (hooks reference,
-// consulted 2026-09-26):
+// codexExactMatcher is the character set of a Codex matcher that lists
+// exact names. It holds no space, "-", or ",", so Codex 0.164.0 reads a
+// matcher with one of them as a regular expression.
+var codexExactMatcher = regexp.MustCompile(`^[A-Za-z0-9_|]*$`)
+
+// codexAliases lists the other names that Codex 0.164.0 tests a matcher
+// against for a tool. Codex selects a handler when the matcher fires for
+// the tool name or for one alias. Only real tool names have a row. A
+// tool name without a row, such as "*", has no alias, so a narrowed
+// matcher for it reads as partial and not as full coverage.
+var codexAliases = map[string][]string{
+	"apply_patch": {"Write", "Edit"},
+	"spawn_agent": {"Agent"},
+}
+
+// CodexMatcher is the matcher rule of the Codex 0.164.0 source. The
+// hooks reference calls every matcher a regular expression, but the
+// source reads a name-only matcher as exact names:
 //
-//   - "*", an empty matcher, and an omitted matcher fire for every tool.
-//   - Any other matcher is a regular expression. The reference shows
-//     "^apply_patch$" as an example, so a pattern is unanchored unless
-//     it anchors itself.
+//   - "*" and an empty or omitted matcher fire for every tool.
+//   - A matcher of only ASCII letters, digits, "_", and "|" is a list of
+//     exact names, split on "|". The split gives "Bash|" the names
+//     "Bash" and "". No tool has an empty name, so "Bash|" fires for
+//     Bash only.
+//   - Any other matcher is a regular expression. It fires when it
+//     matches anywhere in the name, so "^apply_patch$" anchors itself.
 //
-// Codex also matches "Edit" and "Write" as aliases of apply_patch. The
-// rule does not model the aliases: setup reads it for the gate hook on
-// Bash, which has none. A pattern that Go cannot compile covers nothing
-// here, by the rule of ClaudeMatcher. No native run has exercised a
-// matcher other than the exact names that setup writes.
+// Each rule tests the tool name and each of its aliases, so "Edit"
+// fires for apply_patch. Codex skips a matcher group that its Rust
+// regex crate cannot compile, so no handler of that group runs. Here a
+// pattern that Go cannot compile fires for no tool.
+//
+// Seamark has no Rust regex engine, so this reading uses Go's regexp.
+// The two engines compile or match some rare patterns differently. For
+// example, Go rejects "a{1001}" and Rust accepts it, and Rust rejects
+// "[[]" and Go accepts it.
 func CodexMatcher(matcher, tool string) bool {
 	if matcher == "" || matcher == "*" {
 		return true
 	}
 
-	pattern, err := regexp.Compile(matcher)
+	names := append([]string{tool}, codexAliases[tool]...)
 
-	return err == nil && pattern.MatchString(tool)
+	if codexExactMatcher.MatchString(matcher) {
+		listed := strings.Split(matcher, "|")
+
+		return slices.ContainsFunc(names, func(name string) bool { return slices.Contains(listed, name) })
+	}
+
+	pattern, err := regexp.Compile(matcher)
+	if err != nil {
+		return false
+	}
+
+	return slices.ContainsFunc(names, pattern.MatchString)
 }
 
 // applyExisting rewrites seamark's own hook command to want when it is
-// present. OwnedBySeamark recognizes the command, so an unrelated
+// present. A command in another client's form is not rewritten here,
+// because ReduceOtherForms keeps at most one of them. OwnedBySeamark
+// recognizes the command, so an unrelated
 // command that only contains or ends with the marker text stays as it
-// is. It reports whether such a hook exists and each command it
-// rewrote.
-func applyExisting(eventHooks []any, markers []string, want string) (found bool, rewritten []Rewrite) {
+// is. A foreground spec also loses its background keys, under any
+// matcher, because such a hook cannot block. It reports whether such a
+// hook exists, each command it rewrote, and each background key it
+// removed.
+func applyExisting(eventHooks []any, spec Spec, want string) (
+	found bool, rewritten []Rewrite, removed []BackgroundRemoval,
+) {
+	markers := spec.ownMarkers()
+
 	ForEachCommand(eventHooks, func(_ string, h map[string]any, cmd string) {
 		if !OwnedBySeamark(cmd, markers) {
 			return
@@ -409,9 +488,11 @@ func applyExisting(eventHooks []any, markers []string, want string) (found bool,
 			h["command"] = want
 			rewritten = append(rewritten, Rewrite{From: cmd, To: want})
 		}
+
+		removed = append(removed, removeBackground(spec, h)...)
 	})
 
-	return found, rewritten
+	return found, rewritten, removed
 }
 
 // shellSpecial lists the characters that make a shell split or

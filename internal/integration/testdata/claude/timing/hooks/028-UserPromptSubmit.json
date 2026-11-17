@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000002",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000002.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000005",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use the Read tool to read the file timing/intra.txt.\n2. Use the Edit tool to replace the line alpha with the line beta in timing/intra.txt.\nThen reply with the single word: done"
+}

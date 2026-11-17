@@ -46,6 +46,18 @@ func readOneFiring(t *testing.T, root string) reviews.Firing {
 	return rec
 }
 
+// legacyFields returns the fields of rec that a version 1 record has.
+// A writer of version 2 keeps them byte for byte, so a golden of the
+// legacy shape compares them alone.
+func legacyFields(rec reviews.Firing) reviews.Firing {
+	return reviews.Firing{
+		TS: rec.TS, Surface: rec.Surface, File: rec.File, Files: rec.Files, Tool: rec.Tool,
+		Fired: rec.Fired, Delivery: rec.Delivery, SessionSHA: rec.SessionSHA, MatchSHA: rec.MatchSHA,
+		Generation: rec.Generation, ContextBytes: rec.ContextBytes, Client: rec.Client,
+		Mechanism: rec.Mechanism, ContextSHA: rec.ContextSHA,
+	}
+}
+
 func TestChangeSetRecordsOneFiringForItsLessons(t *testing.T) {
 	st, root := seedStore(t)
 	writeLessonsYAML(t, root, "pin:\n  - rule: guard-empty-datasets\n    region: scripts\n"+
@@ -83,6 +95,8 @@ func TestCheckAdvisoryRecordsItsLessons(t *testing.T) {
 	CheckAdvisory(&b, st, root, []string{"scripts/task.py", "web/new.ts"})
 	assert.Contains(t, b.String(), "advisory — recurring lessons for touched files")
 
+	// The record is version 2 now. Its legacy fields keep their values;
+	// TestCheckAdvisoryWritesAV2RecordAndKeepsItsText checks the rest.
 	assert.Equal(t, reviews.Firing{
 		Surface: "check",
 		Files:   []string{"scripts/task.py", "web/new.ts"},
@@ -90,7 +104,7 @@ func TestCheckAdvisoryRecordsItsLessons(t *testing.T) {
 			{Region: "scripts", Symptom: "guard-empty-datasets — Guard datasets before reductions."},
 			{Region: "scripts", Symptom: "RUF001"},
 		},
-	}, readOneFiring(t, root))
+	}, legacyFields(readOneFiring(t, root)))
 }
 
 func TestChangeSetBudgetDefaultAndNonpositive(t *testing.T) {

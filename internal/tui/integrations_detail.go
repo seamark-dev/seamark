@@ -186,6 +186,10 @@ func (s *integrations) detailLines(insp integration.Inspection, w int) []string 
 	out = append(out, "", integHeading(t, "Gate"))
 	out = append(out, integGate(t, insp, w)...)
 
+	// The section follows the gate, because both stop or check an edit.
+	// It shows only for a client with lesson checks (integChecksShown).
+	out = append(out, s.lessonCheckLines(insp, w)...)
+
 	out = append(out, "", integHeading(t, "Shared resources"))
 	out = append(out, integShared(t, s.clients, w)...)
 

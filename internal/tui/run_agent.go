@@ -488,7 +488,7 @@ func agentText(t *ui.Theme, argv []string, kind string, room int) string {
 // agentArgv renders an agent command line for display. Arguments can
 // hold tokens, so the helper redacts them before it sanitizes the text.
 // A secret-shaped value that holds shell syntax stays visible. It is
-// code that runs after y, and "[REDACTED]" would hide it behind a word
+// code that runs after y, and redact.Marker would hide it behind a word
 // that reads as a safety measure.
 func agentArgv(argv []string) string {
 	return ui.OneLine(redact.SecretsExcept(strings.Join(argv, " "), shellActive))

@@ -24,6 +24,7 @@ type companion struct {
 	file     string
 	with     string // the set file that shares the most commits with it
 	together int
+	total    int // the commits co-change counts in the mined window
 	lift     float64
 	outside  bool // no set file lives in the companion's directory
 }
@@ -42,14 +43,19 @@ const checkCompanionsTitle = CompanionsTitle + "  (usually changes with the diff
 // companionSet is the set of files a companion is measured against (the
 // planned files or the diff's files, with their directories) and the
 // partners noted so far, keyed by file with the strongest evidence seen.
+// inSet holds the set files that are a partner of another set file.
 type companionSet struct {
 	files map[string]bool
 	dirs  map[string]bool
 	found map[string]companion
+	inSet map[string]bool
 }
 
 func newCompanionSet(files []string) *companionSet {
-	set := &companionSet{files: map[string]bool{}, dirs: map[string]bool{}, found: map[string]companion{}}
+	set := &companionSet{
+		files: map[string]bool{}, dirs: map[string]bool{},
+		found: map[string]companion{}, inSet: map[string]bool{},
+	}
 
 	for _, f := range files {
 		set.files[f] = true
@@ -63,6 +69,8 @@ func newCompanionSet(files []string) *companionSet {
 // keeping the strongest evidence seen for it across the set.
 func (s *companionSet) note(file string, p store.CoChangePartner) {
 	if s.files[p.File] {
+		s.inSet[p.File] = true
+
 		return
 	}
 
@@ -72,7 +80,7 @@ func (s *companionSet) note(file string, p store.CoChangePartner) {
 	}
 
 	s.found[p.File] = companion{
-		file: p.File, with: file, together: p.Together, lift: p.Lift,
+		file: p.File, with: file, together: p.Together, total: p.Total, lift: p.Lift,
 		outside: !s.dirs[path.Dir(p.File)],
 	}
 }
@@ -139,13 +147,17 @@ func rankCompanions(companions map[string]companion) []companion {
 // full timeout per partner; a slow history then costs one budget, not six.
 const historyBudget = 5 * time.Second
 
-// printCompanions writes the closing list: one line of numbers per partner
-// and, when history has them, one line of reasons. A bare file name was
-// the weakest line on the screen in the first workflow cohort; the reason
-// is what makes a partner a question the agent answers. Both reasons are
-// quoted facts from git, never a claim about the code.
-func printCompanions(w io.Writer, st *store.Store, root, title string, companions map[string]companion) {
-	list := rankCompanions(companions)
+// printCompanions writes the closing list, ranked by rankCompanions: one
+// line of numbers per partner and, when history has them, one line of
+// reasons. A bare file name was the weakest line on the screen in the
+// first workflow cohort; the reason is what makes a partner a question
+// the agent answers. Both reasons are quoted facts from git, never a
+// claim about the code.
+//
+// With window, the numbers take the N/M form of the change_set file
+// lines, because change_set prints a listed partner only here. check
+// prints no file lines, and its line keeps the shared-commit form.
+func printCompanions(w io.Writer, st *store.Store, root, title string, list []companion, window bool) {
 	if len(list) == 0 {
 		return
 	}
@@ -157,8 +169,13 @@ func printCompanions(w io.Writer, st *store.Store, root, title string, companion
 	for i, c := range list {
 		// File names come from git history, where control characters are
 		// legal, so they are sanitized like commit titles before the terminal.
-		fmt.Fprintf(w, "  %-50s %d shared commits with %s, lift %.1f\n",
-			render.Sanitize(c.file), c.together, render.Sanitize(c.with), c.lift)
+		counts := fmt.Sprintf("%d shared commits", c.together)
+		if window {
+			counts = fmt.Sprintf("%d/%d commits", c.together, c.total)
+		}
+
+		fmt.Fprintf(w, "  %-50s %s with %s, lift %.1f\n",
+			render.Sanitize(c.file), counts, render.Sanitize(c.with), c.lift)
 
 		if reason := companionReason(st, c, funcs[i]); reason != "" {
 			fmt.Fprintf(w, "    %s\n", reason)
@@ -204,7 +221,9 @@ func partnerFunctions(root string, list []companion) [][]string {
 				go func() {
 					defer diffs.Done()
 
-					funcs[i] = history.PartnerFunctions(ctx, root, list[i].file, commits, 3)
+					// Every name comes back, because liveFunctions drops the
+					// removed ones before the cut to reasonFunctions.
+					funcs[i] = history.PartnerFunctions(ctx, root, list[i].file, commits, 0)
 				}()
 			}
 
@@ -217,6 +236,52 @@ func partnerFunctions(root string, list []companion) [][]string {
 	return funcs
 }
 
+// reasonFunctions is how many function names a "mostly" reason shows.
+const reasonFunctions = 3
+
+// liveFunctions keeps the names in funcs that file still defines, in
+// order, and cuts the result to reasonFunctions. Hunk headers describe the
+// file as it was in each commit, so a renamed or removed function can
+// appear there. An agent cannot open such a name in the current file.
+// The match is exact, because a symbol's Name is the bare identifier that
+// the hunk-header reader also gives.
+//
+// A file with no indexed symbols keeps every name. The index does not
+// parse every language, so an empty list says nothing about the names. A
+// store error keeps every name too, because the reason is only a hint.
+// The store reads run here, after the git goroutines finish.
+func liveFunctions(st *store.Store, file string, funcs []string) []string {
+	if len(funcs) == 0 {
+		return nil
+	}
+
+	syms, err := st.SymbolsInFile(file)
+	if err != nil || len(syms) == 0 {
+		return funcs[:min(len(funcs), reasonFunctions)]
+	}
+
+	defined := make(map[string]bool, len(syms))
+	for _, s := range syms {
+		defined[s.Name] = true
+	}
+
+	live := make([]string, 0, reasonFunctions)
+
+	for _, name := range funcs {
+		if !defined[name] {
+			continue
+		}
+
+		live = append(live, name)
+
+		if len(live) == reasonFunctions {
+			break
+		}
+	}
+
+	return live
+}
+
 // companionReason joins what the shared commits touched in the partner and
 // the latest correction recorded on it. The first comes from git and is
 // computed for the whole list at once; the second needs only the index, so
@@ -224,7 +289,7 @@ func partnerFunctions(root string, list []companion) [][]string {
 func companionReason(st *store.Store, c companion, funcs []string) string {
 	var parts []string
 
-	if len(funcs) > 0 {
+	if funcs = liveFunctions(st, c.file, funcs); len(funcs) > 0 {
 		parts = append(parts, "mostly "+render.Sanitize(strings.Join(funcs, ", ")))
 	}
 
@@ -291,8 +356,11 @@ func shortRef(ref string) string {
 // A forgotten companion is the omission history can see and a policy over
 // effects cannot. The list is advisory and never part of the verdict; files
 // comes from gate.ChangedPaths, like the lessons advisory, so the section
-// can never disagree with the verdict about what changed. It degrades to
-// silence on any error.
+// can never disagree with the verdict about what changed.
+//
+// When no companion is listed, one status line says why. Silence would
+// read the same for a diff that holds every partner, for files without
+// stored partners, and for a failed read. An empty file list stays silent.
 func CheckCompanions(w io.Writer, st *store.Store, root string, files []string) {
 	if len(files) == 0 {
 		return
@@ -311,10 +379,39 @@ func CheckCompanions(w io.Writer, st *store.Store, root string, files []string) 
 	}
 
 	set := newCompanionSet(names)
-	if err := set.collect(st, indexed); err != nil || len(set.found) == 0 {
+	err := set.collect(st, indexed)
+
+	fmt.Fprintln(w)
+
+	if err != nil || len(set.found) == 0 {
+		fmt.Fprintln(w, companionStatus(err, len(set.inSet)))
+
 		return
 	}
 
-	fmt.Fprintln(w)
-	printCompanions(w, st, root, checkCompanionsTitle, set.found)
+	printCompanions(w, st, root, checkCompanionsTitle, rankCompanions(set.found), false)
+}
+
+// companionStatus is the line check prints when it lists no companion.
+// inDiff counts the diff files that are a partner of another diff file.
+// The text is fixed apart from that count, so it carries no repository
+// text and needs no sanitizing. It never starts with the list title,
+// because a reader of the list would take its next line for a path.
+func companionStatus(err error, inDiff int) string {
+	switch {
+	case err != nil:
+		// The error text can carry paths, and the line only says that
+		// the list is missing.
+		return "companions  not shown (the co-change read failed)"
+	case inDiff > 0:
+		return fmt.Sprintf("companions  none outside this diff (co-change partners in the diff: %d)", inDiff)
+	default:
+		// Every diff file anchors its live partners. That includes a
+		// deleted path and the old path of a rename record, because the
+		// diff parser lists both. A deleted or renamed-away file is never
+		// a partner, so it never counts here. The line prints only when
+		// no diff file has a live partner, so it states what the index
+		// offers, not what history shows.
+		return "companions  none (the index holds no co-change partner for the diff's files)"
+	}
 }

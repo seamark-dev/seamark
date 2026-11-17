@@ -1,6 +1,7 @@
 package parse
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -309,4 +310,277 @@ export const Panel = () => {
 	panel := symbolByFQN(t, rex, "web/src/Panel.Panel")
 	assert.Equal(t, model.KindFunction, panel.Symbol.Kind, "TSX component arrow const")
 	assert.Contains(t, panel.Calls, CallRef{Name: "useState", Line: 4})
+}
+
+// TestEcmaValueBindingCalls proves that a top-level const holding an
+// object of functions carries the calls inside it, that a binding without
+// a call carries none, and that a function-local binding stays out.
+func TestEcmaValueBindingCalls(t *testing.T) {
+	src := `import * as fs from "fs";
+import { audit } from "./audit";
+
+export const handlers = {
+	save: (p: string, d: string) => fs.writeFileSync(p, d),
+	check: function (p: string) { return audit(p); },
+};
+
+const plain = { a: 1 };
+
+function run() {
+	const local = setup();
+	return local;
+}
+`
+	res := extractTS(t, "web/src/handlers.ts", src)
+
+	handlers := symbolByFQN(t, res, "web/src/handlers.handlers")
+	assert.Equal(t, model.KindConst, handlers.Symbol.Kind)
+	assert.ElementsMatch(t, []CallRef{
+		{Qualifier: "fs", Name: "writeFileSync", Line: 5, Selector: true},
+		{Name: "audit", Line: 6},
+	}, handlers.Calls)
+
+	assert.Empty(t, symbolByFQN(t, res, "web/src/handlers.plain").Calls)
+	assert.NotContains(t, fqns(res), "web/src/handlers.local", "a function-local binding is no symbol")
+	assert.Equal(t, []CallRef{{Name: "setup", Line: 12}}, symbolByFQN(t, res, "web/src/handlers.run").Calls)
+}
+
+// TestEcmaClassBodyCalls proves that a class carries the calls of its body
+// outside its methods (field initializers, a static block, a method of an
+// object in a field, a method with a computed name, which is no symbol)
+// and that the calls of a method stay on the method only. A private (#m)
+// method is a symbol, so it keeps its own calls too, and the class holds
+// a private reference to it.
+func TestEcmaClassBodyCalls(t *testing.T) {
+	src := `import * as fs from "fs";
+import { audit } from "./audit";
+
+export class Store {
+	static boot = setup();
+	save = (p: string, d: string) => fs.writeFileSync(p, d);
+	static {
+		register(Store);
+	}
+	handlers = {
+		rm(p: string) { fs.rmSync(p); },
+	};
+
+	load(p: string) {
+		return audit(p);
+	}
+
+	#hidden() {
+		return hide();
+	}
+
+	["legacy"]() {
+		return old();
+	}
+}
+`
+	res := extractTS(t, "web/src/store.ts", src)
+
+	store := symbolByFQN(t, res, "web/src/store.Store")
+	assert.Equal(t, model.KindType, store.Symbol.Kind)
+	assert.ElementsMatch(t, []CallRef{
+		{Name: "setup", Line: 5},
+		{Qualifier: "fs", Name: "writeFileSync", Line: 6, Selector: true},
+		{Name: "register", Line: 8},
+		{Qualifier: "fs", Name: "rmSync", Line: 11, Selector: true},
+		{Name: "old", Line: 23},
+		{Name: "#hidden", Line: 18, Private: true},
+	}, store.Calls)
+
+	assert.Equal(t, []CallRef{{Name: "audit", Line: 15}}, symbolByFQN(t, res, "web/src/store.Store.load").Calls)
+	assert.Equal(t, []CallRef{{Name: "hide", Line: 19}}, symbolByFQN(t, res, "web/src/store.Store.#hidden").Calls)
+}
+
+// TestEcmaClassBodyReceiverCalls proves that this.save() in a class body
+// is a receiver call of the class. A field arrow function keeps the this
+// of the class. A method with a computed name is no symbol, so the class
+// carries its calls, and its this is still the instance. A plain function,
+// an object literal method and a method of a nested class rebind this.
+// The extends clause and a computed member key of a nested class keep the
+// this of the outer class. A field arrow function of a nested class also
+// counts as the outer instance, in the class body and in a method. A
+// nested class can extend the outer class and call its save method, so
+// the walk does not stop at the body of a nested class.
+func TestEcmaClassBodyReceiverCalls(t *testing.T) {
+	src := `export class Panel {
+	onClick = () => { this.save(); };
+	["flush"]() {
+		this.save();
+	}
+	legacy = function () { return this.save(); };
+	handlers = {
+		run() { return this.save(); },
+	};
+	inner = class {
+		go() { return this.save(); }
+	};
+	other = class {
+		f = () => this.save();
+	};
+	Base = class extends this.save() {};
+	Keyed = class { [this.save()] = 1; };
+
+	save() {}
+
+	build() {
+		this.save();
+		const Inner = class { f = () => this.save(); };
+		return Inner;
+	}
+}
+`
+	res := extractTS(t, "panel.ts", src)
+
+	receivers := func(fqn string) map[uint32]bool {
+		out := map[uint32]bool{}
+
+		for _, c := range symbolByFQN(t, res, fqn).Calls {
+			if c.Name == "save" {
+				out[c.Line] = c.Receiver
+			}
+		}
+
+		return out
+	}
+
+	assert.Equal(t, map[uint32]bool{2: true, 4: true, 6: false, 8: false, 11: false, 14: true, 16: true, 17: true},
+		receivers("panel.Panel"))
+	assert.Equal(t, map[uint32]bool{22: true, 23: true}, receivers("panel.Panel.build"))
+}
+
+// TestEcmaPrivateMethodIsASymbol proves that a private (#m) method is a
+// method symbol of its class in both grammars. It carries its own calls,
+// and the class does not carry them. A call this.#m() is a private
+// reference that keeps the # in its name, so the resolver can find the
+// private method of the class by name. The class holds a private
+// reference to each private method, and repeats no call of a method.
+func TestEcmaPrivateMethodIsASymbol(t *testing.T) {
+	src := `export class Panel {
+	#flush(p) {
+		return this.#write(p);
+	}
+
+	#write(p) {
+		return save(p);
+	}
+
+	run() {
+		this.#flush("a");
+	}
+}
+`
+	ex, err := NewEcmaExtractor(EcmaJS)
+	require.NoError(t, err)
+	t.Cleanup(ex.Close)
+
+	js, err := ex.Extract("panel.js", []byte(src))
+	require.NoError(t, err)
+
+	for name, res := range map[string]*FileResult{"typescript": extractTS(t, "panel.ts", src), "javascript": js} {
+		flush := symbolByFQN(t, res, "panel.Panel.#flush")
+		assert.Equal(t, model.KindMethod, flush.Symbol.Kind, name)
+		assert.Equal(t, "#flush", flush.Symbol.Name, name)
+		assert.Equal(t, []CallRef{{Name: "#write", Line: 3, Private: true}}, flush.Calls, name)
+
+		assert.Equal(t, []CallRef{{Name: "save", Line: 7}}, symbolByFQN(t, res, "panel.Panel.#write").Calls, name)
+		assert.Equal(t, []CallRef{{Name: "#flush", Line: 11, Private: true}},
+			symbolByFQN(t, res, "panel.Panel.run").Calls, name)
+		assert.Equal(t, []CallRef{{Name: "#flush", Line: 2, Private: true}, {Name: "#write", Line: 6, Private: true}},
+			symbolByFQN(t, res, "panel.Panel").Calls, "%s: the class repeats no method call", name)
+	}
+}
+
+// TestEcmaPrivateMemberReferences proves that every access X.#name in a
+// class gives one private reference on the symbol that carries it, in
+// both grammars. The access can be a call, a value passed on, the
+// operand of call or bind, an optional call, an alias call in a nested
+// function, a write, a getter read or a field call, through this, any
+// other operand or the class name. A nested class that declares the same
+// name hides the outer one, and a class in a function has no symbols, so
+// both give no reference. The class holds a reference to each private
+// method and accessor, not to its fields. No private call is a selector
+// call.
+func TestEcmaPrivateMemberReferences(t *testing.T) {
+	src := `export class Store {
+	#persist(p) { return p; }
+	get #data() { return 1; }
+	set #value(v) {}
+	#field = () => 1;
+	static #count = 0;
+
+	run(o, ps) {
+		this.#persist(o);
+		ps.forEach(this.#persist);
+		this.#persist.call(this, o);
+		setTimeout(this.#persist.bind(this, o), 0);
+		this.#persist?.(o);
+		const self = this;
+		[o].map(function (q) { return self.#persist(q); });
+		Store.#count += 1;
+		this.#value = this.#data;
+		return this.#field();
+	}
+
+	inner = class {
+		#persist() { return 2; }
+		go(o) { return o.#persist(); }
+	};
+
+	cb = () => this.#persist(1);
+}
+
+function local() {
+	class Local {
+		#x() {}
+		y() { this.#x(); }
+	}
+	return Local;
+}
+`
+	ex, err := NewEcmaExtractor(EcmaJS)
+	require.NoError(t, err)
+	t.Cleanup(ex.Close)
+
+	js, err := ex.Extract("store.js", []byte(src))
+	require.NoError(t, err)
+
+	for name, res := range map[string]*FileResult{"typescript": extractTS(t, "store.ts", src), "javascript": js} {
+		assert.ElementsMatch(t, []CallRef{
+			{Name: "#persist", Line: 9, Private: true},
+			{Qualifier: "ps", Name: "forEach", Line: 10, Selector: true},
+			{Name: "#persist", Line: 10, Private: true},
+			{Name: "call", Line: 11, Selector: true},
+			{Name: "#persist", Line: 11, Private: true},
+			{Name: "setTimeout", Line: 12},
+			{Name: "bind", Line: 12, Selector: true},
+			{Name: "#persist", Line: 12, Private: true},
+			{Name: "#persist", Line: 13, Private: true},
+			{Name: "map", Line: 15, Selector: true},
+			{Name: "#persist", Line: 15, Private: true},
+			{Name: "#count", Line: 16, Private: true},
+			{Name: "#value", Line: 17, Private: true},
+			{Name: "#data", Line: 17, Private: true},
+			{Name: "#field", Line: 18, Private: true},
+		}, symbolByFQN(t, res, "store.Store.run").Calls, name)
+
+		assert.Equal(t, []CallRef{
+			{Name: "#persist", Line: 26, Private: true},
+			{Name: "#persist", Line: 2, Private: true},
+			{Name: "#data", Line: 3, Private: true},
+			{Name: "#value", Line: 4, Private: true},
+		}, symbolByFQN(t, res, "store.Store").Calls, name)
+
+		assert.Empty(t, symbolByFQN(t, res, "store.local").Calls, name)
+
+		for _, sd := range res.Symbols {
+			for _, c := range sd.Calls {
+				assert.False(t, strings.HasPrefix(c.Name, "#") && !c.Private,
+					"%s: %s records the private call %+v as a plain call", name, sd.Symbol.FQN, c)
+			}
+		}
+	}
 }

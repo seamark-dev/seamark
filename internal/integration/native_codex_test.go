@@ -4,13 +4,13 @@ package integration
 // SEAMARK_NATIVE_CLIENT=codex is set (`make agents-native-check
 // CLIENT=codex`) and skip otherwise, so `make test` stays offline. When
 // the client is selected, a missing precondition fails the check as
-// blocked: the operator asked for native evidence and got none, and a
-// green exit must not stand in for it.
+// blocked. The operator asked for native evidence and got none, so a
+// passing exit status must not take its place.
 //
 // No check starts a login or reaches a model. Inference goes to a
-// scripted provider on the loopback interface, and every run uses a
-// scratch CODEX_HOME, so the user's login, configuration, rules, and
-// trust records are never read or written.
+// scripted provider on the loopback interface. Every run uses a scratch
+// CODEX_HOME, so the checks never read or write the user's login,
+// configuration, rules, or trust records.
 
 import (
 	"context"
@@ -79,32 +79,42 @@ func codexVersion(t *testing.T, codex string) string {
 // the process at it. Codex then finds no login, no user configuration,
 // no rules, and no trust records: the check observes the binary, not
 // the user's account.
-//
-// The directory is removed on a best-effort basis, not through
-// t.TempDir: Codex leaves background work in its home for a moment
-// after the run (a plugin catalogue clone under .tmp), and a removal
-// that races it must not fail a check that produced its evidence.
 func scratchCodexHome(t *testing.T) string {
 	t.Helper()
 
-	home, err := os.MkdirTemp("", "seamark-native-codex-home-")
+	home := scratchClientDir(t, "seamark-native-codex-home-")
+	t.Setenv("CODEX_HOME", home)
+
+	return home
+}
+
+// scratchClientDir creates an empty directory for the home or the
+// configuration of a client CLI during one check.
+//
+// The cleanup removes the directory itself and ignores a failure, so it
+// does not use t.TempDir. A client can keep background work in its
+// directory for a moment after the run, for example a Codex plugin
+// catalogue clone under .tmp. A removal that races that work must not
+// fail a check that produced its evidence.
+func scratchClientDir(t *testing.T, prefix string) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", prefix)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
 		for range 20 {
-			if os.RemoveAll(home) == nil {
+			if os.RemoveAll(dir) == nil {
 				return
 			}
 
 			time.Sleep(100 * time.Millisecond)
 		}
 
-		t.Logf("scratch CODEX_HOME %s could not be removed; Codex may still write to it", home)
+		t.Logf("scratch directory %s could not be removed; the client may still write to it", dir)
 	})
 
-	t.Setenv("CODEX_HOME", home)
-
-	return home
+	return dir
 }
 
 // TestNativeCodexRecordsTheVersionAndTheExecSurface records the
@@ -150,8 +160,8 @@ func TestNativeCodexRecordsTheVersionAndTheExecSurface(t *testing.T) {
 
 // oracleScratch is the file layout the apply_patch oracle was recorded
 // against: every patch updates or deletes these names, and every added
-// name is absent. The layout is inferred from the patches, because the
-// 2026-09-20 recording did not write it down.
+// name is absent. The test infers the layout from the patches, because
+// the 2026-09-20 recording did not write it down.
 var oracleScratch = map[string]string{
 	"a.txt": "x\n",
 	"b.txt": "b\n",
@@ -161,9 +171,9 @@ var oracleScratch = map[string]string{
 
 // TestNativeCodexApplyPatchOracleHoldsOnTheInstalledBinary reruns the
 // recorded patches through the installed binary. The oracle pins what
-// codex-cli 0.154.0 accepted and touched; the decoder follows that
-// parser. A newer binary that answers differently means the parser
-// moved and the decoder needs a new recording.
+// codex-cli 0.154.0 accepted and touched, and the decoder follows that
+// parser. A newer binary that answers differently has a changed parser,
+// so the decoder needs a new recording.
 func TestNativeCodexApplyPatchOracleHoldsOnTheInstalledBinary(t *testing.T) {
 	codex := nativeCodex(t)
 	scratchCodexHome(t)
@@ -503,12 +513,14 @@ func toolDefsNamed(names []string) []toolDef {
 	return defs
 }
 
-// TestNativeCodexPresetKeepsTheWorkspaceReadOnly is compatibility check
-// 13 and the credential-free part of check 5: with an allow rule for
-// `touch` in the (scratch) user rules, the preset must refuse the
-// write, leave the tree byte-identical, and return the final message
-// on stdout. Hook recursion is not observable here: a scratch home
-// trusts no hook, so `features.hooks=false` has nothing to switch off.
+// TestNativeCodexPresetKeepsTheWorkspaceReadOnly is the native sandbox
+// regression check. The scratch user rules allow `touch`, but the
+// preset must refuse the write and leave the tree byte-identical. The
+// check also covers the parts of the preset smoke that need no
+// credentials, so the final message must arrive on stdout. A unit test
+// pins --ignore-rules in the argv, but only a native run proves its
+// effect. Hook recursion is not observable here: a scratch home trusts
+// no hook, so `features.hooks=false` has nothing to switch off.
 func TestNativeCodexPresetKeepsTheWorkspaceReadOnly(t *testing.T) {
 	nativeCodex(t)
 	home := scratchCodexHome(t)
@@ -558,10 +570,10 @@ func TestNativeCodexAllowRuleEscalatesWithoutIgnoreRules(t *testing.T) {
 		"the control did not reproduce the escalation: an allow rule no longer lets touch run outside the sandbox on this version")
 }
 
-// TestNativeCodexPresetFailsWithTheProviderReason is the failure half
-// of check 5: a provider failure ends the run with a nonzero status,
-// and the shared invoker's diagnostic tail carries the reason instead
-// of the version banner.
+// TestNativeCodexPresetFailsWithTheProviderReason checks the failure
+// path of the preset without credentials. A provider failure ends the
+// run with a nonzero status. The diagnostic tail of the shared invoker
+// then carries the reason instead of the version banner.
 func TestNativeCodexPresetFailsWithTheProviderReason(t *testing.T) {
 	nativeCodex(t)
 	scratchCodexHome(t)

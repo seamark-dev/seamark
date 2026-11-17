@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000020",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000020.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000022",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "<task-notification>\n<task-id>a0000000000000005</task-id>\n<tool-use-id>toolu_01NativeToolUse000000027</tool-use-id>\n<output-file>/tmp/claude-tasks/-workspace-native/10000000-0000-4000-8000-000000000020/tasks/a0000000000000005.output</output-file>\n<status>completed</status>\n<summary>Agent \"Create sentinel child file\" finished</summary>\n<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>\n<result>blocked</result>\n<usage><subagent_tokens>2083</subagent_tokens><tool_uses>1</tool_uses><duration_ms>9023</duration_ms></usage>\n</task-notification>"
+}

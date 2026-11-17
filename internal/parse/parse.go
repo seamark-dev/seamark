@@ -51,6 +51,20 @@ type CallRef struct {
 	// `this`. Set by the extractor from the declaration, never inferred
 	// from spelling: a local variable named "self" must not qualify.
 	Receiver bool
+	// Root is the identifier at the start of a selector operand that is not
+	// a plain identifier: "strings" in strings.NewReplacer(…).Replace(s),
+	// "w" in w.db.Close(). The walk goes down through call functions and
+	// selector operands only, and any other node gives "". The resolver
+	// uses it to see a value that comes from a package outside the
+	// repository. Only the Go extractor sets it.
+	Root string
+	// Private marks a reference to a private (#name) member of the class
+	// of the declaration: a method, an accessor or a field. Name keeps the
+	// "#". The reference can be a call, a read, a write or a value passed
+	// on, through any operand. JavaScript scopes a private name to the
+	// class that declares it, so the resolver looks only in that class and
+	// never guesses. Only the ECMAScript extractor sets it.
+	Private bool
 }
 
 // SymbolDecl is a declared symbol plus the call references inside its body.

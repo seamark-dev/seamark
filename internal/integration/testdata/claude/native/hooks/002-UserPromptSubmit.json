@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000001",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, one tool call per step, and do not add steps.\n1. Run the Bash command: true\n2. Run the Bash command: false\n3. Run the Bash command: cd sub\n4. Run the Bash command: pwd\n5. Use the Agent tool with subagent_type \"probe\" and ask it to run the Bash command: pwd\nThen reply with the single word: done"
+}

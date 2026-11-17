@@ -49,6 +49,11 @@
 // The plan also reads the ledger, because the relationship decides which
 // fields can change.
 //
+// PlanScope plans the region set that a person chooses for a linked pin.
+// The authoring planner checks the draft, because a person typed it.
+// Commit writes it, because the pin file and the ledger row must change
+// together. So compensation and Recovery work as for a retarget.
+//
 // Many display fields hold text from the pin file, the ledger, a model,
 // or the person. Such text can contain terminal control bytes, so a
 // caller sanitizes it before display. These fields are PlanItem.Reason,
@@ -111,6 +116,11 @@ const (
 	// pending proposal. It also differs from the removal of stale pending
 	// proposals in a distillation run, which never touches a pin.
 	ActionPrune
+	// ActionScope writes the region set that a person chose for a linked
+	// pin to the entry and to its applied row. The row records the choice
+	// with a time, so no computed scope replaces the set without a review.
+	// PlanScope plans it; NewPlan does not.
+	ActionScope
 )
 
 // String returns the lower-case name of the action.
@@ -118,6 +128,8 @@ func (a Action) String() string {
 	switch a {
 	case ActionRetarget:
 		return "retarget"
+	case ActionScope:
+		return "scope"
 	case ActionPrune:
 		return "prune"
 	default:
@@ -134,6 +146,10 @@ type Request struct {
 	// Cursor is true when no entry was marked and the request names the
 	// cursor row. The preview then says so.
 	Cursor bool
+	// ReplaceChosen lets a computed scope replace a set that a person
+	// chose. Only a console preview sets it, because a surface without a
+	// preview cannot show that replacement before the write.
+	ReplaceChosen bool
 }
 
 // LedgerWriter is the ledger boundary of a commit. *store.Store
@@ -179,7 +195,8 @@ type Deps struct {
 	// ForeignRoot is set by the caller when Root is not the root of this
 	// workspace (P4-16). The caller owns the root rule. An authoring plan
 	// then carries a blocker with its text, and CommitAuthor refuses
-	// with it. The maintenance planner ignores it.
+	// with it. A scope plan and its Commit do the same, because a scope
+	// edit is pin authoring. The other maintenance planners ignore it.
 	ForeignRoot error
 	// Probe is a fresh observation of the index. A retarget needs a
 	// ready index, because the scope advice reads its history.

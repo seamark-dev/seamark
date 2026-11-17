@@ -233,7 +233,12 @@ func (o *overview) probeCard(v services.IndexView, w int) (right string, lines [
 	case workspace.IndexNewer:
 		right, lines = t.Badge(ui.ToneFailure, "newer schema"), []string{t.Muted.Render("from a newer seamark"), schema}
 	case workspace.IndexOlder:
-		right, lines = t.Badge(ui.ToneAttention, "needs upgrade"), []string{schema, t.Muted.Render("a build migrates it")}
+		note := "a build migrates it"
+		if !o.canBuild() {
+			note = "no build in this workspace"
+		}
+
+		right, lines = t.Badge(ui.ToneAttention, "needs upgrade"), []string{schema, t.Muted.Render(note)}
 	default:
 		right, lines = t.Badge(ui.ToneAttention, "not indexed"),
 			[]string{t.Muted.Render("decisions only"), t.Muted.Render("no index run yet")}
@@ -557,6 +562,10 @@ func (o *overview) gateClientsText(w int) string {
 	}
 
 	names := ovGateHookClients(sec.value)
+	if len(names) == 0 && ovInertGate(sec.value) {
+		return t.Muted.Render("no gate hook runs")
+	}
+
 	if len(names) == 0 {
 		return t.Muted.Render("no gate hook installed")
 	}
@@ -567,19 +576,34 @@ func (o *overview) gateClientsText(w int) string {
 }
 
 // ovGateHookClients returns the names of the clients whose gate hook is
-// installed, current or partial. The names are raw; the caller sanitizes
-// them.
+// installed and runs, current or partial. An inert hook is left out,
+// because the client never runs it, and the hooks line of the client
+// does not call it installed either. The names are raw; the caller
+// sanitizes them.
 func ovGateHookClients(insps []integration.Inspection) []string {
 	var names []string
 
 	for _, insp := range insps {
 		e, ok := insp.Entry(integration.CapabilityCommands)
-		if ok && e.Supported && (e.State == integration.StateCurrent || e.State == integration.StatePartial) {
+		if ok && e.Supported && !e.Inert && (e.State == integration.StateCurrent || e.State == integration.StatePartial) {
 			names = append(names, ovClientName(insp))
 		}
 	}
 
 	return names
+}
+
+// ovInertGate reports whether a client has a gate hook that is present
+// and never runs. The card then says that no gate hook runs, because
+// "not installed" would contradict the hooks line of that client.
+func ovInertGate(insps []integration.Inspection) bool {
+	for _, insp := range insps {
+		if e, ok := insp.Entry(integration.CapabilityCommands); ok && e.Supported && e.Inert {
+			return true
+		}
+	}
+
+	return false
 }
 
 // summaryLine renders the cards as one line for the collapsed layout:

@@ -39,7 +39,7 @@ func assertSelectionAccounts(t *testing.T, sel Selection, everyPin []reviews.Sur
 	lessons = append(lessons, sel.Mined...)
 	assert.Equal(t, lessons, append([]model.Lesson{}, sel.Lessons...), "Lessons are Pins, then Mined")
 
-	listed := slices.Concat(sel.Pins, sel.Restated, sel.OverPinCap, sel.OverTotal)
+	listed := slices.Concat(sel.Pins, sel.Restated, sel.OverPinCap, sel.OverTotal, sel.AlreadyDelivered)
 
 	if hook {
 		assert.Len(t, everyPin, len(listed), "every applicable pin is selected or in one list of held-back pins")
@@ -96,9 +96,9 @@ func pinIdentities(pins []reviews.SurfacedPin) map[reviews.PinKey]bool {
 }
 
 func TestHookSelectionClampsThePinCapBeforeTheCuts(t *testing.T) {
-	// pin_budget 20 is above the hook total of 8. The clamp lowers the
-	// pin cap to 8 before the two cuts, so the two pins above it are
-	// over the pin cap, not over the total.
+	// pin_budget 20 is above the hook total of 8. The effective pin cap
+	// is 8, and the fixed total is the limit. So the two pins above it
+	// are over the total, not over the pin cap.
 	st, _ := seedStore(t)
 
 	cfg := goldenConfig(distinctPins("*", 10)...)
@@ -112,10 +112,10 @@ func TestHookSelectionClampsThePinCapBeforeTheCuts(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, sel.Pins, HookLessonTotal)
-	require.Len(t, sel.OverPinCap, 2)
-	assert.Equal(t, "india-guard", sel.OverPinCap[0].Pin.Rule)
-	assert.Equal(t, "juliet-guard", sel.OverPinCap[1].Pin.Rule)
-	assert.Empty(t, sel.OverTotal, "the total cut removes no pin after the clamp")
+	require.Len(t, sel.OverTotal, 2)
+	assert.Equal(t, "india-guard", sel.OverTotal[0].Pin.Rule)
+	assert.Equal(t, "juliet-guard", sel.OverTotal[1].Pin.Rule)
+	assert.Empty(t, sel.OverPinCap, "a pin cap at or above the total is not the limit")
 	assert.Empty(t, sel.Restated)
 	assert.Empty(t, sel.Mined, "eight pins fill the total cap")
 	assert.Equal(t, "RUF001\n", symptomsOf(sel.MinedOverTotal))
@@ -129,9 +129,10 @@ func TestHookSelectionClampsThePinCapBeforeTheCuts(t *testing.T) {
 }
 
 func TestHookSelectionWithoutAPinCapCutsPinsAtTheTotal(t *testing.T) {
-	// A pin cap of zero means no pin cap, so the clamp changes nothing.
-	// The total cut then removes the pins above the total cap, and they
-	// go to OverTotal. This is the view budget of the golden "view total
+	// A pin cap of zero means no pin cap. The total cut then removes the
+	// pins above the total cap, and they go to OverTotal. Unlike a pin
+	// cap at the total, this budget does not collapse restatements. This
+	// is the view budget of the golden "view total
 	// 8 pins 0" (finding A3s2-R3).
 	st, _ := seedStore(t)
 
@@ -159,6 +160,239 @@ func TestHookSelectionWithoutAPinCapCutsPinsAtTheTotal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, lessons, sel.Lessons)
 	assert.Equal(t, held, sel.HeldBack)
+}
+
+func TestHookDeliveryCollapsesRestatementsAtAPinCapOfTheTotal(t *testing.T) {
+	// pin_budget 8 equals the total, so applyBudget reads it as no pin cap.
+	// The collapse must read the budget before that step. A later read
+	// turns the ambient budget into a deliberate view, so the pair spends
+	// two slots. Nine pins show this: with the collapse every other pin
+	// fits, and without it the last pin goes above the total.
+	st, _ := seedStore(t)
+
+	pair := []reviews.PinRule{
+		{Rule: "guard-empty-datasets", Region: "scripts", Note: "Guard datasets before reductions."},
+		{Rule: "guard-empty-datasets", Region: "*", Note: "Guard datasets before reductions."},
+	}
+	cfg := goldenConfig(append(pair, distinctPins("scripts", 7)...)...)
+	cfg.PinBudget = HookLessonTotal
+	files := []string{"scripts/task.py"}
+
+	ev, err := ReadEvidence(st, files, cfg)
+	require.NoError(t, err)
+
+	sel, err := ev.HookSelection(cfg)
+	require.NoError(t, err)
+
+	require.Len(t, sel.Restated, 1, "the ambient budget collapses the pair")
+	assert.Equal(t, cfg.Pin[1], sel.Restated[0].Pin)
+	require.Len(t, sel.Pins, HookLessonTotal)
+	assert.Empty(t, sel.OverTotal, "the restatement spends no slot, so every other pin fits")
+	assert.Empty(t, sel.OverPinCap)
+	assert.Equal(t, 1, sel.HeldBack)
+	assertSelectionAccounts(t, sel, ev.union(cfg, true).everyPin, true)
+
+	lessons, held, err := LessonsForFilesBudget(st, cfg, files, HookBudget(cfg))
+	require.NoError(t, err)
+	assert.Equal(t, sel.Lessons, lessons)
+	assert.Equal(t, sel.HeldBack, held)
+}
+
+func TestHookDeliveryWithoutDelivered(t *testing.T) {
+	// byRule returns a delivered predicate for the named rules.
+	byRule := func(rules ...string) func(reviews.SurfacedPin) bool {
+		return func(sp reviews.SurfacedPin) bool { return slices.Contains(rules, sp.Pin.Rule) }
+	}
+
+	// rulesOf returns the rules of pins, in list order.
+	rulesOf := func(pins []reviews.SurfacedPin) []string {
+		rules := make([]string, 0, len(pins))
+		for _, sp := range pins {
+			rules = append(rules, sp.Pin.Rule)
+		}
+
+		return rules
+	}
+
+	t.Run("an empty set returns the input lists", func(t *testing.T) {
+		st, _ := seedStore(t)
+
+		for _, budget := range []int{3, 8, 20} {
+			cfg := goldenConfig(distinctPins("*", 10)...)
+			cfg.PinBudget = budget
+
+			ev, err := ReadEvidence(st, []string{"scripts/task.py"}, cfg)
+			require.NoError(t, err)
+
+			plain, err := ev.HookSelection(cfg)
+			require.NoError(t, err)
+
+			got := plain.WithoutDelivered(HookBudget(cfg), byRule())
+
+			assert.Equal(t, plain, got, "pin_budget %d", budget)
+		}
+	})
+
+	t.Run("the next pin takes the room of a delivered pin under the pin cap", func(t *testing.T) {
+		st, _ := seedStore(t)
+
+		cfg := goldenConfig(distinctPins("*", 6)...)
+		cfg.PinBudget = 3
+
+		ev, err := ReadEvidence(st, []string{"scripts/task.py"}, cfg)
+		require.NoError(t, err)
+
+		plain, err := ev.HookSelection(cfg)
+		require.NoError(t, err)
+
+		got := plain.WithoutDelivered(HookBudget(cfg), byRule("alpha-guard", "charlie-guard", "echo-guard"))
+
+		assert.Equal(t, []string{"bravo-guard", "delta-guard", "foxtrot-guard"}, rulesOf(got.Pins),
+			"the eligible pins keep the fold order")
+		assert.Equal(t, []string{"alpha-guard", "charlie-guard", "echo-guard"}, rulesOf(got.AlreadyDelivered),
+			"the delivered pins keep the fold order across the lists")
+		assert.Empty(t, got.OverPinCap)
+		assert.Zero(t, got.HeldBack, "a delivered pin is not in the count")
+		assertSelectionAccounts(t, got, ev.union(cfg, true).everyPin, true)
+
+		// One delivered pin frees one slot, so the pin cap still cuts the rest.
+		got = plain.WithoutDelivered(HookBudget(cfg), byRule("bravo-guard"))
+
+		assert.Equal(t, []string{"alpha-guard", "charlie-guard", "delta-guard"}, rulesOf(got.Pins))
+		assert.Equal(t, []string{"echo-guard", "foxtrot-guard"}, rulesOf(got.OverPinCap),
+			"the second cut applies the pin cap")
+		assert.Equal(t, 2, got.HeldBack)
+		assertSelectionAccounts(t, got, ev.union(cfg, true).everyPin, true)
+	})
+
+	t.Run("the total cap holds when the total is the limit", func(t *testing.T) {
+		st, _ := seedStore(t)
+
+		cfg := goldenConfig(distinctPins("*", 12)...)
+		cfg.PinBudget = 20
+
+		ev, err := ReadEvidence(st, []string{"scripts/task.py"}, cfg)
+		require.NoError(t, err)
+
+		plain, err := ev.HookSelection(cfg)
+		require.NoError(t, err)
+
+		got := plain.WithoutDelivered(HookBudget(cfg), byRule("alpha-guard", "kilo-guard"))
+
+		require.Len(t, got.Pins, HookLessonTotal)
+		assert.Equal(t, "india-guard", got.Pins[HookLessonTotal-1].Pin.Rule)
+		assert.Equal(t, []string{"juliet-guard", "lima-guard"}, rulesOf(got.OverTotal),
+			"a delivered pin above the cap leaves the list, and the cause stays")
+		assert.Empty(t, got.OverPinCap, "a pin cap above the total is not the limit")
+		assert.Equal(t, []string{"alpha-guard", "kilo-guard"}, rulesOf(got.AlreadyDelivered))
+		assert.Equal(t, 2, got.HeldBack)
+		assertSelectionAccounts(t, got, ev.union(cfg, true).everyPin, true)
+	})
+
+	t.Run("a restatement stays out of the room of its delivered pin", func(t *testing.T) {
+		st, _ := seedStore(t)
+
+		cfg := goldenConfig(
+			reviews.PinRule{Rule: "guard-empty-datasets", Region: "scripts", Note: "Guard datasets before reductions."},
+			reviews.PinRule{Rule: "guard-empty-datasets", Region: "*", Note: "Guard datasets before reductions."},
+			reviews.PinRule{Rule: "transaction-atomicity", Region: "scripts", Note: "Wrap dependent writes in one transaction."},
+		)
+
+		ev, err := ReadEvidence(st, []string{"scripts/task.py"}, cfg)
+		require.NoError(t, err)
+
+		plain, err := ev.HookSelection(cfg)
+		require.NoError(t, err)
+		require.Len(t, plain.Restated, 1)
+
+		got := plain.WithoutDelivered(HookBudget(cfg), func(sp reviews.SurfacedPin) bool {
+			return sp.Pin.Rule == "guard-empty-datasets"
+		})
+
+		assert.Equal(t, plain.Restated, got.Restated, "the restatement stays held back")
+		assert.Equal(t, []string{"transaction-atomicity"}, rulesOf(got.Pins))
+		assert.Equal(t, []string{"guard-empty-datasets"}, rulesOf(got.AlreadyDelivered))
+		assert.Equal(t, 1, got.HeldBack, "the count holds the restatement and not the delivered pin")
+		assertSelectionAccounts(t, got, ev.union(cfg, true).everyPin, true)
+	})
+
+	t.Run("the mined lessons refill the room and keep the rest", func(t *testing.T) {
+		cfg := goldenConfig(distinctPins("*", 4)...)
+		budget := LessonBudget{Total: 3, Pins: 3}
+
+		pins := make([]reviews.SurfacedPin, 0, len(cfg.Pin))
+		for _, p := range cfg.Pin {
+			pins = append(pins, reviews.SurfacedPin{Pin: p})
+		}
+
+		var plain Selection
+
+		plain.applyBudget(pins, []model.Lesson{{Symptom: "first"}, {Symptom: "second"}, {Symptom: "third"}}, budget)
+		require.Empty(t, plain.Mined, "three pins fill the total cap")
+		require.Len(t, plain.MinedOverTotal, 3)
+
+		got := plain.WithoutDelivered(budget, byRule("alpha-guard", "bravo-guard"))
+
+		assert.Equal(t, []string{"charlie-guard", "delta-guard"}, rulesOf(got.Pins))
+		assert.Equal(t, "first\n", symptomsOf(got.Mined), "the mined lessons use the room that pins leave")
+		assert.Equal(t, "second\nthird\n", symptomsOf(got.MinedOverTotal), "the rest stays above the total")
+		require.Len(t, got.Lessons, 3, "the total cap bounds the second cut")
+		assert.Equal(t, "first", got.Lessons[2].Symptom, "Lessons are Pins, then Mined")
+
+		got = plain.WithoutDelivered(budget, byRule("alpha-guard", "bravo-guard", "charlie-guard", "delta-guard"))
+
+		assert.Empty(t, got.Pins)
+		assert.Equal(t, "first\nsecond\nthird\n", symptomsOf(got.Mined), "no pin is eligible, so a new mined lesson goes out")
+		assert.Empty(t, got.MinedOverTotal)
+		assert.Zero(t, got.HeldBack)
+	})
+
+	t.Run("the mined input keeps Mined before MinedOverTotal", func(t *testing.T) {
+		// Both mined lists hold a lesson here. The second cut reads them in
+		// that order, so a lesson that the first cut kept stays first.
+		cfg := goldenConfig(distinctPins("*", 2)...)
+		budget := LessonBudget{Total: 3, Pins: 3}
+
+		pins := make([]reviews.SurfacedPin, 0, len(cfg.Pin))
+		for _, p := range cfg.Pin {
+			pins = append(pins, reviews.SurfacedPin{Pin: p})
+		}
+
+		var plain Selection
+
+		plain.applyBudget(pins, []model.Lesson{{Symptom: "first"}, {Symptom: "second"}, {Symptom: "third"}}, budget)
+		require.Equal(t, "first\n", symptomsOf(plain.Mined))
+		require.Equal(t, "second\nthird\n", symptomsOf(plain.MinedOverTotal))
+
+		got := plain.WithoutDelivered(budget, byRule("alpha-guard"))
+
+		assert.Equal(t, "first\nsecond\n", symptomsOf(got.Mined))
+		assert.Equal(t, "third\n", symptomsOf(got.MinedOverTotal))
+	})
+}
+
+func TestApplyBudgetCutsAtThePinCapWithoutATotal(t *testing.T) {
+	// No production budget has a pin cap without a total. The guard still
+	// states what such a budget means: a pin cap is the limit, because no
+	// total cap stands above it.
+	cfg := goldenConfig(distinctPins("*", 4)...)
+
+	pins := make([]reviews.SurfacedPin, 0, len(cfg.Pin))
+	for _, p := range cfg.Pin {
+		pins = append(pins, reviews.SurfacedPin{Pin: p})
+	}
+
+	var sel Selection
+
+	sel.applyBudget(pins, []model.Lesson{{Symptom: "first"}}, LessonBudget{Pins: 3})
+
+	assert.Len(t, sel.Pins, 3)
+	require.Len(t, sel.OverPinCap, 1)
+	assert.Equal(t, cfg.Pin[3], sel.OverPinCap[0].Pin)
+	assert.Empty(t, sel.OverTotal)
+	assert.Equal(t, 1, sel.HeldBack)
+	assert.Equal(t, "first\n", symptomsOf(sel.Mined), "no total cap cuts a mined lesson")
+	assert.Empty(t, sel.MinedOverTotal)
 }
 
 func TestChangeSetSelectionCutsPinsAndMinedAtOneBudget(t *testing.T) {
@@ -203,17 +437,31 @@ func TestSelectionListsShareNoSpareCapacity(t *testing.T) {
 
 	sel, err := ev.HookSelection(cfg)
 	require.NoError(t, err)
-	require.Len(t, sel.OverPinCap, 2)
+	require.Len(t, sel.OverTotal, 2)
 	require.Len(t, sel.MinedOverTotal, 1)
 
-	overPinCap := slices.Clone(sel.OverPinCap)
+	overTotal := slices.Clone(sel.OverTotal)
 	minedOver := slices.Clone(sel.MinedOverTotal)
 
 	_ = append(sel.Pins, reviews.SurfacedPin{Pin: reviews.PinRule{Rule: "appended"}})
 	_ = append(sel.Mined, model.Lesson{Symptom: "appended"})
 
-	assert.Equal(t, overPinCap, sel.OverPinCap)
+	assert.Equal(t, overTotal, sel.OverTotal)
 	assert.Equal(t, minedOver, sel.MinedOverTotal)
+
+	// A pin cap below the total makes the first cut the one that splits
+	// the array, so the same guarantee needs its own check.
+	cfg.PinBudget = 5
+
+	sel, err = ev.HookSelection(cfg)
+	require.NoError(t, err)
+	require.Len(t, sel.OverPinCap, 5)
+
+	overPinCap := slices.Clone(sel.OverPinCap)
+
+	_ = append(sel.Pins, reviews.SurfacedPin{Pin: reviews.PinRule{Rule: "appended"}})
+
+	assert.Equal(t, overPinCap, sel.OverPinCap)
 }
 
 func TestSelectionListsTheRestatedPins(t *testing.T) {

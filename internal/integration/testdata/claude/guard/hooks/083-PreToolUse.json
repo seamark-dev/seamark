@@ -1,0 +1,19 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000014",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000014.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000014",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Replace alpha with beta",
+    "prompt": "Read sentinel/edit.txt, then use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt. Reply with the single word you reply with.",
+    "subagent_type": "editor",
+    "run_in_background": false
+  },
+  "tool_use_id": "toolu_01NativeToolUse000000016"
+}

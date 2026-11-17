@@ -71,6 +71,13 @@ const (
 // A marker matches only as the complete argument list. "lessons --hook"
 // is a prefix of the Codex marker and of the reset marker, and a longer
 // argument list is another hook.
+//
+// A word names the seamark binary when its basename is "seamark", or
+// when it is the path of the running binary (BinaryPath). Setup writes
+// that path into each hook, so a wrapper around the hook of a renamed
+// build reads like a wrapper around the hook of a binary named seamark.
+// The reader only reads. Ownership and rewrites follow OwnedBySeamark,
+// which owns no wrapper.
 func SeamarkHookUse(cmd string, markers []string) HookUse {
 	return ReadHook(cmd, markers).Use()
 }
@@ -92,8 +99,12 @@ func ReadHook(cmd string, markers []string) HookReading {
 	list, expands, ok := shellList(cmd)
 
 	// One parse memo serves every marker: a nested script is parsed once
-	// per reading, not once per marker, per walk, and per level.
-	state := shellState{cache: &parseCache{scripts: map[string]parsedScript{}}}
+	// per reading, not once per marker, per walk, and per level. The
+	// reading also finds the running binary once, not once per word.
+	state := shellState{
+		cache:  &parseCache{scripts: map[string]parsedScript{}},
+		binary: newHookBinary(BinaryPath()),
+	}
 
 	for _, marker := range markers {
 		reading.results[marker] = scriptUse(cmd, list, expands, ok, strings.Fields(marker), 0, state)
@@ -244,7 +255,7 @@ func hookUse(cmd string, marker []string, depth int, state shellState) hookResul
 // is then only HookMayRun, which never stops an install.
 func scriptUse(cmd string, list []shellAndOr, expands, ok bool, marker []string, depth int, state shellState) hookResult {
 	if !ok || expands || depth > maxShellDepth {
-		return looseUse(cmd, marker)
+		return looseUse(cmd, marker, state.binary)
 	}
 
 	return listUse(list, marker, depth, state)
@@ -252,8 +263,8 @@ func scriptUse(cmd string, list []shellAndOr, expands, ok bool, marker []string,
 
 // looseUse is the result of the loose test for text that the reader
 // does not parse: cannotTell for a match, and no run otherwise.
-func looseUse(text string, marker []string) hookResult {
-	if looseMention(text, marker) {
+func looseUse(text string, marker []string, binary hookBinary) hookResult {
+	if looseMention(text, marker, binary) {
 		return cannotTell
 	}
 
@@ -263,12 +274,14 @@ func looseUse(text string, marker []string) hookResult {
 // looseMention reports whether text holds a seamark word, then the
 // marker words, wherever they stand. It is the test for text that the
 // reader does not parse, so it answers a match when in doubt.
-func looseMention(text string, marker []string) bool {
+func looseMention(text string, marker []string, binary hookBinary) bool {
 	words := looseWords(text)
 
-	for i, word := range words {
-		rest := words[i+1:]
-		if IsSeamarkBinary(word) && len(rest) >= len(marker) && slices.Equal(rest[:len(marker)], marker) {
+	for i := range words {
+		n := binary.looseAt(words[i:])
+		rest := words[i+n:]
+
+		if n > 0 && len(rest) >= len(marker) && slices.Equal(rest[:len(marker)], marker) {
 			return true
 		}
 	}
@@ -280,9 +293,9 @@ func looseMention(text string, marker []string) bool {
 // marker words, anywhere in it. It is the loose test for a script whose
 // expansion joins words that stand apart, such as `sh -c 'seamark "$@"'
 // _ gate --hook`, so it is looser than looseMention on purpose.
-func looseMentionApart(text string, marker []string) bool {
+func looseMentionApart(text string, marker []string, binary hookBinary) bool {
 	words := looseWords(text)
-	seamark := slices.ContainsFunc(words, IsSeamarkBinary)
+	seamark := binary.looseIn(words)
 
 	for i := range words {
 		if seamark && len(words)-i >= len(marker) && slices.Equal(words[i:i+len(marker)], marker) {
@@ -665,7 +678,7 @@ func argvUse(argv, marker []string, depth int, state shellState) hookResult {
 	options, isPrefix := execPrefixes[program]
 
 	switch {
-	case IsSeamarkBinary(argv[0]):
+	case state.binary.names(argv[0]):
 		if slices.Equal(argv[1:], marker) {
 			return hookResult{use: HookRuns, passes: true}
 		}
@@ -682,7 +695,7 @@ func argvUse(argv, marker []string, depth int, state shellState) hookResult {
 		return hookUse(strings.Join(argv[1:], " "), marker, depth+1, state)
 	case isPrefix:
 		return prefixUse(program, options, argv, marker, depth, state)
-	case mentionsHook(argv[1:], marker):
+	case mentionsHook(argv[1:], marker, state.binary):
 		// An unknown program gets the seamark command as its arguments. A
 		// wrapper runs them, and echo prints them. The reader cannot tell
 		// what the program returns.
@@ -708,7 +721,7 @@ func prefixUse(program string, options, argv, marker []string, depth int, state 
 	case parts.splits:
 		return envSplitUse(parts.split, parts.rest, marker, depth, state)
 	case parts.unknown:
-		return unknownProgramUse(argv, marker)
+		return unknownProgramUse(argv, marker, state.binary)
 	}
 
 	r := argvUse(parts.rest, marker, depth, state)
@@ -825,8 +838,8 @@ func isApplet(word string) bool {
 // unknownProgramUse is the result for a command whose program the reader
 // does not know. It is cannotTell when the seamark command is among the
 // arguments, and no run otherwise.
-func unknownProgramUse(argv, marker []string) hookResult {
-	if mentionsHook(argv[1:], marker) {
+func unknownProgramUse(argv, marker []string, binary hookBinary) hookResult {
+	if mentionsHook(argv[1:], marker, binary) {
 		return cannotTell
 	}
 
@@ -844,17 +857,17 @@ func envSplitUse(script string, rest, marker []string, depth int, state shellSta
 	text := strings.TrimSpace(script + " " + strings.Join(rest, " "))
 
 	if depth > maxShellDepth {
-		return looseUse(text, marker)
+		return looseUse(text, marker, state.binary)
 	}
 
 	list, expands, ok := state.parse(script)
 	if !ok || expands || len(list) != 1 || len(list[0].pipelines) != 1 || len(list[0].pipelines[0]) != 1 {
-		return looseUse(text, marker)
+		return looseUse(text, marker, state.binary)
 	}
 
 	command := list[0].pipelines[0][0]
 	if command.argv == nil || command.stdin {
-		return looseUse(text, marker)
+		return looseUse(text, marker, state.binary)
 	}
 
 	argv := append([]string{"env"}, command.argv...)
@@ -864,9 +877,9 @@ func envSplitUse(script string, rest, marker []string, depth int, state shellSta
 
 // mentionsHook reports whether the words hold a seamark binary word
 // directly followed by the marker words and nothing more.
-func mentionsHook(words, marker []string) bool {
+func mentionsHook(words, marker []string, binary hookBinary) bool {
 	for i, word := range words {
-		if IsSeamarkBinary(word) && slices.Equal(words[i+1:], marker) {
+		if binary.names(word) && slices.Equal(words[i+1:], marker) {
 			return true
 		}
 	}
@@ -881,23 +894,23 @@ func mentionsHook(words, marker []string) bool {
 // from standard input. The operands are then the arguments of an
 // unknown script. bash is true for the options of bash(1). parent is
 // the state of the shell around the invocation; the new shell starts
-// with its own options and shares the parse memo.
+// with its own options and shares the parse memo and the running binary.
 func shellUse(argv []string, bash bool, marker []string, depth int, parent shellState) hookResult {
-	state := shellState{cache: parent.cache}
+	state := shellState{cache: parent.cache, binary: parent.binary}
 
 	operand, command, ok := readOptions(argv[1:], &state, bash)
 	if !ok {
 		// The reader cannot tell which word is the script. A missed handler
 		// and a second handler both cost, and HookMayRun keeps the install
 		// with a warning.
-		return looseUse(strings.Join(argv[1:], " "), marker)
+		return looseUse(strings.Join(argv[1:], " "), marker, state.binary)
 	}
 
 	operands := argv[1+operand:]
 
 	switch {
 	case !command:
-		return looseUse(strings.Join(operands, " "), marker)
+		return looseUse(strings.Join(operands, " "), marker, state.binary)
 	case len(operands) == 0:
 		// -c without a script is an error, and the shell runs nothing.
 		return hookResult{}
@@ -912,7 +925,7 @@ func shellUse(argv []string, bash bool, marker []string, depth int, parent shell
 	// `sh -c '"$0" gate --hook' seamark` and `sh -c 'seamark "$@"' _ gate
 	// --hook` both run the hook. The loose test reads the script and the
 	// operands together, and it does not ask the words to be adjacent.
-	if (expands || !read) && looseMentionApart(strings.Join(operands, " "), marker) {
+	if (expands || !read) && looseMentionApart(strings.Join(operands, " "), marker, state.binary) {
 		r = r.or(cannotTell)
 	}
 
@@ -1041,6 +1054,10 @@ type shellState struct {
 	// each level and for each marker, and a hook command is untrusted
 	// input, so a long script must cost one parse. Nil means no memo.
 	cache *parseCache
+	// binary is the running binary of the reading. A word with its path
+	// names seamark, like a word with the basename "seamark". The zero
+	// value holds no path, and then only the basename rule applies.
+	binary hookBinary
 }
 
 // parseCache memoizes shellList by the text of the script. The parsed

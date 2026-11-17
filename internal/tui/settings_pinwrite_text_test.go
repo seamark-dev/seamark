@@ -11,9 +11,13 @@ import (
 )
 
 // pinWriteScope is the scope of distill.write that every text of the
-// gate names (spec R-5, contracts §4.3). The test spells it out, so a
-// change of the wording fails here and in the engine together.
-const pinWriteScope = "apply, retarget, prune, and new pins, pin edits, and pin removals in Lessons › Pins"
+// gate names. The test spells it out, so a change of the wording fails
+// here and in the engine together.
+const pinWriteScope = "apply, retarget, prune, and new pins, pin edits, check definitions, and pin removals in Lessons › Pins"
+
+// pinWriteCommands names the CLI commands that distill.write gates. The
+// test spells them out, so a dropped command fails here.
+const pinWriteCommands = "seamark lessons --apply, --prune, --retarget, and --set-mode"
 
 // Review fix (Phase C, trial e2e-maintenance frames 18 to 20): the
 // Settings texts of distill.write named only the proposal preview. The
@@ -23,6 +27,7 @@ const pinWriteScope = "apply, retarget, prune, and new pins, pin edits, and pin 
 // on that path names the whole scope, and none names only a part.
 func TestSettingsPinWriteTextsNameTheWholeScope(t *testing.T) {
 	require.Equal(t, pinWriteScope, settings.PinWriteScope, "the engine owns the one phrase")
+	require.Equal(t, pinWriteCommands, settings.PinWriteCommands, "the engine owns the one command list")
 
 	fx := maintFixture(t)
 	svc := settingsFake(t, "distill:\n  write: false\n")
@@ -54,6 +59,7 @@ func TestSettingsPinWriteTextsNameTheWholeScope(t *testing.T) {
 		"Saving on writes no pin; a new preview then offers the write: " + pinWriteScope + ".",
 		"TAKES EFFECT At the next pin-write preview: " + pinWriteScope + ". Saving writes no pin; a new " +
 			"preview then offers the write.",
+		"Also governs " + pinWriteCommands + ".",
 	} {
 		assert.Contains(t, detail, want)
 	}
@@ -73,6 +79,7 @@ func TestSettingsPinWriteTextsNameTheWholeScope(t *testing.T) {
 	save := settingsBox(frame, "Save")
 	assert.Contains(t, save, "TAKES EFFECT distill.write: at the next pin-write preview: "+pinWriteScope+".")
 	assert.Contains(t, save, "Saving writes no pin; only a new preview offers the write.")
+	assert.Contains(t, save, "The setting also governs "+pinWriteCommands+".")
 
 	// The toast of the save.
 	h.press("y")
@@ -87,6 +94,7 @@ func TestSettingsPinWriteTextsNameTheWholeScope(t *testing.T) {
 		assert.NotContains(t, flat, "proposal preview", "frame %d names only the proposal preview", i)
 		assert.NotContains(t, flat, "proposal actions", "frame %d names only the proposal actions", i)
 		assert.NotContains(t, flat, "retarget or prune", "frame %d names a part of the scope", i)
+		assert.NotContains(t, flat, "--prune, and --retarget", "frame %d names a part of the commands", i)
 	}
 }
 

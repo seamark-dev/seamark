@@ -97,7 +97,7 @@ func seed(t *testing.T) (st *store.Store, root string) {
 	require.NoError(t, st.ReplaceFixFindings([]model.Finding{
 		{ID: 21, Path: "api/live.py", Body: "fix: guard the empty case",
 			CreatedAt: 220, Source: model.SourceFixConventional},
-	}))
+	}, false))
 
 	pending := model.Proposal{Signature: "sig-a", Rule: "ascii-quotes", Region: "api",
 		Note: "Write quotes as ASCII in api/.", Members: []int64{11, 12},
@@ -128,6 +128,31 @@ func renderPage(t *testing.T, st *store.Store, root string) string {
 	require.NoError(t, Generate(&b, st, root, clock))
 
 	return b.String()
+}
+
+// TestReportWarnsOfAnIndexOfAnotherVersion proves that the page carries
+// its own warning when another seamark version built the index: an aged
+// version, or a completed run with no stored version, gets the version
+// warning in place of the workspace one. The seed records no run, so it
+// has nothing to compare and gets no warning. The CLI test of report
+// covers the rebuild that makes the page current again.
+func TestReportWarnsOfAnIndexOfAnotherVersion(t *testing.T) {
+	const warning = "This index was built by another seamark version"
+
+	st, root := seed(t)
+	page := renderPage(t, st, root)
+	assert.NotContains(t, page, warning)
+	assert.NotContains(t, page, `class="stale"`)
+
+	require.NoError(t, st.SetMeta(store.MetaIndexedAt, "1700000000"))
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, "2"))
+
+	page = renderPage(t, st, root)
+	assert.Contains(t, page, warning)
+	assert.NotContains(t, page, "The workspace has changed", "one warning names the reason")
+
+	require.NoError(t, st.SetMeta(store.MetaParseCacheVersion, ""))
+	assert.Contains(t, renderPage(t, st, root), warning, "a run from before the version")
 }
 
 func TestReportRendersEverySection(t *testing.T) {
@@ -814,51 +839,66 @@ func TestReportShowsScopeAdvisory(t *testing.T) {
 // TestReportShowsBlockedTrigger wires the confirmed-but-blocked case
 // into the page: a stored trigger that vanished from the working tree
 // produces no drift line, so the card must carry the blocked sentence.
+// A hand edit of the regions unlinks the pin of an applied row, so only a
+// pending row keeps the hand words.
 func TestReportShowsBlockedTrigger(t *testing.T) {
-	root := t.TempDir()
-
-	for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
-		p := filepath.Join(root, filepath.FromSlash(rel))
-
-		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
-		require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+	cases := []struct {
+		name   string
+		status string
+		route  string
+	}{
+		{"applied", model.ProposalApplied, "review the trigger or edit its regions in seamark tui, Lessons › Pins, with i"},
+		{"pending", model.ProposalProposed, "review the trigger or edit regions in .seamark/lessons.yaml by hand"},
 	}
 
-	st, err := store.Open(filepath.Join(root, "index.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = st.Close() })
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
 
-	require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
-		return tx.InsertCoChange(model.CoChange{
-			FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
-			Together: 38, Total: 400, Lift: 6.6,
+			for _, rel := range []string{"web/src/api/schema.ts", "cmd/a.go", "internal/b.go"} {
+				p := filepath.Join(root, filepath.FromSlash(rel))
+
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+				require.NoError(t, os.WriteFile(p, []byte("x\n"), 0o644))
+			}
+
+			st, err := store.Open(filepath.Join(root, "index.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = st.Close() })
+
+			require.NoError(t, st.Rebuild(func(tx *store.Tx) error {
+				return tx.InsertCoChange(model.CoChange{
+					FileA: "api/schemas.py", FileB: "web/src/api/schema.ts",
+					Together: 38, Total: 400, Lift: 6.6,
+				})
+			}))
+
+			require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
+				{ID: 1, Path: "web/src/api/schema.ts", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+				{ID: 2, Path: "cmd/a.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+				{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
+			}))
+
+			require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
+				Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
+				Regions:      []string{"web/src/api", "cmd", "internal"},
+				TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
+				Note: "n", Members: []int64{1, 2, 3},
+				Agent: "claude/v4", Status: tc.status,
+			}))
+
+			require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
+				"pin:\n  - rule: capped-pin\n    region: web/src/api\n"+
+					"    regions: [web/src/api, cmd, internal]\n    note: n\n"), 0o644))
+
+			page := renderPage(t, st, root)
+
+			assert.Contains(t, page, "trigger api/schemas.py — confirmed by co-change (38 shared commits) but not deliverable: "+
+				"the region set is full or the path is absent from the working tree; "+tc.route)
+			assert.NotContains(t, page, "regions now:", "evidence coverage remains unchanged — no drift")
 		})
-	}))
-
-	require.NoError(t, st.ReplaceLessons(nil, []model.Finding{
-		{ID: 1, Path: "web/src/api/schema.ts", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-		{ID: 2, Path: "cmd/a.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-		{ID: 3, Path: "internal/b.go", Body: "b", CreatedAt: time.Now().Unix(), Source: "review"},
-	}))
-
-	require.NoError(t, storetest.InsertProposal(st, &model.Proposal{
-		Signature: "s1", Rule: "capped-pin", Region: "web/src/api",
-		Regions:      []string{"web/src/api", "cmd", "internal"},
-		TriggerPaths: []string{"api/schemas.py"}, TriggerChecked: time.Now().Unix(),
-		Note: "n", Members: []int64{1, 2, 3},
-		Agent: "claude/v4", Status: model.ProposalApplied,
-	}))
-
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".seamark"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(root, ".seamark", "lessons.yaml"), []byte(
-		"pin:\n  - rule: capped-pin\n    region: web/src/api\n"+
-			"    regions: [web/src/api, cmd, internal]\n    note: n\n"), 0o644))
-
-	page := renderPage(t, st, root)
-
-	assert.Contains(t, page, "confirmed by co-change (38 shared commits) but not deliverable")
-	assert.Contains(t, page, "absent from the working tree")
-	assert.NotContains(t, page, "regions now:", "evidence coverage remains unchanged — no drift")
+	}
 }
 
 func TestNotLandingColorsMeetWCAGContrast(t *testing.T) {
@@ -892,4 +932,35 @@ func relativeLuminance(hex string) float64 {
 	}
 
 	return 0.2126*channel(red) + 0.7152*channel(green) + 0.0722*channel(blue)
+}
+
+func TestReportCardOfAChosenRowPrintsNoCommand(t *testing.T) {
+	st, root := seed(t)
+
+	const chosenAt = int64(1_790_000_000)
+
+	for _, c := range []struct {
+		rule   string
+		chosen int64
+	}{{"chosen-pin", chosenAt}, {"computed-pin", 0}} {
+		// Finding 21 sits in api, so the computed scope differs from web.
+		p := model.Proposal{
+			Signature: "sig-" + c.rule, Rule: c.rule, Region: "web", Note: "Keep the region.",
+			Members: []int64{21}, Agent: "claude/v3", Status: model.ProposalProposed, ScopeChosen: c.chosen,
+		}
+		require.NoError(t, storetest.InsertProposal(st, &p))
+
+		_, err := st.SetProposalStatus([]int64{p.ID}, model.ProposalApplied)
+		require.NoError(t, err)
+
+		page := renderPage(t, st, root)
+		command := fmt.Sprintf("seamark lessons --retarget p%d", p.ID)
+
+		if c.chosen > 0 {
+			assert.Contains(t, page, "(a suggestion; a person chose the stored regions on "+model.ScopeChoiceDate(chosenAt)+")")
+			assert.NotContains(t, page, command)
+		} else {
+			assert.Contains(t, page, command, "a computed row keeps its command")
+		}
+	}
 }

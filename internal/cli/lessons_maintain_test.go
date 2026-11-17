@@ -67,7 +67,7 @@ func TestLessonsMaintainPartialCommitNamesTheWayBack(t *testing.T) {
 
 	var out strings.Builder
 
-	err := maintainPins(&out, deps, maintain.ActionRetarget, ps)
+	err := maintainPins(&out, deps, maintain.ActionRetarget, ps, false)
 	require.Error(t, err)
 	assert.Equal(t, "retarget incomplete: reconciliation required: the ledger update failed, the pin file was not "+
 		"restored, and the ledger rows keep their earlier values: store: retarget p1: constraint failed: injected "+
@@ -331,7 +331,7 @@ func TestLessonsMaintainStopsWhenTheCommitFindsAChange(t *testing.T) {
 
 	var out strings.Builder
 
-	err := maintainPins(&out, deps, maintain.ActionPrune, ps)
+	err := maintainPins(&out, deps, maintain.ActionPrune, ps, false)
 	require.ErrorIs(t, err, maintain.ErrStale)
 	assert.Equal(t, "prune aborted, nothing changed: the pin file, the ledger, the write gate, or the evidence "+
 		"changed since the preview: the pin file changed; the planned file content changed", err.Error())

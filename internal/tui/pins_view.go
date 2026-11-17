@@ -676,7 +676,8 @@ func (p *pinsView) regionValues(set []string, w int) []string {
 }
 
 // pinDetail renders an installed pin. It shows the rule and its state,
-// the live note, the file facts, the related proposals, the readings,
+// the live note, the file facts, the lesson check, the related
+// proposals, the readings,
 // similar pins, and the maintenance routes.
 func (p *pinsView) pinDetail(in *maintain.Inspection, r pinRow, w int) []string {
 	t := p.st.theme
@@ -709,6 +710,14 @@ func (p *pinsView) pinDetail(in *maintain.Inspection, r pinRow, w int) []string 
 
 	out = append(out, "")
 	out = append(out, p.entryFacts(e, w)...)
+
+	// The CHECK section shows only in a repository that uses lesson
+	// checks, so every other detail keeps its bytes (pinsCheckShown).
+	if check := p.checkLines(in, pin, w); len(check) > 0 {
+		out = append(out, "")
+		out = append(out, check...)
+	}
+
 	out = append(out, "")
 	out = append(out, p.linkLines(in, pin, w)...)
 	out = append(out, "")
@@ -1113,11 +1122,51 @@ func (p *pinsView) citationLine(f domain.Finding, withID bool, w int) string {
 	return ui.Truncate(line, w, t.Glyphs.Ellipsis)
 }
 
-// scopeValues renders the scope advice: current, a change from the live
+// pinEditRows names the rows that the form of a linked pin edits, for
+// example "note, mode, and check". checks and regions say which rows it
+// offers, so a text never names a row that the form does not edit.
+func pinEditRows(checks, regions bool) string {
+	switch {
+	case checks && regions:
+		return "note, mode, check, and regions"
+	case checks:
+		return "note, mode, and check"
+	case regions:
+		return "note and regions"
+	}
+
+	return "note"
+}
+
+// pinScopeChoice returns the sentence that names the scope choice of pin,
+// or "" when no person chose its regions. A chosen row outranks a computed
+// scope, so the reader needs the choice beside any suggestion.
+func pinScopeChoice(pin *maintain.Pin) string {
+	if len(pin.Link.Applied) != 1 || pin.Link.Applied[0].ScopeChosen == 0 {
+		return ""
+	}
+
+	return "A person chose these regions on " + domain.ScopeChoiceDate(pin.Link.Applied[0].ScopeChosen) + "."
+}
+
+// scopeValues renders the scope advice and the scope choice of pin. A
+// choice shows in every state of the advice.
+func (p *pinsView) scopeValues(pin *maintain.Pin, s maintain.ScopeReading, w int) []string {
+	out := p.scopeAdvice(pin, s, w)
+
+	if choice := pinScopeChoice(pin); choice != "" {
+		out = append(out, propLines(p.st.theme.Muted, choice, w)...)
+	}
+
+	return out
+}
+
+// scopeAdvice renders the scope advice: current, a change from the live
 // set to the computed set with explicit rows, or no recompute. A broader
 // or repository-wide change carries a warning, because it delivers the
-// pin to more paths.
-func (p *pinsView) scopeValues(pin *maintain.Pin, s maintain.ScopeReading, w int) []string {
+// pin to more paths. For a chosen row the change is a suggestion, because
+// only a reviewed preview can replace a choice.
+func (p *pinsView) scopeAdvice(pin *maintain.Pin, s maintain.ScopeReading, w int) []string {
 	t := p.st.theme
 
 	if !s.Known {
@@ -1134,7 +1183,12 @@ func (p *pinsView) scopeValues(pin *maintain.Pin, s maintain.ScopeReading, w int
 			propLines(t.Muted, "No cited finding is living. The current regions stay; missing evidence never widens a pin.", w)...)
 	}
 
-	out := []string{t.Attention.Render(t.Glyphs.Warn + " would change")}
+	word := " would change"
+	if pinScopeChoice(pin) != "" {
+		word = " suggests a change"
+	}
+
+	out := []string{t.Attention.Render(t.Glyphs.Warn + word)}
 	out = append(out, regionDelta(t, pinEntryRegions(pin.Entry), a.Regions, w)...)
 
 	if a.RepoWide {
@@ -1172,11 +1226,13 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 		out = append(out, t.Accent.Render(ui.Truncate(ui.OneLine(path), w, t.Glyphs.Ellipsis)))
 	}
 
-	// The hand edit is a route only while the console offers no retarget
-	// and the scope is not current. Else w makes the change, or no change
-	// is due.
+	// A route shows only while the console offers no retarget and the
+	// scope is not current. Else w makes the change, or no change is due.
 	s := pin.Readings.Scope
-	route := p.retargetBlock(pin) != "" && (!s.Known || s.Advice.Kind != distill.ScopeCurrent)
+	route := ""
+	if p.retargetBlock(pin) != "" && (!s.Known || s.Advice.Kind != distill.ScopeCurrent) {
+		route = p.triggerRoute(pin)
+	}
 
 	for _, f := range tr.Blocked {
 		out = append(out, propNote(t, ui.ToneAttention, ui.OneLine(pinTriggerFact(f, route)), w)...)
@@ -1185,13 +1241,25 @@ func (p *pinsView) triggerValues(pin *maintain.Pin, tr maintain.TriggerReading, 
 	return out
 }
 
+// triggerRoute returns the next action for a trigger that sets no region
+// while w offers no retarget. A hand edit of the regions of a linked pin
+// changes its key and unlinks it. So a linked pin takes the route of
+// retargetNext, which decides stored refusals, file blocks, and other
+// roots. Any other pin has no link to lose, so the hand edit stays.
+func (p *pinsView) triggerRoute(pin *maintain.Pin) string {
+	if pinLinked(pin) {
+		return p.retargetNext(pin)
+	}
+
+	return pinHandRoute(p.st, "edit the regions in ", " by hand")
+}
+
 // pinTriggerFact words a confirmed trigger that sets no region, from the
-// fields of distill.TriggerFact. The shared BlockedLine always ends with
-// a hand edit route, because the CLI plan, the CLI ledger and the HTML
-// report print it, and none of them offers the change. The console
-// offers w for it, so its own words name the hand edit only when route
-// is set.
-func pinTriggerFact(f distill.TriggerFact, route bool) string {
+// fields of distill.TriggerFact. The shared BlockedLine picks its route
+// from the status of a row, because the CLI plan, the CLI ledger, the
+// HTML report and the proposal detail cannot ask the pin form. This view
+// can, so route is "" or the result of triggerRoute.
+func pinTriggerFact(f distill.TriggerFact, route string) string {
 	why := "directly cited by the evidence"
 	if !f.Direct {
 		why = "confirmed by co-change (" + strconv.Itoa(f.Together) + " shared commits)"
@@ -1204,8 +1272,8 @@ func pinTriggerFact(f distill.TriggerFact, route bool) string {
 		text += "the region set is full"
 	}
 
-	if route {
-		text += "; edit the regions in " + pinfile.File + " by hand"
+	if route != "" {
+		text += "; " + route
 	}
 
 	return text
@@ -1345,9 +1413,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 		}
 
 		if in.Index.State != workspace.IndexReady {
-			out = append(out, propLines(t.Muted, "Build the index from Overview (press 1, then b), or run this "+
-				"command in a shell:", w)...)
-			out = append(out, commandText(t, "seamark index"))
+			out = append(out, p.buildLines(w)...)
 		}
 
 		return out
@@ -1366,7 +1432,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 		// The keys still draft and review, and the review names the block
 		// (contracts §4.2). So the text never promises a write.
 		note(ui.ToneAttention, "The pin file cannot be edited ("+ui.Diag(in.Doc.FileBlock)+"). "+pinBlockedDrafts+
-			" Edit the pin by hand in "+pinfile.File+".")
+			" "+ovSentenceEnd(pinRouteByHand(p.st)))
 
 		return out
 	case l.Link == pinfile.LinkNoProposal && pin.Entry.Block == "":
@@ -1378,8 +1444,8 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 		return append(out, p.gateLines(w)...)
 	case l.Link == pinfile.LinkNoProposal:
-		note(ui.ToneAttention, "Blocked: this entry cannot be edited safely ("+ui.Diag(pin.Entry.Block)+"). Edit it "+
-			"by hand in "+pinfile.File+".")
+		note(ui.ToneAttention, "Blocked: this entry cannot be edited safely ("+ui.Diag(pin.Entry.Block)+"). "+
+			ovSentenceEnd(pinHandRoute(p.st, "edit it by hand in ", "")))
 
 		return out
 	case l.Link == pinfile.LinkPendingMatch:
@@ -1387,17 +1453,17 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 
 		return out
 	case l.Link == pinfile.LinkAmbiguousFile:
-		note(ui.ToneAttention, "Blocked: remove or change the duplicate entries in "+pinfile.File+
-			" by hand. Maintenance and extraction stay off until one entry remains.")
+		note(ui.ToneAttention, "Blocked: "+pinHandRoute(p.st, "remove or change the duplicate entries in ", " by hand")+
+			". Maintenance and extraction stay off until one entry remains.")
 
 		return out
 	case l.Link == pinfile.LinkAmbiguousLedger:
 		note(ui.ToneAttention, "Blocked: "+propIDList(pinProposalIDs(l.Applied))+" all record this pin, so no "+
-			"action can choose one. Edit the pin by hand in "+pinfile.File+".")
+			"action can choose one. "+ovSentenceEnd(pinRouteByHand(p.st)))
 
 		return out
 	case l.Link != pinfile.LinkLinked:
-		note(ui.ToneAttention, "Blocked: "+l.Link.Reason()+". Edit the pin by hand in "+pinfile.File+".")
+		note(ui.ToneAttention, "Blocked: "+l.Link.Reason()+". "+ovSentenceEnd(pinRouteByHand(p.st)))
 
 		return out
 	case pinsForeignRoot(p.st) != "":
@@ -1419,7 +1485,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 		return append(out, p.extractLines(pin, w)...)
 	case pin.Entry.Block != "":
 		note(ui.ToneAttention, "Retarget and prune are off: this entry cannot be edited safely ("+
-			ui.Diag(pin.Entry.Block)+"). Edit it by hand in "+pinfile.File+".")
+			ui.Diag(pin.Entry.Block)+"). "+ovSentenceEnd(pinHandRoute(p.st, "edit it by hand in ", "")))
 
 		return append(out, p.extractLines(pin, w)...)
 	}
@@ -1443,7 +1509,13 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	// A foreign root with --db leaves retarget and prune on, but the
 	// authoring keys treat the relationship as unknown. So i then opens
 	// every row, and the sentence about the note does not apply.
-	edit := " i edits the note of this pin only."
+	//
+	// The pin form shows the Mode and Check rows only while Pins shows
+	// its lesson-check parts (pinsCheckShown), and it edits the regions
+	// only while it can hold them. So the sentence names only those rows.
+	regions := pinRegionLock(pinEntryRegions(pin.Entry)) == ""
+	edit := " i edits the " + pinEditRows(p.checkShown(), regions) + " of this pin only."
+
 	if authorForeignRoot(p.st) != "" {
 		edit = ""
 	}
@@ -1453,7 +1525,7 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	out = append(out, p.authorRootLines(w)...)
 
 	if noRetarget != "" {
-		out = append(out, propLines(t.Muted, "No retarget: "+noRetarget+".", w)...)
+		out = append(out, propLines(t.Muted, "No retarget: "+noRetarget+". "+pinRouteSentence(p.retargetNext(pin)), w)...)
 	}
 
 	if noExtract != "" {
@@ -1463,17 +1535,33 @@ func (p *pinsView) maintenanceLines(in *maintain.Inspection, pin *maintain.Pin, 
 	return append(out, p.gateLines(w)...)
 }
 
-// authorRootLines says that a pin write needs an index of this
-// workspace, while only the authoring rule finds another root. With
+// buildLines names the build that an index needs, or the refusal of a
+// build with its route. The shell command goes with the key, because it
+// does not write the database of the console.
+func (p *pinsView) buildLines(w int) []string {
+	t := p.st.theme
+
+	if why := pinsBuildRefusal(p.st); why != "" {
+		return propLines(t.Muted, ovSentenceEnd(why), w)
+	}
+
+	out := propLines(t.Muted, "Build the index from Overview (press 1, then b), or run this command in a shell:", w)
+
+	return append(out, commandText(t, "seamark index"))
+}
+
+// authorRootLines says where a pin write works, while only the
+// authoring rule finds another root. With
 // --db, retarget and prune accept another root (pinsForeignRoot), but
 // the authoring engine refuses it (authorForeignRoot, P4-16). Without
 // --db, foreignLines already says so, and this returns nil.
 func (p *pinsView) authorRootLines(w int) []string {
-	if authorForeignRoot(p.st) == "" || pinsForeignRoot(p.st) != "" {
+	root := pinsDBRoot(p.st)
+	if root == "" {
 		return nil
 	}
 
-	return propLines(p.st.theme.Muted, pinDraftsStill, w)
+	return propLines(p.st.theme.Muted, "i and d still draft a change; to save it, "+pinOpenRoot(p.st, root)+".", w)
 }
 
 // foreignLines explains why retarget and prune are off when the index
@@ -1487,6 +1575,10 @@ func (p *pinsView) foreignLines(w int) []string {
 	out := propNote(t, ui.ToneAttention, "Retarget and prune are off: the index of this workspace records another "+
 		"repository, "+ui.OneLine(root)+". A change would write "+ui.OneLine(filepath.Join(root, pinfile.File))+
 		" and the ledger of this workspace, not "+ui.OneLine(filepath.Join(p.st.svc.Root(), pinfile.File))+".", w)
+
+	if pinsDBRoot(p.st) != "" {
+		return append(out, propLines(t.Muted, ovSentenceEnd(pinOpenRoot(p.st, root)), w)...)
+	}
 
 	out = append(out, propLines(t.Muted, "Build the index of this checkout from Overview (press 1, then b), or "+
 		"run this command here, then press r:", w)...)
@@ -1595,8 +1687,8 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 			"Seamark cannot prove that its pin is gone, and it does not supersede the proposal.", w)...)
 		out = append(out, "")
 
-		return append(out, propLines(t.Muted, "This row is read-only here. Resolve it by hand in "+pinfile.File+
-			" or in the ledger, then press r.", w)...)
+		return append(out, propLines(t.Muted, "This row is read-only here. "+
+			ovSentenceEnd(pinHandRoute(p.st, "resolve it by hand in ", " or in the ledger, then press r")), w)...)
 	}
 
 	out = append(out, t.Heading.Render("MISMATCH"))
@@ -1610,9 +1702,9 @@ func (p *pinsView) propDetail(pr domain.Proposal, w int) []string {
 
 	// Bare absence does not prove who removed the pin, so the console
 	// offers no repair. The text names both manual outcomes instead.
-	return append(out, propLines(t.Muted, "To restore the pin, add the rule, the note and the regions above to "+
-		pinfile.File+" by hand, then press r. If the pin was meant to go, the row stays here as a known "+
-		"mismatch; the console offers no repair for it.", w)...)
+	return append(out, propLines(t.Muted, "To restore the pin, "+
+		pinHandRoute(p.st, "add the rule, the note and the regions above to ", " by hand, then press r")+
+		". If the pin was meant to go, the row stays here as a known mismatch; the console offers no repair for it.", w)...)
 }
 
 // loadingBox shows the first read of the pins.
@@ -1679,14 +1771,14 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 			head: []string{t.Unknown.Render(g.Unknown) + " " + t.Title.Render("Unknown which pins are missing")},
 			body: reason + " Seamark never reads an error as a missing pin.",
 		}
-		p.unknownRoute(in, &m)
+		p.unknownRoute(in, &m, w)
 		count = t.Muted.Render("?")
 	case p.filter == pinSuperseded && in.LedgerErr != nil:
 		m = paneMessage{
 			head: []string{t.Unknown.Render(g.Unknown) + " " + t.Title.Render("The history is unknown")},
 			body: "The superseded proposals could not be read: " + pinReason(in.LedgerErr.Error()) + ".",
 		}
-		p.unknownRoute(in, &m)
+		p.unknownRoute(in, &m, w)
 		count = t.Muted.Render("?")
 	case p.region != "" || p.text != "":
 		m = p.filterMessage()
@@ -1706,15 +1798,19 @@ func (p *pinsView) emptyBox(in *maintain.Inspection, w, h int) string {
 }
 
 // unknownRoute adds the next valid route to the message of a history
-// filter that a read error hides. A missing index has the build route; an
-// unreadable pin file needs a fix; any other error may pass on a new
-// read. The installed pins stay listed, so f leads back to them. The
-// routes go in the next lines, because a short box clips the body first.
-func (p *pinsView) unknownRoute(in *maintain.Inspection, m *paneMessage) {
+// filter that a read error hides. A missing index has the build route,
+// unless a build is refused; an unreadable pin file needs a fix; any
+// other error may pass on a new read. The installed pins stay listed, so
+// f leads back to them. The routes go in the next lines, because a short
+// box clips the body first.
+func (p *pinsView) unknownRoute(in *maintain.Inspection, m *paneMessage, w int) {
 	t := p.st.theme
 	key := func(k string) string { return t.Key.Render(k) }
+	why := pinsBuildRefusal(p.st)
 
 	switch {
+	case in.Index.State != workspace.IndexReady && why != "":
+		m.next = append(m.next, propLines(t.Muted, ovSentenceEnd(why), min(ui.BoxInner(w), paneTextWidth))...)
 	case in.Index.State != workspace.IndexReady:
 		m.next = append(m.next,
 			t.Muted.Render("Press ")+key("1")+t.Muted.Render(", then ")+key("b")+t.Muted.Render(" to build the index, or run:"),

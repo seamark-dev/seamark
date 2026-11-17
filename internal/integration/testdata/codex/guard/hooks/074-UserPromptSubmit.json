@@ -1,0 +1,10 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000014",
+  "turn_id": "20000000-0000-4000-8000-000000000014",
+  "transcript_path": "/home/native/.codex/sessions/2026/11/16/rollout-2026-11-16T21-02-05-10000000-0000-4000-8000-000000000014.jsonl",
+  "cwd": "/workspace/native",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-5.6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use apply_patch once to add the new file sentinel/slow.txt with the single line: slow\nIf a tool call is blocked or fails, do not retry it and do not try another tool or another way.\nThen reply with the single word: done, or with the single word: blocked when a tool call was blocked or failed."
+}

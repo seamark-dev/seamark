@@ -6,6 +6,804 @@ smoke-tested archives for macOS and Linux (amd64/arm64) and a
 `sha256sum -c --ignore-missing SHA256SUMS` (on macOS:
 `shasum -a 256 -c --ignore-missing SHA256SUMS`).
 
+## v0.9.0 — 2026-11-17
+
+The lesson checks release. `lessons --prepare` and MCP `change_set` list
+the guidance and checks of the pins that apply before a change; this
+preparation is receiver-unknown. A pin can carry an executable check
+(`forbid-path-change/1` or `no-added-pattern/1`), which
+`lessons --verify`, `check --lessons`, and the new baseline, pre-write
+guard and post-edit hooks for Claude Code and Codex run. The guard
+projects Codex Update content by the rules of the codex-cli 0.169.0
+applier. Reviewed recordings verify the guard deny of Claude Code
+`Write` and `Edit` (2.1.319) and of Codex `apply_patch` (codex-cli
+0.169.0), and the post-edit reply of the same tools (Claude Code 2.1.325
+and codex-cli 0.169.0), with the limits that the entries below name.
+`MultiEdit` stays pending, and every Codex path keeps `trust-unknown`.
+`lessons --delivery` reads what each pin version delivered. An index now
+reads stale after an edit made during indexing, and `status` and the MCP
+answers name the root of an index that records another repository.
+Fewer false call edges reach `check` effects, `why <file>` shows an
+outline with callers, and `orient` opens with a health header. Setup,
+doctor, `check`, and the MCP tools get many fixes.
+
+- **Faster, quieter test runs.** `make test` and `make test-race` accept
+  `TEST_PKGS`, `TEST_RUN`, `TEST_FLAGS` and `TEST_TIMEOUT`, use Go's own
+  build cache by default, and print a bounded summary from the new
+  `cmd/testsummary` runner. Complete per-invocation logs
+  (`events.jsonl`, `stderr.log`, `output.log`, `summary.json`) stay
+  outside the checkout under `TEST_LOG_DIR`; `RAW=1` restores plain
+  `go test` output. `make verify` replaces the overlapping local
+  release-gate sequence with one ordered run of the ordinary suite, the
+  race suite, lint and smoke. CI keeps the same required coverage: the
+  ordinary suites on both platforms, full race on Linux, lint and smoke.
+- **Six focused tests overlap their independent work.** The hermetic
+  workflow preflight, the co-change variant contract, and four CLI lock
+  tests now run in parallel. Each still owns its repositories and
+  databases; cases, assertions and lock deadlines are unchanged.
+- **Benchmark interrupt tests no longer time out on a busy machine.**
+  The two interrupted-session tests in `internal/bench` cancel when the
+  stub agent has started and bound only the time from the interrupt to
+  the return, a new test covers a cancel before the first session, and
+  the `CommandVersion` test starts each fresh script once before its
+  timed call. Only test files change, so the benchmark fingerprints are
+  unchanged.
+
+v0.9.0 is the first release with lesson-check hook handlers. The
+prerequisites of the
+[release checklist](docs/agent-integrations.md#release-checklist) are
+complete, and the `MultiEdit` paths stay pending. Fixtures do not
+establish native enforcement, prevention or earlier model-boundary
+delivery.
+
+- **Earlier preparation and exploration.** `lessons --prepare` and MCP
+  `change_set` return versioned guidance and check listings. Optional
+  Claude `Read` exploration uses separate repeat state. Preparation is
+  receiver-unknown; own-call edit reminders remain same-call-only.
+- **Executable lessons.** Advisory/check/enforce modes, hand-authored
+  `forbid-path-change/1` and `no-added-pattern/1` predicates, explicit
+  `--verify`, `check --lessons`, the `lesson_checks` argument of the MCP
+  `check` tool, mode changes and
+  separate baseline/guard/post-edit hooks. Installation differs from
+  active or native-verified coverage.
+- **Codex Update projection.** The guard projects the bytes that the
+  Codex applier writes for an Update section, by the rules of the
+  codex-cli 0.169.0 applier, so `no-added-pattern/1` decides a Codex
+  Update before it runs and the post-edit record can read
+  `projection-match`. Each rule follows a case of
+  the `apply_patch` content oracle, now 99 cases recorded from
+  codex-cli 0.169.0; the first 29 match the earlier codex-cli 0.164.0
+  recording. A hunk form outside the verified grammar, such as a
+  change line that ends with two or more carriage returns in the patch, a hunk that does not
+  match the current file, a file with a lone carriage return, and a
+  file that two sections name still give `unknown/unprojectable-edit`.
+  `make agents-native-check CLIENT=codex` adds a model-free seeded
+  differential against the installed applier. The Codex pre-write path
+  no longer carries the capability reason `content-unprojectable`.
+- **Codex native evidence.** Reviewed timing and guard recordings of
+  codex-cli 0.169.0 replay offline with `make native-replay
+  CLIENT=codex`. They verify the Codex `apply_patch` deny and in-budget
+  slow deny in the root and child contexts, with the limit that the
+  client lets the patch run after its 10 s hook timeout, and the root
+  call, lane, and turn attribution. Every Codex path stays below
+  `active` with the reason `trust-unknown`, because Seamark cannot read
+  the Codex trust record.
+- **Codex patch paths with a tab or a carriage return.** The lesson-check
+  hooks refuse a Codex `apply_patch` header path (Add, Update, Delete, or
+  Move to) that holds a tab or a carriage return. codex-cli 0.169.0
+  removes both characters when it writes, so such a path could leave a
+  pin scope. An armed guard now denies the patch with `incomplete-paths`,
+  the baseline handler stores no baseline, and the post-edit check
+  reports every executable pin as `unknown/incomplete-paths`. The
+  advisory edit hook is unchanged.
+- **Codex added lines with extra carriage returns.** codex-cli 0.169.0
+  removes two carriage returns at the end of a patch line and the
+  decoder removed one, so the Add line `+x\r\r` gave the content
+  `x\r\n` while Codex writes `x\n`, and a line-end pattern could judge
+  the wrong bytes. An Add section with a line that ends with two or
+  more carriage returns now gives no projected content: a content
+  check reads `unknown/unprojectable-edit`, an armed guard requests
+  denial, and the post-edit record reads `no-projection`. One carriage
+  return at a line end is unchanged.
+- **MultiEdit tool check.** `make agents-native-check CLIENT=claude`
+  runs the installed Claude Code against a scripted loopback Messages
+  API with a scratch configuration, so no model runs. Claude Code
+  2.1.325 offers no MultiEdit tool, inline or deferred, and refuses a
+  MultiEdit call. The MultiEdit paths stay `active-unverified`, because
+  no recording can show a MultiEdit deny.
+- **Codex hook trust check.** `make agents-native-check CLIENT=codex`
+  runs Codex setup with enforce lesson checks in a scratch repository
+  and reads the hook list of `codex app-server`, with no model. On
+  codex-cli 0.169.0 setup writes nothing into `CODEX_HOME` and leaves
+  every Seamark hook untrusted. Codex paths keep `trust-unknown`.
+- **Native post-edit scenario.** `NATIVE_RECORD_SCENARIO=post-edit make
+  native-record CLIENT=<client>` records, in a copy of its own, what the
+  client does with a post-edit hook that ends inside or after the 15 s
+  hook timeout, the post-edit reply of a Claude Code `Edit` in the root
+  and the child context, and whether Codex runs the post-edit hook after
+  a patch that fails during its execution. With `NATIVE_RECORD_RUNS=0`
+  it only sets up the scratch repository, and a new Codex repository
+  stops at the trust review.
+- **Post-edit native evidence.** Reviewed post-edit recordings of
+  Claude Code 2.1.325 and codex-cli 0.169.0 replay offline with `make
+  native-replay`. They verify the `PostToolUse` reply of Claude Code
+  `Write` and `Edit` and of Codex `apply_patch` in the root and child
+  contexts, also after a hook that waits 12 s, with the limit that the
+  client drops the post-edit findings after its 15 s hook timeout and
+  the edit stays. The Claude Code `Write` and `Edit` post-edit paths now
+  read `active` with that limit. The Codex paths keep `trust-unknown`,
+  and `MultiEdit` stays pending. The claim covers `PostToolUse` only:
+  the Claude Code `PostToolUseFailure` entry has no slow case.
+  codex-cli 0.169.0 sends no `PostToolUse` after a patch that fails
+  during its execution, so no post-edit check runs for that patch, and
+  its baseline stays pending until the sweep.
+- **Lesson delivery reading.** `lessons --delivery [--pin <ref>]`
+  (`delivery/1` JSON) reads the delivery records of each pin version
+  from the audit logs, with separate check and guard counts. The text
+  shows what the audit logs give. The JSON keeps the full `delivery/1`
+  field set, and the fields without a source in this build hold fixed
+  values. `prevented` counts only a written deny on a natively verified
+  path with no later execution record; today that is Claude Code `Write`
+  and `Edit`, from a recording of Claude Code 2.1.319, and Codex
+  `apply_patch`, from a recording of codex-cli 0.169.0. These paths
+  carry one limit: the client lets the write run after its 10 s hook
+  timeout.
+- **Selection reading.** `lessons --delivery` shows requested and
+  effective budgets and splits held-back records by surface and cause. A
+  hook record now reads `over-total`, not `over-pin-cap`, when
+  `pin_budget` is at or above the fixed total. An unread audit prints
+  `unknown`, not a zero count.
+- **A later edit reaches the next pin.** Under `hook_delivery:
+  once-per-context` in the main Claude Code conversation, a pin that the
+  context already has leaves the selection before the budget, so the edit
+  hook emits the next pin on a later matching edit. No native recording
+  covers this. Such a pin now reads `suppressed-repeat`, not `held-back`,
+  and `lessons --stats` counts it as a match. Every other receiver and the
+  exploration hook select as before.
+- **Console controls.** Pins can edit mode/check on linked pins,
+  author check definitions (`M`), and verify (`V`). Read-only browsing
+  never applies a decision.
+- **Scope edit of a linked pin.** `i` in Pins now edits the regions of
+  a linked pin through a preview that writes one region set to the pin
+  file and to the ledger. The row records that a person chose the set
+  and the date. A computed scope then reads as a suggestion: only a
+  console preview replaces the choice, and `lessons --retarget` refuses
+  it and names the console. No command makes this edit.
+- **Claude Code hooks turned off.** With `disableAllHooks: true` in a
+  project settings file, Claude setup refuses lesson-check enforce, and
+  setup, doctor, and status warn that the seamark hooks never run. The
+  init and status gate lines no longer claim verdicts or blocking for a
+  client whose hooks are off, Claude Code or Codex, and init says what
+  the managed gate hook there does once the hooks run. Without a typed
+  `--gate-mode`, the init gate line no longer says that
+  `--gate-mode enforce` reached no gate hook.
+- **why and orient count hidden lessons.** Both keep 6 lessons, now say
+  how many more apply and where they are, and orient's header names pins
+  apart from mined review feedback.
+- **why lesson pointer.** `why` names `expand lessons:<dir>` only when
+  that view has lessons, and its header names pins apart from mined
+  review feedback.
+- **change_set for a file without symbols.** The file's entry now says
+  that seamark indexes no symbols there, so its callers and effect reach
+  are unknown.
+- **Bounded file outline.** `why <file>` lists each symbol in source
+  order with its `file:start-end` lines and a signature of at most 100
+  characters, with secrets redacted. It says how many symbols it shows,
+  as in `defines (40; showing 20)`, and names an `expand` ref for the
+  source of the first symbol it leaves out. A file with no indexed
+  symbol says so.
+- **Callers in the file outline.** `why <file>` now gives each shown
+  symbol that has callers its caller count, split into callers in other
+  non-test files and in test files, and up to three caller definitions,
+  at most 30 per outline. It names `why <symbol>` for the rest. A
+  function without an indexed caller says `none indexed`: the index has
+  no edge, which does not prove that nothing calls it.
+- **change_set caller unit.** The `called from outside` line now ends
+  with `— callers in other non-test files`, the count that `why <file>`
+  also shows.
+- **Pin inspection route.** A lesson reminder that shows a pin, from the
+  edit hook or `seamark lessons --file`, now says where to inspect the
+  pins: Lessons › Pins in `seamark tui`, or `.seamark/lessons.yaml`. It
+  offers no command that changes a pin.
+- **Signature redaction in why.** `why <symbol>` now redacts
+  secret-shaped text in its `sig` line, as the file outline does.
+- **Expand by symbol.** MCP `expand` with a symbol no longer shows the
+  line after a declaration whose span ends at the start of that line.
+- **orient health header.** `orient` opens with the index time and age,
+  its freshness (current, stale, or unknown), the file coverage, and the
+  call-edge origin shares, read by the same rules as `seamark status`. A
+  missing or malformed coverage summary reads as unknown in both, and an
+  index time after the current time gives `orient` an unknown age.
+- **Background and filtered hooks.** Setup, doctor, and status no longer
+  report enforcement for a gate or lesson guard that runs in the
+  background (async, Claude Code asyncRewake) or that a Claude Code if
+  field filters. Setup removes the background key from its own gate and
+  guard entries, and Codex asks once to review that entry in /hooks.
+- **Codex matchers.** Setup and doctor read a Codex matcher of only
+  letters, digits, _ and | as exact tool names, and match apply_patch
+  also as Edit and Write, as Codex does. A gate under ash no longer
+  reads as running for Bash, and an inline lesson hook under Edit is no
+  longer installed twice.
+- **Hook binaries that do not exist.** Setup, doctor, and status warn
+  about a seamark hook whose binary path names no executable file, and
+  no longer report such a hook as installed or count its gate mode. The
+  warning says why: the path is missing, is not a regular file, or has
+  no execute bit. It names the setup run that rewrites the command, or
+  the hand edit for `.claude/settings.local.json`. The status gate line
+  says that no gate hook runs, in place of "no gate hook installed".
+- **Hooks of a renamed binary.** `seamark init` through a binary whose
+  file name is not `seamark`, such as `seamark-1.2` or a link named
+  `seamark` to such a file, wrote hooks that doctor and status did not
+  see. Each re-run added another hook set, and `--gate-mode warn` after
+  `--gate-mode enforce` printed "nothing blocks" while the enforce hook
+  stayed. Init, doctor, and status now also own a hook command that
+  names the path of the running binary, for Claude Code and Codex. They
+  also read a wrapper around that path, such as `test -x <path> &&
+  <path> gate --enforce --hook`, so the gate line names its enforce mode
+  in place of "nothing blocks"; setup keeps the wrapper as written. A
+  hook that another binary wrote under another name stays foreign.
+- **Codex gate in the Claude Code form.** A `gate --hook` or
+  `gate --enforce --hook` handler without `--client codex` in
+  `.codex/hooks.json` runs and blocks in Codex. Doctor and status now
+  count it in the gate mode and name it, and `init --client codex` keeps
+  one gate handler: it removes the extra handlers or rewrites the only
+  one, keeps enforce unless `--gate-mode` asks otherwise, and asks for a
+  new review in /hooks.
+- **Hooks under a matcher that never fires.** For a seamark hook in the
+  managed file under such a matcher, doctor, init, and status for both
+  clients now warn and name the matcher to set in that file, in place of
+  a `seamark init` run that changes nothing. Such a hook no longer reads
+  as installed. Setup still keeps the matcher.
+  For a Codex gate handler in the Claude Code form that
+  `init --client codex` removes, doctor names that run instead. When
+  another handler of setup already runs the hook for its tools, doctor,
+  init, and status name the removal of the idle handler, not a matcher
+  edit, and two Codex handlers of the gate or lessons hook that both run
+  now get a warning that the hook runs twice.
+- **No "nothing blocks" beside a gate that may block.** When a
+  definition that may run a gate, such as a filtered `gate --enforce
+  --hook` in `.claude/settings.local.json`, sits beside a warn gate hook,
+  the init `gate` line now says that the gate hooks that certainly run
+  block nothing, not that nothing blocks.
+- **New policy file on the gate line.** The init `gate` line calls
+  `.seamark/policy.yaml` new when the same run writes it, and kept only
+  when it existed before the run.
+- **Gate failure wording.** `init` and the docs no longer say that
+  every gate failure fails closed under enforce. The gate's own failures
+  still exit 2 and block. A hook that the client stops at its timeout,
+  or a seamark binary that cannot start, returns no exit 2, so the gate
+  cannot block that command.
+- **Unreadable local settings.** A `.claude/settings.local.json` that
+  cannot be read no longer makes doctor and status warn that installed
+  seamark hooks never run under `disableAllHooks: true` when no seamark
+  hook is installed. The unread-file warning stays.
+- **Plain init and the local settings file.** A `seamark init` without
+  `--client` does not check `.claude/settings.local.json` for gate hooks.
+  Its gate line now says so and names `seamark doctor`, which checks that
+  file.
+- **Multi-line pin notes.** A line break inside a pin note reads as a
+  space on one-line surfaces, for example the edit hook and
+  `lessons --prepare`, so two lines no longer run together.
+- **Gone co-change partners.** Partner lists and the orient hubs leave
+  out deleted and renamed-away files from the next index run. A deleted
+  or renamed-away file keeps its live partners, so `check` lists them
+  for a diff that deletes it or renames it away, also in a directory
+  rename. The old path of a rename record is now in `diff.files` and
+  counts in `diff.unindexed_files`. `seamark index --force` applies
+  this at once to an older index.
+- **Check says why no companion is listed.** `seamark check`, `check
+  --lessons`, and the MCP `check` tool print one `companions` line when
+  they list no partner: every partner is in the diff, the index holds
+  none, or the co-change read failed.
+- **Pin outcomes without GitHub reviews.** When origin names no GitHub
+  repository, `seamark index` records this with the fix findings, and
+  pin outcomes rest on fix findings alone. Such a pin no longer reads
+  `untested — evidence not mined since exposure` forever. The next
+  `seamark index --fixes-only` applies this to an existing index.
+- **Console builds.** The Overview build refuses a database that
+  records another repository, at any schema, so it can no longer move
+  that repository's recorded root.
+- **Write guard.** A `--db` that names a copy's own database through a
+  link or a relative path no longer bypasses the two-repository refusal.
+  A prune or apply also refuses a database that the recorded root does
+  not own.
+- **Index builds keep the root of another repository.** `seamark index`
+  refuses a database that records another repository, also with
+  `--force`, unless `--move-root` allows the move. A recorded path that
+  does not exist counts, because it can be a detached disk; only a file
+  inside the workspace replaces it by itself. A run that would skip still
+  skips, also on a file that refuses writes. `seamark check` and the MCP
+  `check` tool stop on any failed refresh, and MCP reads carry a one-line
+  note. A relative `--db` names the file that the system opens, also
+  behind a link.
+- **Verification names its own exclusions.** The `not covered` line of a
+  default selection now names Seamark's own lesson-check audit files.
+- **Refusals name one route that runs.** A route never writes two
+  repositories or applies another proposal. A custom file of a copy
+  routes to `seamark index --move-root --db <file>` in that copy, a file
+  of a third checkout routes to another `--db`, a route to the recorded
+  root keeps `--db` for a custom file, and a path that needs quotes gets
+  them.
+- **Copied checkouts in the CLI.** `seamark lessons --apply`,
+  `--retarget`, and `--prune` refuse when the pin file and the ledger
+  lie in two repositories, as the console does, so a copy no longer
+  writes the pin file of its origin. Run `seamark index` in the copy. A
+  `--db` that the recorded root owns keeps working.
+- **Config saves.** A Settings save in a copied checkout refuses, so
+  it no longer changes the `config.yaml` of the original repository.
+  Screens name the build or the console of the recorded root.
+- **Case-only renames.** `seamark index` rebuilds after a rename that
+  changes only the case, so absolute path lookups keep working.
+- **Proposal apply.** Apply in a copied checkout no longer writes the
+  pin file of the original repository. The preview names the refusal,
+  and `c` and `d` keep working.
+- **Copied checkouts.** `seamark index` and the Overview build rebuild
+  a default index that records another root, so a copy no longer stays
+  on the root of its origin.
+- **Pin repeats.** With `once-per-context`, a delivered pin follows its
+  version, so a mode or check change can deliver it again. Mined lessons
+  keep their content key.
+- **Second lesson handlers.** Claude setup refuses a certain second
+  lesson-check handler as Codex does, and warns about an uncertain one.
+  A copy in .claude/settings.local.json that equals the managed handler
+  is accepted, because Claude Code runs it once, and doctor no longer
+  says that it runs twice.
+- **Reset after a compaction.** The context reset waits up to 2 s, not
+  200 ms, for a state lock that another hook holds, so a compaction less
+  often leaves delivered lessons hidden.
+- **Short omitted lists.** The text of `lessons --prepare` and the second
+  `change_set` text part list the first five omitted pins and lessons and
+  then a `+N more` line. `--json` and `structuredContent` still list every
+  omission.
+- **Status in a copied checkout.** `seamark status` names the root that
+  its index records when that root is not the workspace, and the
+  `seamark index` run that records this workspace. `--json` adds
+  `recorded_root` in that case only.
+- **Report-only lesson guards.** The enforce refusal and the doctor
+  action for a report-only lesson guard name the document, the
+  definition, and the step that removes it, in place of "resolve it".
+- **Checker impact reasons.** The checker impact line of set-mode,
+  retarget, and the console names the reasons and limits of each client
+  badge, as the result lines do.
+- **Unreadable hook documents.** Status and the console read
+  `unreadable`, as doctor does, not `off`. Doctor, status, and the
+  console print the word once: `hooks unreadable (<reason>)`, not
+  `hooks unreadable (unreadable (<reason>))`.
+- **Retarget route.** A linked pin names `w` Retarget only while `w`
+  works; otherwise Pins gives the reason and a next action.
+- **`change_set` keeps its report in every client.** A client that shows
+  `structuredContent` in place of the text parts lost the blast radius.
+  `structuredContent` now repeats the first text part under
+  `change_set_report`; the text parts and `lesson-preparation/1` do not
+  change.
+- **MCP tool usage in `lessons --stats`.** The MCP server counts each
+  tool call in the local `.seamark/mcp-usage.jsonl`, with no argument, and
+  `lessons --stats` prints calls, failures, latency, and reply size.
+- **Author names keep their text.** Author, authority, and `GIT_AUTHOR_*`
+  values now keep their text in audit records and mined text. Auth,
+  OAuth, authorize, and authorization names still redact.
+- **Stable effect order.** `gate`, `check`, the hooks, and MCP `check`
+  list effects in sorted order on every run, in the text, the JSON, the
+  audit entry, and the policy input. `diff.files` is sorted too, so a
+  rule that indexes either list gives the same verdict on every run.
+- **A diff with no changed file.** `check` and MCP `check` no longer
+  give a bare allow for it. Empty `git diff HEAD` output gets a note that
+  untracked files are not part of it. Input that names no changed file
+  gets a note in warn mode and blocks with exit 2 under enforcement.
+- **Only changed lines count in `check`.** The context lines of a hunk
+  no longer touch the symbols around an edit, so verdicts can change. An
+  added line counts only for the symbol that holds it. Removed lines,
+  also replaced ones, count as the line directly above them, and a pure
+  deletion also as the line below. When the first removed line with text
+  is indented, the nearest line with text above counts too, as at the end
+  of a Python function. So a replaced column-0 comment after a blank
+  line, such as a Go doc comment, no longer reaches the function above
+  it. An indented comment, or a comment directly under a function, still
+  reaches that function. A change that counts for no symbol gets the
+  unknown-reach note. An added or removed line whose text starts with
+  `++ ` or `-- ` no longer reads as a file header.
+- **The unknown-reach note for each change.** `check` and MCP `check`
+  decide the note per change group: the added and removed lines of a
+  hunk with no context line between them. A file gets the note, and
+  counts in `diff.unindexed_files`, when one of its groups counts for no
+  symbol. Before, one edit inside a symbol hid a deleted function or an
+  import edit in the same file. A rule over `diff.unindexed_files` can
+  now match, and under enforcement block, more diffs.
+- **A changed value no longer reads as clean.** A change to a constant
+  that a function passes to `exec.CommandContext` gave `check` no
+  effects and no note, while the same value written inline reached
+  `proc:exec`: the index records calls, not reads. `check` and MCP
+  `check`, in text and JSON, now add a note when a change adds or
+  removes lines inside a Go `const`, `var` or `type`, a JS/TS or Python
+  module-level value or type, or a class field or attribute, outside any
+  function or method, and that symbol has no effects of its own. An
+  unchanged value on the line above the change is not named, and an
+  unchanged method there does not hide the class of a changed attribute
+  or field below it. The note names those symbols and says that seamark
+  does not track readers of a value, so their reach is unknown, not
+  clean. The new count
+  `diff.unknown_reach_symbols` lets a rule act on it. Effects and the
+  verdicts of existing rules do not change. docs/policies.md no longer
+  calls the union of effects what the change can ultimately reach.
+- **Git config and the git output that seamark reads.** `check` and MCP
+  `check` run the `git diff HEAD` fallback with fixed color, external
+  diff, textconv, path prefix, relative path, submodule, and rename
+  detection options, so a setting such as `color.ui=always` or
+  `diff.renames=copies` no longer turns a change into an allow. History
+  mining, the `mostly` names of partners, fix mining, the index
+  freshness check, and the LSP use the same options, plus fixed
+  signature, rename-follow, root-commit, path-quoting, untracked-file,
+  and revert search options. A setting such as `color.ui=always`,
+  `log.showSignature`, `log.showRoot=false`, or `diff.external` no
+  longer drops a `mostly` name, loses or adds a fix finding or a
+  co-change pair, or hides an edit from the next index run. Fix findings
+  store a non-ASCII path raw, as history does, and list a renamed file
+  under its old and its new path, not as `old => new`.
+- **Git reads no longer rewrite `.git/index`.** `index`, `check`, `why`,
+  `status`, `report`, the MCP server, and the LSP server run `git status`
+  and `git diff HEAD` with optional locks off and
+  `diff.autoRefreshIndex=false`, as the console already did. After a
+  `touch`, seamark leaves `.git/index` as it was, so a concurrent `git
+  add` no longer fails on `.git/index.lock`.
+- **`check` without a diff outside git.** In a folder outside a git work
+  tree, or in a repository with no commit, `check` and MCP `check` no
+  longer stop at `exit status 129` or `128`. They say which of the two
+  applies and name a route that runs: pipe a diff on stdin, or pass the
+  MCP `diff` argument. Any other `git diff HEAD` failure shows git's
+  first stderr line. With a terminal or `/dev/null` on stdin, `check`
+  refuses before the index refresh and creates no `.seamark` folder.
+- **The gate and a bad workspace or policy file.** `gate` with a `-C`
+  that names no directory, or with a `.seamark/policy.yaml` that cannot
+  be read, no longer allows under the default policy. Under `--enforce`
+  it blocks with exit 2, also in hook mode, and it creates no directory
+  and writes no audit entry. `doctor` fails the policy line and `status`
+  reports the policy as broken.
+- **`check` and `index` with a `-C` that is no directory.** A `-C` that
+  names a file or a missing path now gets `workspace <path>: not a
+  directory` or `no such file or directory`, as `gate` prints it, and
+  nothing is written. `check` and `index` no longer call such a path a
+  database whose recorded root cannot be read. A `--db` below a file
+  again fails on the directory of the database.
+- **An index in a read-only directory.** When the `.seamark` directory
+  refuses writes and holds no WAL/SHM sidecars, `index`, `check`, the MCP
+  tools and the console build now say that the directory refuses writes
+  and name it to make writable. They no longer say that the recorded
+  root cannot be read or suggest a retry. The refusal still writes
+  nothing.
+- **MCP server after an upgrade.** A running MCP server keeps the
+  binary it started with. When the seamark binary at its launch path
+  changes or goes away, each tool reply opens with a note to restart the
+  agent or reconnect the MCP server.
+- **Newer-schema refusal on MCP.** When an MCP tool or resource meets a
+  database from a newer seamark, its reply adds a line that names the
+  running version and says to restart the agent if a newer seamark is
+  installed. The CLI text does not change.
+- **The MCP `check` tool names its writes.** Its description says that a
+  call refreshes the index, appends to `audit.jsonl`, and can write
+  `lessons-audit.jsonl` and `lesson-check-audit.jsonl`. The data-flow
+  tables name the same writes for `check` and `mcp`.
+- **Ignored MCP arguments.** A tool call with an argument key that the
+  tool does not take still runs, and its reply now opens with a note that
+  names each ignored key and the keys the tool takes.
+- **Go test callers.** A method call in a Go `_test.go` file no longer
+  counts methods in `_test.go` files of other directories, which Go
+  never compiles into its test binary, so many test calls now get a
+  `[unique-name]` edge. `status` shares and the effects of test symbols
+  change at the next index run that rebuilds; `seamark index --force`
+  applies the change at once.
+- **Fewer false call edges.** A Go method call no longer guesses a
+  `[unique-name]` edge in three cases: its name is a common
+  standard-library name (`Err`, `Replace`, `Close`, `Lock`, …) and the
+  calling file neither shares the method's directory nor imports its
+  package; its operand starts at a package outside the repository
+  (`strings.NewReplacer(…).Replace`); or it calls an unexported method
+  of another directory. Before, a text helper that called
+  `strings.NewReplacer(…).Replace` got `fs:write` from an unrelated
+  `Replace` method. Effects, `check` effect lists and the
+  policy matches on them, `why` callers and `status` shares shrink, and
+  `why` names the skipped cases under `callers (0)  — none resolved`.
+  The change applies at the next index run that rebuilds, because each
+  rebuild resolves every call edge again: after a commit or an edit, a
+  plain `seamark index` is enough. On an unchanged workspace that run
+  skips and keeps the old edges, so run `seamark index --force` once;
+  you need not delete the index. Known limit: two of these rules also
+  drop real calls. The common-name rule drops one from a file that
+  neither shares the method's directory nor imports its package: an
+  interface call, or a call on a field, a promoted method, a local
+  variable, or a call result (`pair.Data.WriteString(…)`,
+  `mk.Writer().Replace(…)`). The outside-package rule drops a chain that
+  returns a repository value: a generic helper (`cmp.Or(p, q).Render()`,
+  `slices.Max(…)`, `sync.OnceValue(…)()`), a conversion to an outside
+  interface type (`io.Writer(w).Write(p)`), or an interface value that
+  the outside package holds or returns (`flag.Lookup(…).Value.Set(…)`,
+  `errors.Unwrap(err).Error()`). Go compiles no call that the
+  unexported-method rule drops. The callee's effects then do not reach
+  the caller. `why` names these rules only under `callers (0)`, so a
+  symbol that keeps other callers shows no sign of a dropped one.
+- **Pin outcome wording.** The lessons guide now says that a pin's first
+  firing on any surface starts its outcome clock, also on
+  `lessons --prepare`, `change_set`, or `check`, which name no receiver.
+  A firing does not show that an agent read the pin. The `lessons --help`
+  entry of `--stats` now says that it counts the lessons that every
+  surface returned or injected, not only those of the edit hook.
+- **CLI orient footer.** `seamark orient` now ends with routes that run
+  in the CLI, `seamark why` and `seamark lessons --region`, and labels
+  `change_set` and `expand` as MCP tools. The MCP orient text does not
+  change.
+- **change_set path check.** MCP `change_set` now rejects a `files`
+  entry that is empty, holds only white space, or holds a NUL byte,
+  with one error that names the entry. Before, an empty path listed
+  package nodes and every pin, while the preparation part rejected it.
+  An entry of `./` now reads as `.` in `change_set` and `why`, and no
+  longer lists every pin.
+- **change_set callers.** The `called from outside` line of
+  `change_set` now counts only callers in other files that are not test
+  code. It counted every caller, also callers in the same file and in
+  tests. The LSP code lens still counts every caller.
+- **Empty region ledger.** `seamark lessons --region` and MCP
+  `expand lessons:<dir>` now say that `seamark index --reviews` needs gh
+  authenticated and a github.com remote, as the repository-wide line does.
+- **why partner counts.** The `why` help, the MCP `why` description and
+  the docs now say that M in `N/M commits` counts the commits in the
+  mined window, the same for every partner.
+- **change_set partner counts.** The MCP `change_set` description and
+  the docs now give M in `N/M commits` the same meaning as `why` does.
+- **Full lesson view of a file.** `seamark lessons --file <path>` now
+  lists every pin that applies and at most 100 mined lessons, the most
+  recurring first. It kept at most 8 and dropped the
+  rest without a count, while change_set, check, `lessons --prepare` and
+  the edit hooks name it as the command that shows what they leave out.
+- **Every doctor action.** Doctor now prints every corrective action of
+  a client line and of the hooks line, as status does, not only the
+  first. The JSON `fix` field stays one string, with the actions joined
+  by `; `.
+- **Doctor skills route.** The route to install the agent skills names
+  only the clients that a bare `seamark init --skills` installs for:
+  Claude Code, and Codex only when the repository has an `.agents/`
+  directory.
+- **Starter file headers.** The `policy.yaml` and `lessons.yaml` that
+  `init` writes, and the embedded default policy, no longer cite an
+  internal document. They point to `docs/policies.md` and
+  `docs/lessons.md`, and both policy headers name `unindexed_files`, a
+  count, in the `diff` input.
+- **The lesson firing log refuses symbolic links.** Seamark no longer
+  appends to `.seamark/lessons-audit.jsonl` through a symbolic link at
+  the log or at `.seamark`, so a cloned repository can no longer send
+  firing records to a file outside it. New logs are created owner-only
+  (0600) in a 0700 `.seamark`, and an existing 0644 log is tightened to
+  0600. Edit hooks still fail open, `change_set` and `check` still
+  answer, and the refused record is not written. `lessons --stats` and
+  the delivery report show a linked log as unreadable, not as empty.
+- **The index no longer reads as current after an edit made during
+  indexing.** An index run recorded the workspace fingerprint after it
+  had parsed the files, so a file edited during the run was recorded but
+  never parsed. Every later run, `status`, `orient` and `check` then
+  trusted that stale index until a forced rebuild. The run now observes
+  the state before it reads any file and again after its last read, and
+  it writes the record in the same transaction as the graph, so
+  overlapping runs cannot pair a newer fingerprint with an older graph.
+  When the two states differ, the run records a mark that equals no
+  state, so the index reads as stale and the next call rebuilds, also
+  after the edit is taken back, as with `git stash` and `git stash pop`.
+  Such a run logs a note that the next run rebuilds.
+- **MCP answers name the repository that their index records.** Under a
+  database that records another repository, every MCP read (`orient`,
+  `why`, `expand`, `change_set` and both resources) opens with one note
+  that names that root, both when the index matches the workspace and
+  when the server refuses to refresh it. The `seamark://status` resource
+  prints the same `root` line as `seamark status`, and the same
+  `workspace` line, because both compare the index with the recorded
+  root. Two cases differ: while the index still matches the workspace of
+  the server, the resource reads current, as the note says, also after
+  an edit in the recorded root or when that root is gone. An index that
+  another seamark version built stays stale. The `orient` health line
+  compares the index with the workspace of the server instead, so after
+  an edit in that workspace alone `orient` reads `freshness stale` while
+  the resource reads current. `check` keeps
+  its verdict at a matching fingerprint and carries the note, and the
+  `orient` title names the recorded root. Where a plain `seamark index`
+  in this workspace would be refused, the stale status line and the
+  stale note of the CLI read commands print the route of that state
+  instead.
+- **Calls in package-level values and class bodies.** A package-level Go
+  `var`, a module-level JS/TS `const`/`let`/`var`, and a module-level
+  Python assignment now carry the calls in their initializer, function
+  literals and lambdas included. A JS/TS or Python class now carries the
+  calls of its body outside its methods, such as field initializers,
+  static blocks and class attributes, while each method keeps its own
+  calls. A private JS/TS method (`#m`) is now a symbol of its own. Each
+  access to a private member, such as `this.#m()`, `ps.forEach(this.#m)`,
+  `Jobs.#m(p)`, a getter read or a setter write, resolves only in the
+  class that declares the name: to the private method or accessor, or
+  to the class for a private field. It never reaches a member of another
+  class. The class keeps an edge to each of its private methods and
+  accessors, so an edit in the class still reports their effects. A
+  method that is no symbol, such as a JS/TS method with a computed name
+  (`[Symbol.iterator]()`), is code of the class, and the class carries
+  its calls. `check` counts a changed line for every symbol whose span
+  covers it, so an edit inside a method also reports what the class
+  body calls, a known over-report. A JS/TS `this.save()` in a class
+  body, such as in a field arrow function, resolves to the `save` method
+  of that class, as it does in a method. Before, a change in such a
+  place counted as inside a symbol that reached nothing, so `check` gave
+  a clean verdict with no effects and no unknown-reach note. Now `why`
+  lists these symbols as callers with their calls and effects, and
+  `check` reports what the change can
+  reach. A Go `const` initializer and a function value without a call
+  still get no edge. An index built by an older version is rebuilt once
+  by the next index run or MCP call, except a database file that does
+  not accept writes. A workspace that reads the database of another
+  repository, such as a sibling worktree started with `--db`, does not
+  rebuild it: `check` refuses with ``run `seamark index` in <root>`` and
+  MCP reads open with the `did not refresh` note until that root has
+  been indexed once with the new version, so run `seamark index` there
+  once.
+- **`why` says that a caller list can be incomplete.** The header of a
+  non-empty caller list of a function or a method now ends with `can be
+  incomplete: a call through a function value or a shared method name
+  gets no edge`. The rules that leave a list empty can also drop a real
+  caller from a full one, for example a function that a package-level
+  variable holds and that is called through it. The header still starts
+  with `callers (N)`, and no line is added. The CLI and MCP both show
+  it.
+- **`status` and `orient` count the files with no language extractor.**
+  The `parsed` line of `status` now reads, for example, `parsed 937 of
+  1039 seen files (0 skipped by config, 102 with no language
+  extractor)`, and the coverage line of `orient` adds `· 102 with no
+  language extractor` when the count is above zero. `status --json` has
+  the new field `coverage.files_unsupported`. The count comes from the
+  counts that the index already stores, so an existing index shows it
+  without a rebuild.
+- **`check` names a policy verdict that does not block.** The
+  `combined:` line read `policy pass` under `verdict deny (mode: warn)`.
+  It now reads, for example, `combined: pass (policy deny, not blocking
+  in warn mode; lessons passed)`. The combined state and the exit code
+  do not change. In `check-lessons/1`, `combined.policy` still says only
+  `pass` or `blocked`, and the new `combined.policy_verdict` holds the
+  verdict.
+- **`check` reports an audit record that was not written.** `check
+  --lessons` prints `seamark: lesson-check audit: <error>` on stderr
+  when the command exits 0, as `lessons --verify` does. MCP `check` ends
+  its text with one `note:` line for each record that was not written,
+  the policy audit and the lesson-check audit, where it only wrote to
+  the log of the server before. The verdict and the exit code never
+  change.
+- **`check` says when executable lesson checks did not run.** When
+  lesson verification was not requested and a pin in mode check or
+  enforce covers a changed file, the check text ends with `lesson
+  checks: not requested — N executable pin(s) cover this diff; run with
+  lesson_checks: true (CLI: seamark check --lessons)`. An invalid
+  `lessons.yaml` says so in that line. The MCP instructions and the
+  onboard prompt now ask for `lesson_checks: true`.
+- **`check --lessons` leads with the combined verdict.** With lesson
+  verification, the `combined:` line is the first line of the CLI and
+  MCP text, then a blank line, the plain check text and the lesson
+  report. It is no longer printed at the end.
+- **`check --lessons` names the diff files that the lesson checks did
+  not read.** The lesson checks read the working tree. When a supplied
+  diff names files outside the verified snapshot, a note under the
+  combined line lists them, and `check-lessons/1` lists them in
+  `combined.diff_paths_outside_snapshot`.
+- **`change_set` prints each co-change partner once.** A partner in the
+  closing `history suggests also reviewing` list is no longer repeated
+  in the lines of its file. Its closing line now carries the N/M counts
+  and the lift beside the `mostly` and last-fix lines. The lines of a
+  file keep the other planned files and the partners past the cap of the
+  closing list. The `check` output does not change.
+- **`change_set` says when `lessons.yaml` does not decode.** An invalid
+  `.seamark/lessons.yaml` dropped every pin from the `change_set` text
+  without a word: an older MCP client got a silent answer, and a newer
+  one found the status only in `structuredContent`. The second text part
+  now shows whenever the guidance or the checks are invalid, in the
+  words of `seamark lessons --prepare`, for every protocol version.
+- **A check that cannot run is not listed as `runs`.** Under an invalid
+  check configuration, preparation lists each check as `does not run
+  (configuration error)` and sets `runs` to false, because no checker
+  runs then. Valid configurations do not change.
+- **Preparation says when the index behind the mined lessons is not
+  current.** `lesson-preparation/1` has two new optional guidance keys,
+  absent in an ordinary document. `mined_freshness` is `not-refreshed`
+  when `change_set` could not refresh the index, and `stale` when
+  `lessons --prepare` finds the index behind the workspace. `mined_root`
+  names the repository that the index records when it is another one.
+  Both text forms say it in one line.
+- **`lessons --prepare` works in a copied checkout.** In a copied or
+  moved checkout whose index still records the original root, the
+  command rejected every path of the checkout as outside the workspace.
+  A path of the original got the pins of the original's `lessons.yaml`,
+  and its firing record went to the original's log. The command now
+  prepares for the `-C` checkout, with its own `lessons.yaml` and log, as
+  `change_set` does, and `mined_root` names the original root.
+  `lessons --stats` counts these records after `seamark index` runs in
+  the checkout. A `--db` that records another repository gives the same
+  preparation for the `-C` checkout. `lessons --file` follows the same
+  rule, so the view that each omission names shows the pins of the
+  checkout. An absolute path inside the original root, as `why` names
+  it there, still reads the original root. Both commands look for the
+  cited files of a pin's confidence tier in the checkout, so after a
+  move an applied pin keeps its tier and its place under the budget.
+- **A database inside the workspace no longer forces a rebuild on every
+  run.** With `--db ./custom.db` as an untracked file, the freshness
+  fingerprint included the file that every run writes. So every run
+  rebuilt, logged that the workspace changed during indexing, and
+  `status` and `why` called the index stale. The fingerprint now leaves
+  out a database file inside the workspace (outside `.seamark`) and its
+  SQLite sidecars, so the second run skips. The default database and a
+  database outside the workspace keep their fingerprint.
+- **MCP names the root of a read-only index of another checkout.** A
+  copied or moved checkout whose database does not accept writes keeps
+  its skip, because a rebuild would fail. Its MCP answers opened with no
+  note, although `orient` and `seamark://status` named the other root.
+  Every MCP answer from such an index now opens with the note that names
+  the recorded root, as for a sibling worktree at one commit. With
+  `lesson_checks`, that note is the first line of the `check` answer,
+  and the `combined:` line follows it.
+- **The CLI readers call an index of another seamark version stale.**
+  `seamark status`, `orient`, `why`, `report`, `lessons --prepare`, the
+  HTML report and the console overview now treat an index whose stored
+  parser version differs from the one of this binary as stale, also when
+  the workspace is unchanged. Before, after an upgrade they labelled old
+  answers current until something ran an index. The status line and the
+  read notes say that another seamark version built the index and name
+  `seamark index`, or the route of a database that records another
+  repository. `status --json` keeps `"freshness": "stale"` and adds
+  `stale_reason` (`other-version` or `workspace-changed`), and the
+  preparation document adds `mined_stale_reason`.
+- **No supplied-diff note when no lesson check exists.** `check
+  --lessons` and MCP `check` with lesson checks no longer print the note
+  that the lesson checks read the working tree, or
+  `diff_paths_outside_snapshot`, when the lesson state is
+  `no-executable-checks`. No check ran, so the note warned about
+  nothing. Every other state keeps it, including `no-applicable-checks`.
+- **`why` bounds its signature line.** `why <symbol>` cuts its `sig`
+  line at 200 characters with `…`. A JS/TS binding or a Python
+  module-level value stores its whole initializer as its signature, so
+  one answer could run past 10 KB. The stored signature does not change,
+  and MCP `expand` still gives the source.
+- **`why` prints the Go caller rules only for Go symbols.** `why` on a
+  function or a method with no resolved caller prints the two lines that
+  start with `in Go` only when the file of the symbol is a Go file.
+  Every language keeps the first line, which names the rules of all
+  languages.
+- **`why` and `expand` prefer a defined symbol over a package.** A query
+  that named both a package and a symbol defined in the repository
+  resolved to the package, which has no content, and `expand` failed
+  with "is external". The exact and suffix stages now order their
+  matches before the limit: a defined symbol before a package, an exact
+  FQN before a name, and a suffix that starts a whole component before a
+  raw suffix. When definitions of the same name fill the result, a
+  package of exactly that name takes its last line, so `why` and
+  `expand` still mention it. Which symbols match does not change. `why`
+  no longer calls a package of this repository external: it says that it
+  is a package of this repository and lists it as `(package)`.
+- **`why` names the file of its history.** The `usually changed with`,
+  `fix density` and `recent decisions` sections describe the whole file,
+  also under a symbol, so every symbol of one file shows the same
+  history. Each header now names that file in the same line, as in
+  `recent decisions  (whole file <path>)`, so the report keeps its line
+  count. The skills, the MCP `why` description and `seamark why --help`
+  say the same.
+
+Upgrade note: the database upgrades to schema 8 in place on first open
+(the scope choice of a proposal), and state bundles move to version 4.
+An older binary then refuses the upgraded database and a bundle of
+version 4 — the versioning contract. That covers v0.8.0, which has
+schema 6 and state version 2. Restart your AI coding agent after you
+replace the binary, because a running MCP server keeps the old one: a
+v0.8.0 server tells you to "upgrade seamark" for the upgraded database,
+and a restart fixes that. The installed hooks move with the binary.
+A new binary still reads every older bundle, and a row of such a bundle
+records no scope choice.
+An export of the new binary is no way back, so make a backup before you
+replace the binary: a copy of `.seamark/index.db` with any `-wal` and
+`-shm` file, or `seamark state export` run by the older binary. Decisions
+after that backup do not return, and `.seamark/lessons.yaml` goes back
+from git with it. See
+[Going back to an older seamark](docs/configuration.md#going-back-to-an-older-seamark).
+
+See [current capability states](docs/STATUS.md#lesson-checks-and-lesson-delivery)
+and the [lesson guide](docs/lessons.md) for limits and commands.
+
 ## v0.8.0 — 2026-10-18
 
 The workspace console release. `seamark tui` (experimental) opens one

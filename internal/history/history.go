@@ -123,13 +123,14 @@ func hasHead(repoRoot string) bool {
 }
 
 // gitLog reads the commit log with per-commit file lists.
-// core.quotePath=off keeps non-ASCII paths raw instead of C-quoted, so the
+// ParsedGitArgs keeps non-ASCII paths raw instead of C-quoted, so the
 // history layer stores the same file names the parse layer produces.
+// It also keeps git config from adding lines to the records.
 func gitLog(repoRoot string, maxCommits int) ([]model.Decision, error) {
 	format := "%x00%H" + fieldSep + "%an" + fieldSep + "%at" + fieldSep + "%s" + fieldSep + "%b%x00"
 
-	cmd := exec.Command("git", "-c", "core.quotePath=off", "log", "--numstat", "--no-renames",
-		"-n", fmt.Sprint(maxCommits), "--pretty=format:"+format)
+	cmd := exec.Command("git", ParsedGitArgs("log", "--numstat", "--no-renames",
+		"-n", fmt.Sprint(maxCommits), "--pretty=format:"+format)...)
 
 	cmd.Dir = repoRoot
 
@@ -208,6 +209,8 @@ func gitLog(repoRoot string, maxCommits int) ([]model.Decision, error) {
 // Lift rather than raw counts keeps hub files (touched in half the commits)
 // from dominating: a pair must co-occur beyond what its members' individual
 // churn predicts.
+// A bulk commit, a merge, or a commit with only excluded files adds to no count in the formula.
+// git log lists no files for a merge.
 func coChange(commits []model.Decision, opts Options) []model.CoChange {
 	type pair struct{ a, b string }
 

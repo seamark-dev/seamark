@@ -1,0 +1,114 @@
+package lessonreport
+
+import (
+	"time"
+
+	"github.com/seamark-dev/seamark/internal/lessoncheck"
+	"github.com/seamark-dev/seamark/internal/model"
+	"github.com/seamark-dev/seamark/internal/reviews"
+)
+
+// DefaultMaxAuditBytes is the default read bound of one audit file
+// (256 MiB). The value is a product choice, not a measured limit. A file
+// above the bound reads as "over-limit".
+const DefaultMaxAuditBytes int64 = 256 << 20
+
+// Request is what a surface asks of the engine.
+type Request struct {
+	Root string
+	// PinRef is "" for the overview. Otherwise it is a pin-ref of the
+	// current config.
+	PinRef string
+	Now    func() time.Time
+	Limits Limits
+	// SeamarkVersion fills Report.SeamarkVersion. The caller passes
+	// cli.version, because lessonreport cannot import cli.
+	SeamarkVersion string
+	// Applied holds the applied proposals of the ledger. The caller reads
+	// them from a read-only ledger, because lessonreport has no store
+	// import. LinksFromApplied turns them into Inputs.Links.
+	Applied []model.Proposal
+}
+
+// Limits bounds what one report reads.
+type Limits struct {
+	// MaxAuditBytes bounds each audit file. Zero means
+	// DefaultMaxAuditBytes. A file above it reads as "over-limit".
+	MaxAuditBytes int64
+}
+
+// Inputs is everything Build reads. Gather fills it with one read of
+// each source.
+type Inputs struct {
+	Audit      reviews.AuditPrefix           // ReadAuditPrefix: size at open, partial tail ignored
+	CheckAudit lessoncheck.AuditPrefix       // the lesson-check stream, same rules
+	Config     *reviews.Config               // current lessons.yaml (pin refs, versions, scope)
+	ConfigRead ConfigRead                    // how the config read ended
+	Checks     *lessoncheck.Config           // nil when absent or invalid
+	Capability *lessoncheck.CapabilityReport // capability report of the pins and clients; nil reads as no inactive enforcement and no verified attribution
+	Links      map[string]int64              // pin identity digest → applied proposal ID (LinksFromApplied)
+	Chosen     map[string]int64              // pin identity digest → scope choice of the row that Links keeps; no entry for 0 (ChosenFromApplied)
+	Now        time.Time
+
+	// AuditError and CheckAuditError carry the error text of a failed
+	// ReadAuditPrefix. A failed read returns no prefix, so without these
+	// fields Build could not tell an unreadable source from an absent one.
+	// Build sanitizes the text.
+	AuditError      string
+	CheckAuditError string
+}
+
+// LinksFromApplied maps the identity digest of each applied proposal's
+// pin to its proposal ID. Retargeting reads it: a pin that an applied
+// proposal wrote has a proposal to retarget.
+//
+// The identity is the digest of reviews.ProposalKey, the key that
+// every link, liveness check, and prune of the ledger uses. A row that
+// is not applied links nothing. When several applied proposals share one
+// identity, the map keeps the newest one (the highest ID), so it does not
+// depend on the order of the list. The result is never nil.
+func LinksFromApplied(applied []model.Proposal) map[string]int64 {
+	links := make(map[string]int64, len(applied))
+
+	for identity, p := range newestApplied(applied) {
+		links[identity] = p.ID
+	}
+
+	return links
+}
+
+// ChosenFromApplied maps the identity digest of each linked pin to the
+// time that a person chose its regions. It reads the row that
+// LinksFromApplied keeps, so the link and the choice never come from two
+// rows. A stamp on an older row of one identity does not count. A row
+// with no choice has no entry. The result is never nil.
+func ChosenFromApplied(applied []model.Proposal) map[string]int64 {
+	chosen := map[string]int64{}
+
+	for identity, p := range newestApplied(applied) {
+		if p.ScopeChosen > 0 {
+			chosen[identity] = p.ScopeChosen
+		}
+	}
+
+	return chosen
+}
+
+// newestApplied returns the applied row that links each pin identity. It
+// keeps the highest ID, so the result does not depend on the list order.
+func newestApplied(applied []model.Proposal) map[string]model.Proposal {
+	rows := make(map[string]model.Proposal, len(applied))
+
+	for _, p := range applied {
+		if p.Status != model.ProposalApplied {
+			continue
+		}
+
+		identity := reviews.PinIdentityDigest(reviews.ProposalKey(p))
+		if kept, ok := rows[identity]; !ok || p.ID > kept.ID {
+			rows[identity] = p
+		}
+	}
+
+	return rows
+}

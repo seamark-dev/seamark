@@ -13,11 +13,11 @@ type claudeCommands struct {
 }
 
 // DecodeCommand reads the shell text of one event. It keeps the rule
-// the gate hook always had: the installed matcher selects the tool, so
-// the decoder does not check tool_name, and it reads tool_input.command
-// wherever the event comes from. A missing command decodes to an empty
-// command, which the gate refuses, so a payload without one still fails
-// closed under enforcement.
+// that the gate hook always had. The installed matcher selects the
+// tool, so the decoder does not check tool_name. It reads
+// tool_input.command wherever the event comes from. A missing command
+// decodes to an empty command, which the gate refuses. So a payload
+// without one still blocks under enforcement.
 func (claudeCommands) DecodeCommand(payload []byte) (CommandEvent, error) {
 	var native struct {
 		SessionID string `json:"session_id"`

@@ -14,8 +14,14 @@ func newMCPCmd(opts *options) *cobra.Command {
 		Use:   "mcp",
 		Short: "Serve the index over MCP (stdio) for agent clients",
 		Long: `Speaks the Model Context Protocol on stdin/stdout. Exposes five tools
-(orient, why, change_set, check, expand), an orientation resource, and an
-onboarding prompt. Every tool call self-repairs index freshness first.
+(orient, why, change_set, check, expand), two resources
+(seamark://orient for repository orientation and seamark://status for
+index health), and an onboarding prompt. Every tool call self-repairs
+index freshness first.
+
+A running server keeps the binary it started with. After you replace or
+upgrade seamark, each tool reply opens with a note until the agent
+restarts or reconnects its MCP server.
 
 Register in Claude Code via .mcp.json:
   {"mcpServers": {"seamark": {"command": "seamark", "args": ["mcp"]}}}`,

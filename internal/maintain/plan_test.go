@@ -664,7 +664,9 @@ func TestFactLinesExplainTheScope(t *testing.T) {
 			living: 4,
 			want: []string{
 				"trigger x/y.go is not confirmed by the evidence or the history; it does not set the scope",
-				distill.TriggerFact{Path: "z/w.go", Region: "z/w.go", Direct: true}.BlockedLine(),
+				"trigger z/w.go — directly cited by the evidence but not deliverable: the region set is full or " +
+					"the path is absent from the working tree; review the trigger or edit its regions in " +
+					"seamark tui, Lessons › Pins, with i",
 				"no confirmed trigger: the scope is the coverage of 4 living finding(s); " +
 					"they are too scattered for a region, so the scope is repository-wide",
 			},

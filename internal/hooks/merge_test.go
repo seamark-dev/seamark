@@ -243,8 +243,9 @@ func TestEffectiveGateModeReadsTheCodexMarkers(t *testing.T) {
 		"warn":                   {hookDoc("command", "/bin/seamark gate --hook --client codex", "Bash"), ModeWarn},
 		"enforce":                {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "Bash"), ModeEnforce},
 		"enforce under a regexp": {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "^Bash$"), ModeEnforce},
-		"a Claude Code gate":     {hookDoc("command", "/bin/seamark gate --enforce --hook", "Bash"), ""},
-		"never fires":            {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "apply_patch"), ""},
+		// Codex runs a gate in the Claude Code form, and it blocks.
+		"a Claude Code gate": {hookDoc("command", "/bin/seamark gate --enforce --hook", "Bash"), ModeEnforce},
+		"never fires":        {hookDoc("command", "/bin/seamark gate --enforce --hook --client codex", "apply_patch"), ""},
 	} {
 		assert.Equal(t, tc.want, EffectiveGateMode(tc.settings, codex, CodexMatcher), name)
 		assert.Equal(t, tc.want, EffectiveGateMode(tc.settings, CodexSpecs(ModeEnforce)[0], CodexMatcher), name)
@@ -306,22 +307,72 @@ func TestCodexMatcherFollowsTheDocumentedRules(t *testing.T) {
 		want          bool
 	}{
 		"exact name":          {"Bash", "Bash", true},
+		"exact edit tool":     {"apply_patch", "apply_patch", true},
 		"another name":        {"Bash", "apply_patch", false},
 		"empty matches all":   {"", "Bash", true},
 		"star matches all":    {"*", "Bash", true},
 		"alternation":         {"Bash|apply_patch", "Bash", true},
 		"anchored":            {"^apply_patch$", "apply_patch", true},
-		"unanchored search":   {"ash", "Bash", true},
 		"a broken expression": {"(", "Bash", false},
+
+		// A name-only matcher is a list of exact names, not a search.
+		"no substring of a name":     {"ash", "Bash", false},
+		"no substring of edit tool":  {"patch", "apply_patch", false},
+		"an empty name fires never":  {"Bash|", "apply_patch", false},
+		"only separators":            {"|", "Bash", false},
+		"an alias of another tool":   {"Edit", "Bash", false},
+		"edit alias":                 {"Edit", "apply_patch", true},
+		"write alias":                {"Write", "apply_patch", true},
+		"claude style edit list":     {"Edit|Write|MultiEdit", "apply_patch", true},
+		"expression tests the alias": {"^Edit$", "apply_patch", true},
+		"spawn alias":                {"Agent", "spawn_agent", true},
+		"a digit stays a name":       {"ash|1", "Bash", false},
+		"an underscore stays a name": {"ply_pat", "apply_patch", false},
+		"a name keeps its case":      {"bash", "Bash", false},
+
+		// Codex gives these tools no other aliases. An extra alias makes
+		// setup count a hook as running where Codex never runs it.
+		"no multi edit alias":     {"MultiEdit", "apply_patch", false},
+		"no shell alias for Bash": {"shell", "Bash", false},
+		"no task alias":           {"Task", "spawn_agent", false},
+
+		// A space, "-", ",", or "." makes a regular expression. Codex
+		// searches the whole name with it and keeps the case, so a
+		// hand-written matcher reads here as Codex reads it.
+		"a space makes an expression":  {"B |ash", "Bash", true},
+		"a dash makes an expression":   {"B-|ash", "Bash", true},
+		"a comma makes an expression":  {"B,|ash", "Bash", true},
+		"a dot makes an expression":    {"Bas.", "Bash", true},
+		"an expression searches":       {"sh$", "Bash", true},
+		"an expression keeps the case": {"^bash$", "Bash", false},
+
+		// The tool name "*" has no row, so it has no alias.
+		"star with only separators": {"|", "*", false},
+		"star with an expression":   {".*", "*", true},
+		"star with an alias name":   {"Edit", "*", false},
 	} {
 		assert.Equal(t, tc.want, CodexMatcher(tc.matcher, tc.tool), name)
 	}
 }
 
+// TestCodexAliasesListOnlyTheCodexAliases pins the whole alias table.
+// The matcher rows reject only the names that they list. This test also
+// rejects an extra alias with another name, or a row for another tool.
+func TestCodexAliasesListOnlyTheCodexAliases(t *testing.T) {
+	// Codex 0.164.0 gives apply_patch the aliases Write and Edit, and
+	// spawn_agent the alias Agent. It gives no other tool an alias.
+	assert.Equal(t, map[string][]string{
+		"apply_patch": {"Write", "Edit"},
+		"spawn_agent": {"Agent"},
+	}, codexAliases)
+}
+
 func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
 	// Both clients can share one repository, and a document can hold the
 	// commands of both. A marker matches as a suffix, so the shorter
-	// Claude marker must not own the longer Codex command.
+	// Claude marker must not own the longer Codex command. The Codex gate
+	// spec reads the Claude Code gate as its other form, so only the own
+	// markers of a Codex spec are checked in that direction.
 	// The Codex reset command exists although setup does not install it.
 	claude := append(ClaudeSpecs(ModeWarn), ClaudeSpecs(ModeEnforce)[0])
 	codex := append(CodexSpecs(ModeWarn), CodexSpecs(ModeEnforce)[0],
@@ -331,7 +382,7 @@ func TestClaudeAndCodexMarkersNeverClaimEachOther(t *testing.T) {
 		for _, x := range codex {
 			assert.False(t, OwnedBySeamark(x.Command("/bin/seamark"), c.Markers()),
 				"%q must not own %q", c.Marker, x.Marker)
-			assert.False(t, OwnedBySeamark(c.Command("/bin/seamark"), x.Markers()),
+			assert.False(t, OwnedBySeamark(c.Command("/bin/seamark"), x.ownMarkers()),
 				"%q must not own %q", x.Marker, c.Marker)
 		}
 	}
@@ -419,4 +470,20 @@ func TestMergeKeepsAWrappedCommandAsItIs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, commandsOf(claude, "PreToolUse"), gate)
 	assert.Equal(t, ModeWarn, InstalledGateMode(claude), "the managed hook is the one that was added")
+}
+
+// The init text names GateTimeout as the gate hook timeout, so the gate
+// spec of each client must write that number.
+func TestGateSpecsWriteGateTimeout(t *testing.T) {
+	for _, mode := range []string{ModeWarn, ModeEnforce} {
+		claude := ClaudeSpecs(mode)[0]
+		require.Equal(t, "gate", claude.Name)
+		assert.Equal(t, GateTimeout, claude.Timeout, mode)
+
+		codex := CodexSpecs(mode)[0]
+		require.Equal(t, "gate", codex.Name)
+		assert.Equal(t, GateTimeout, codex.Timeout, mode)
+	}
+
+	assert.Equal(t, 15, GateTimeout, "the docs name 15 seconds")
 }

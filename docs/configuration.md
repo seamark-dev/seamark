@@ -70,8 +70,34 @@ History mining has two flags on `seamark index` itself: `--max-commits`
 bounds the git window (default 5000) and `--max-files-per-commit`
 excludes bulk refactors from co-change (default 30). Every command
 takes `-C <dir>` to name the workspace and `--db <path>` to override
-the index location; `status`, `doctor`, `gate`, and `check` speak
-`--json` for machines.
+the index location; `status`, `doctor`, `gate`, `check`, and
+`lessons` with `--verify`, `--prepare`, or `--delivery` speak `--json`
+for machines. A `--db` file inside the workspace and its SQLite sidecars
+stay out of the freshness fingerprint, because every index run writes
+them, so an untracked `./custom.db` does not make the next run rebuild. `gate`, `check`, and `index` refuse a `-C` that
+names no directory with `workspace <path>: not a directory` or `no such
+file or directory`, and the gate blocks it under `--enforce`.
+
+In a copied or moved checkout whose index still records the original
+root, `seamark status` reports on that root, as the console does. Its
+first line names that root and the `seamark index` run that records this
+workspace, and `--json` adds `recorded_root`. The MCP resource
+`seamark://status` prints the same first line, and every MCP answer from
+such an index opens with a note that names the recorded root (see
+[repository history](repository-history.md#how-much-can-the-answers-be-trusted)).
+`seamark doctor` reads the `-C` workspace.
+
+`seamark index` refuses a `--db` that records another repository, also
+with `--force`, because that repository would lose its pins and
+maintenance. A recorded path that does not exist now counts too, because
+it can be a detached disk; only a file inside this workspace replaces
+such a root by itself. A run that would skip still skips. Run the
+command in that repository, or add `--move-root` to move the recorded
+root to this workspace. The refusal names the flag only when the move
+keeps one repository. A relative `--db` starts at the physical working
+directory, as the system opens it. An index in a directory that refuses
+writes cannot be read, because SQLite must create its WAL/SHM sidecars
+there, so the refusal names that directory to make writable.
 
 ### Console settings
 
@@ -85,7 +111,7 @@ takes effect at the step that reads it next.
 | --- | --- | --- |
 | `agent.cli` | a registered preset with a one-shot command (`claude`, `codex`) | at the next prepared distillation or trigger extraction. Saving runs no model, authenticates nothing, and changes no integration file. |
 | `agent.argv` | read-only in the console; a custom command overrides the preset | when the console saves a preset while it is set, the diff shows its removal. The console never writes a custom command. |
-| `distill.write` | off (default) or on | at the next pin-write preview: apply, retarget, prune, and new pins, pin edits, and pin removals in Lessons › Pins, in the console; and for `lessons --apply`, `--prune`, and `--retarget`. Saving writes no pin. A trigger extraction does not read it. |
+| `distill.write` | off (default) or on | at the next pin-write preview: apply, retarget, prune, and new pins, pin edits, check definitions, and pin removals in Lessons › Pins; and for `lessons --apply`, `--prune`, `--retarget`, and `--set-mode`. Saving this setting writes no pin. A trigger extraction does not read it. |
 | `reviews.window_days` | default, a positive number of days, or unlimited (writes `0`) | at the next evidence refresh. The stored findings stay until then. |
 | `index.generated` | skip (default) or include generated files | at the next index build. |
 | `index.exclude` | an ordered list of globs | at the next index build. Nothing is deleted or scanned at the save. |
@@ -106,10 +132,10 @@ most 8 pins per edit (the hook total cap)`.
 
 | Field | Values | Default | Effective value | Takes effect |
 | --- | --- | --- | --- | --- |
-| `threshold` | default, or a whole number from 1 to 2147483647 | 2 | the stored number; a stored 0 or a negative number reads as the default | at the next edit hook, `change_set`, `check`, `why`, `seamark lessons --file`, and the Stats lesson counts; mined lessons only, never pins |
-| `pin_budget` | as `threshold` | 3 | the stored number, at most 8; a stored 0 or a negative number reads as the default | in the edit hook only, at most 8 lessons in total per edit; pins come first, so a budget of 8 leaves no room for mined lessons |
-| `change_budget` | as `threshold` | 6 | the stored number; a stored 0 or a negative number reads as the default | in one `change_set` answer or one `check` advisory, shared by all its files; not the hook or `why` |
-| `hook_delivery` | default, `always`, or `once-per-context` | `always` | the stored mode | repetition in the edit hook only; `change_set`, `check`, `why`, and the CLI views always show their selection |
+| `threshold` | default, or a whole number from 1 to 2147483647 | 2 | the stored number; a stored 0 or a negative number reads as the default | at the next edit/exploration hook, preparation, `change_set`, `check`, `why`, `seamark lessons --file`, and Stats lesson counts; mined lessons only, never pins |
+| `pin_budget` | as `threshold` | 3 | the stored number, at most 8; a stored 0 or a negative number reads as the default | in each edit-hook or exploration injection, at most 8 lessons total; pins come first, so 8 leaves no room for mined lessons |
+| `change_budget` | as `threshold` | 6 | the stored number; a stored 0 or a negative number reads as the default | in one preparation, `change_set` answer or `check` advisory, shared by all its paths; not the hooks or `why`; preparation's check listing has no budget |
+| `hook_delivery` | default, `always`, or `once-per-context` | `always` | the stored mode | repetition in the edit hook only; preparation, `change_set`, `check`, `why`, and CLI views always show their selection; exploration has separate repeat state |
 | `mute` | one entry per save: add, change, or remove an entry with a rule, a region, or both | none | the entries that the reader decodes | as `threshold` |
 
 - A save of a lesson setting writes `.seamark/lessons.yaml` only. It
@@ -135,6 +161,119 @@ most 8 pins per edit (the hook total cap)`.
   file with more than one hard link, and a file that the lessons reader
   rejects, for example for an unknown `hook_delivery` mode. The
   config.yaml groups stay usable.
+
+### Executable lesson configuration
+
+These keys belong to `.seamark/lessons.yaml`, not `config.yaml`. This
+example defines a predicate; it is not a measured prevention result:
+
+```yaml
+lesson_checks_version: 1
+checks:
+  no-debug:
+    kind: no-added-pattern/1
+    pattern: 'DEBUG_ONLY'
+  freeze-generated:
+    kind: forbid-path-change/1
+pin:
+  - rule: keep-debug-markers-out
+    region: src
+    note: Do not add debug-only markers to source files.
+    mode: check
+    check: no-debug
+```
+
+| Key | Values and meaning |
+| --- | --- |
+| `lesson_checks_version` | `1` when checks or executable pin modes are used; a newer version is unsupported, not silently evaluated. |
+| `checks.<id>` | A definition with `kind` and, only for the pattern checker, `pattern`. IDs use 1–64 lowercase letters, digits, dots, underscores or hyphens, starting with a letter or digit. Unknown definition fields are refused. |
+| `kind` | `forbid-path-change/1` or `no-added-pattern/1`; the version is part of the predicate. |
+| `pattern` | Nonempty Go regular expression, at most 1024 bytes, required only by `no-added-pattern/1`. No separate flags key. |
+| `pin[].mode` | Omitted or `advisory`, `check`, or `enforce`. Only check/enforce pins run during verification. |
+| `pin[].check` | Existing check ID, required for check/enforce. An advisory pin can retain a check, but verification lists it without running it. |
+
+Checks use literal repository-relative file or directory scopes, not
+wildcards. An empty scope or `*` means repository-wide. The checker
+matches paths within scope; advisory delivery can also match a parent
+scope. See [predicate semantics](lessons.md#executable-lessons-advisory-check-and-enforce)
+before turning on an executable mode.
+
+Advisory readers retain guidance when a semantic check definition is
+invalid. Executable evaluation instead reports configuration errors and
+runs no checker. An armed guard requests denial on invalid configuration.
+Neither a check definition nor `mode: enforce` installs a handler; the
+separate setup flags and trust state determine the active paths.
+`seamark lessons --set-mode` changes only the selected pin's mode/check
+through validation and `distill.write`. The TUI also edits definitions
+through a reviewed diff.
+
+### Verification state and report inputs
+
+Verification reads staged and unstaged changes as they exist in the
+working tree against `HEAD`, or the empty tree before the first commit.
+Default selection excludes ignored files, content inside submodules,
+and work outside the snapshot. Skip-worktree/assume-unchanged index
+entries have their worktree changes excluded and named when present.
+Explicit `--file` selection includes ignored paths but never follows a
+symbolic link as file content.
+
+Default selection also excludes exactly these paths **only when they
+are untracked**:
+
+- `.seamark/lesson-check-audit.jsonl`
+- `.seamark/lesson-check-audit.jsonl.1`
+- `.seamark/lesson-check-audit.jsonl.lock`
+
+Tracked copies and explicit `--file` selections keep them. Other
+`.seamark` files are not a blanket exemption. The `not covered` line of
+a default selection names these three as `seamark's own lesson-check
+audit files`.
+
+Evaluation is bounded: 5000 snapshot paths, 50000 census directories,
+4 MiB per file, 64 MiB snapshot content and Git output, and 20000 diff
+lines. Explicit verification has a 30-second timeout. The guard has a
+5-second evaluation budget; post-edit evaluation has 10 seconds. These
+are handler limits, not the candidate client hook timeouts. Exceeding an
+evaluation bound gives an unknown result, not a partial pass. Output
+caps (10 evidence entries, 160 characters per excerpt, 80 per rule) trim
+display only. See the result's named limit and rerun command.
+
+Pre-edit handlers save baselines in `.seamark/checks/pending/`, with
+owner-only directories/files and a Git exclusion. These files can contain
+before-content; keep them private. Baseline content is bounded at 16 MiB;
+oversized content stays qualified. Post-edit handling consumes the
+baseline; the next handler sweeps expired entries after one hour and
+stale temporary files after ten minutes.
+
+Verification and hook decisions append metadata to
+`.seamark/lesson-check-audit.jsonl` (`lesson-check-audit/1`). The writer
+uses a separate lock, rotates at 5 MiB or an oldest record of 30 days,
+and retains one rotated generation. These records keep outcomes,
+identities as digests and evidence locations, not matching source-line
+excerpts. They are not the reminder firing log.
+
+Every surface that shows a lesson appends to the reminder firing log
+`.seamark/lessons-audit.jsonl`. The writer creates the file with mode
+0600 and a missing `.seamark` with mode 0700, and it tightens an
+existing log to 0600. It refuses a symbolic link at the log or at
+`.seamark`, so no record lands outside the repository; the surface still
+answers, and that record is not written. The log has no lock and no
+rotation. Its readers (`lessons --stats` and the delivery report) refuse
+a link at the log too and report the log as unreadable, not as empty.
+
+The **delivery report** reads the reminder log
+`.seamark/lessons-audit.jsonl`, both retained check-audit generations,
+current `lessons.yaml` and integration inspections. Optional proposal
+links come from a read-only index. Each audit source has a 256 MiB prefix
+bound; the two check-audit generations share one bound. Sizes are fixed
+at open, incomplete final lines are ignored, and malformed/newer-schema
+counts remain visible. Pin versions stay separate.
+
+The delivery report writes no durable state: no audit append, writer
+lock, configuration or review change. SQLite can still create empty
+WAL/SHM sidecars when opening an existing database read-only. The older
+`--proposals`, `--stats` and HTML report paths retain their existing
+writable index/Git metadata behavior.
 
 ## Effect catalogue
 
@@ -163,8 +302,8 @@ like the built-ins.
 The derived graph — symbols, edges, co-change, decisions, effects — is
 rebuilt from the workspace on every reindex. But the same file also holds
 **durable decisions**: proposal history with your applied/dismissed
-verdicts, and the distillation memory that keeps paid agent calls from
-ever being repeated. Rebuilds (including `--force`) preserve those
+verdicts and any regions that a person chose, and the distillation
+memory that keeps paid agent calls from ever being repeated. Rebuilds (including `--force`) preserve those
 tables; **deleting the file destroys them**. The schema is versioned with
 ordered migrations — an older seamark refuses a newer database instead of
 guessing at it.
@@ -179,3 +318,31 @@ seamark state import decisions.json         # merge into this clone (works pre-i
 Import never overwrites a local decision: it adds missing rows, and a
 still-pending proposal may adopt an imported verdict — a decision beats
 no decision.
+
+### Going back to an older seamark
+
+The first open by a new binary moves the database to schema 8 in place,
+and the older binary then refuses it. That first open can come from a
+hook, so make the backup before you replace the binary. Each worktree
+has its own database, so each one needs its own backup.
+
+A bundle exported by the new binary has state version 4, so it is no way
+back: an older binary refuses it. The way back is a backup made before
+that first open, in one of two forms:
+
+- a copy of `.seamark/index.db` with any `-wal` and `-shm` file, made
+  while no seamark process runs. Put all of them back together, so that
+  no side file of the schema 8 database stays beside the copy.
+- `seamark state export`, run by the older binary. Move the schema 8
+  files aside first, then run `seamark state import` with the older
+  binary. Then rebuild with `seamark index`.
+
+Keep the schema 8 files: they hold your decisions. Decisions after the
+backup do not return. A pin whose regions changed after the backup then
+reads as no proposal, so put `.seamark/lessons.yaml` back to the same
+point. Use git if your repository tracks that file, else keep a copy with
+the backup. A pin that you added after the backup leaves the file with
+that step, so copy its text out first.
+
+A newer binary still reads a bundle of an older version. A row of such a
+bundle records no scope choice.

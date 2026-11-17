@@ -60,7 +60,7 @@ func TestExtractReviewNamesTheCursorRow(t *testing.T) {
 }
 
 func TestExtractWorkDirBlockerOffersNoSettingsLink(t *testing.T) {
-	// The engine builds this line from WorkDirErr (learning.workDirBlocker).
+	// The engine builds this line from the failed read of the directory.
 	const cwd = "the agent's working directory is unknown: getwd: no such file or directory"
 
 	cases := []struct {
@@ -102,6 +102,23 @@ func TestExtractWorkDirBlockerOffersNoSettingsLink(t *testing.T) {
 			assert.Equal(t, destSettings, h.m.active)
 		})
 	}
+}
+
+func TestExtractBlockerKindDecidesTheAdviceAndNotItsText(t *testing.T) {
+	// This line has the words of the working-directory blocker, but its
+	// kind is an agent blocker.
+	const line = "the agent's working directory is unknown: getwd: no such file or directory"
+
+	o := extMixed()
+	o.blockers = []string{line}
+
+	p := extPreview(o)
+	require.Equal(t, learning.ExtractBlockAgent, p.Blockers[0].Kind)
+
+	h := extOpen(t, extFake(p, extNoRun(t)), p, 120, 40)
+
+	assert.Contains(t, extTallFlat(h), line+". Install it, or press o")
+	assert.Contains(t, footerLine(h.view()), "o open Settings › Inference")
 }
 
 func TestExtractNotReadyKeepsItsLastSentenceAtTheMinimumSize(t *testing.T) {

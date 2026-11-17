@@ -66,8 +66,15 @@ type rpcResp struct {
 func serve(t *testing.T, root string, requests ...string) map[string]rpcResp {
 	t.Helper()
 
-	srv := New(root, filepath.Join(root, ".seamark", "index.db"), "test",
-		func(format string, a ...any) { t.Logf("server: "+format, a...) })
+	return serveDB(t, root, filepath.Join(root, ".seamark", "index.db"), t.Logf, requests...)
+}
+
+// serveDB is serve with the database at dbPath and with logf as the log
+// of the server.
+func serveDB(t *testing.T, root, dbPath string, logf func(string, ...any), requests ...string) map[string]rpcResp {
+	t.Helper()
+
+	srv := New(root, dbPath, "test", func(format string, a ...any) { logf("server: "+format, a...) })
 
 	var out strings.Builder
 	require.NoError(t, srv.Serve(strings.NewReader(strings.Join(requests, "\n")+"\n"), &out))
@@ -135,10 +142,10 @@ func TestLifecycleAndTools(t *testing.T) {
 
 	// The instructions state judgment rules, not a ritual. Each phrase is
 	// one rule the agent-skills specification requires: change_set
-	// before the edit, orient only when unfamiliar, check before
-	// completion over a diff that includes new files, co-change as
-	// usually, absence of evidence as unknown.
-	for _, phrase := range []string{"change_set", "before", "check", "git diff HEAD skips", "only when", "usually", "never means safe"} {
+	// before the edit, orient only when unfamiliar, check with the lesson
+	// checks before completion over a diff that includes new files,
+	// co-change as usually, absence of evidence as unknown.
+	for _, phrase := range []string{"change_set", "before", "check", "lesson_checks: true", "git diff HEAD skips", "only when", "usually", "never means safe"} {
 		assert.Contains(t, init.Instructions, phrase)
 	}
 
@@ -254,11 +261,34 @@ func TestResourcesAndPrompts(t *testing.T) {
 		`{"jsonrpc":"2.0","id":4,"method":"prompts/list"}`,
 		`{"jsonrpc":"2.0","id":5,"method":"prompts/get","params":{"name":"onboard"}}`,
 		`{"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"seamark://status"}}`,
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"orient","arguments":{}}}`,
 	)
 
+	// The MCP orient text offers the MCP tools by name. The CLI orient
+	// footer differs, so this pins that the MCP text keeps its own. The
+	// suffix starts with the blank line before the footer, because the
+	// MCP text stays byte for byte the same.
+	const orientFooter = "\n\nnext: `why <symbol|file>` for any of the above; `change_set` before editing; " +
+		"`expand` for source; `expand lessons:<dir>` for an area's raw review findings\n"
+
+	// The exact list, in order: the `seamark mcp` help in cli/mcp.go names
+	// each resource, so a new one must reach that help too.
+	var listed struct {
+		Resources []struct {
+			URI string `json:"uri"`
+		} `json:"resources"`
+	}
+
 	require.Nil(t, resps["1"].Error)
-	assert.Contains(t, string(resps["1"].Result), "seamark://orient")
-	assert.Contains(t, string(resps["1"].Result), "seamark://status")
+	require.NoError(t, json.Unmarshal(resps["1"].Result, &listed))
+
+	uris := make([]string, 0, len(listed.Resources))
+	for _, r := range listed.Resources {
+		uris = append(uris, r.URI)
+	}
+
+	assert.Equal(t, []string{"seamark://orient", "seamark://status"}, uris,
+		"the `seamark mcp` help in cli/mcp.go names each resource; update it with this list")
 
 	var read struct {
 		Contents []struct {
@@ -269,6 +299,11 @@ func TestResourcesAndPrompts(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resps["2"].Result, &read))
 	require.Len(t, read.Contents, 1)
 	assert.Contains(t, read.Contents[0].Text, "orientation")
+	assert.True(t, strings.HasSuffix(read.Contents[0].Text, orientFooter), "the orient resource keeps the MCP footer")
+
+	orient, isErr := toolText(t, resps["7"])
+	assert.False(t, isErr)
+	assert.True(t, strings.HasSuffix(orient, orientFooter), "the orient tool keeps the MCP footer")
 
 	require.NotNil(t, resps["3"].Error)
 	assert.Equal(t, codeResourceNotFound, resps["3"].Error.Code)
@@ -290,8 +325,9 @@ func TestResourcesAndPrompts(t *testing.T) {
 	assert.Contains(t, string(resps["5"].Result), "orient")
 
 	// The onboard prompt follows the same rules as the instructions:
-	// orient is conditional, change_set precedes the edit, and check
-	// precedes the completion report over a diff that includes new files.
+	// orient is conditional, change_set precedes the edit, and check with
+	// the lesson checks precedes the completion report over a diff that
+	// includes new files.
 	var prompt struct {
 		Messages []struct {
 			Content struct {
@@ -302,7 +338,7 @@ func TestResourcesAndPrompts(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resps["5"].Result, &prompt))
 	require.Len(t, prompt.Messages, 1)
 
-	for _, phrase := range []string{"change_set", "check", "git diff HEAD skips", "only when"} {
+	for _, phrase := range []string{"change_set", "check", "lesson_checks: true", "git diff HEAD skips", "only when"} {
 		assert.Contains(t, prompt.Messages[0].Content.Text, phrase)
 	}
 }
@@ -408,4 +444,52 @@ func TestApproveToolsMatchToolDefs(t *testing.T) {
 	}
 
 	assert.Equal(t, approve.Tools, names)
+}
+
+// TestWhyDescriptionSaysWhatMCounts keeps the meaning of M in "N/M commits"
+// in the tool description, because agents read the partner line without a label.
+func TestWhyDescriptionSaysWhatMCounts(t *testing.T) {
+	var desc string
+
+	for _, d := range toolDefs {
+		if d["name"] == "why" {
+			desc, _ = d["description"].(string)
+		}
+	}
+
+	assert.Contains(t, desc, "N/M commits")
+	assert.Contains(t, desc, "M counted in the mined window")
+}
+
+// TestWhyDescriptionNamesTheFileGrain keeps the grain of the why history
+// in the tool description. The co-change and decision sections describe the
+// whole file, also for a symbol. An agent that reads them as the history of
+// the symbol draws a wrong conclusion.
+func TestWhyDescriptionNamesTheFileGrain(t *testing.T) {
+	var desc string
+
+	for _, d := range toolDefs {
+		if d["name"] == "why" {
+			desc, _ = d["description"].(string)
+		}
+	}
+
+	assert.Contains(t, desc, "history describes the whole file")
+}
+
+// TestChangeSetDescriptionSaysWhatMCounts keeps the meaning of M in the
+// change_set description. change_set prints the same unlabeled "N/M commits"
+// partner line as why, so both descriptions use the same words.
+func TestChangeSetDescriptionSaysWhatMCounts(t *testing.T) {
+	const clause = "N/M commits: N shared, M counted in the mined window"
+
+	descs := map[string]string{}
+
+	for _, d := range toolDefs {
+		name, _ := d["name"].(string)
+		descs[name], _ = d["description"].(string)
+	}
+
+	assert.Contains(t, descs["why"], clause)
+	assert.Contains(t, descs["change_set"], clause)
 }

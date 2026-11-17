@@ -195,6 +195,7 @@ func TestRowGuardMatchesTheExactRow(t *testing.T) {
 		{"another region", func(p *model.Proposal) { p.Region = "web" }, false},
 		{"another region set", func(p *model.Proposal) { p.Regions = []string{"api"} }, false},
 		{"another region order", func(p *model.Proposal) { p.Regions = []string{"web", "api"} }, false},
+		{"another scope choice", func(p *model.Proposal) { p.ScopeChosen = 9 }, false},
 		{"another note", func(p *model.Proposal) { p.Note = "edited" }, true},
 		{"another trigger stamp", func(p *model.Proposal) { p.TriggerChecked = 9 }, true},
 	}

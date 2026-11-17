@@ -2,9 +2,7 @@ package learning
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -85,27 +83,11 @@ func evWorkspace(t *testing.T, origin string) workspace.Workspace {
 	}}))
 	require.NoError(t, st.ReplaceFixFindings([]model.Finding{{
 		ID: 901, Path: "a.go", Body: "fix: seeded", Source: model.SourceFixSubject,
-	}}))
+	}}, false))
 	require.NoError(t, st.SetMeta(store.MetaReviewsMinedAt, "1000"))
 	require.NoError(t, st.SetMeta(store.MetaFixesMinedAt, "1000"))
 
 	return ws
-}
-
-// evFileDigest returns the SHA-256 of a file, or "absent".
-func evFileDigest(t *testing.T, path string) string {
-	t.Helper()
-
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return "absent"
-	}
-
-	require.NoError(t, err)
-
-	sum := sha256.Sum256(data)
-
-	return hex.EncodeToString(sum[:])
 }
 
 // evMarkerTools puts gh and git scripts that record each call first on
@@ -170,7 +152,7 @@ func evAssertReviewsKept(t *testing.T, snap Snapshot) {
 
 func TestInspectReadsStoredEvidenceWithoutWriting(t *testing.T) {
 	ws := evWorkspace(t, "git@github.com:o/r.git")
-	before := evFileDigest(t, ws.DBPath)
+	before := distFileDigest(t, ws.DBPath)
 
 	snap := Inspect(ws)
 
@@ -189,7 +171,7 @@ func TestInspectReadsStoredEvidenceWithoutWriting(t *testing.T) {
 	assert.Equal(t, reviews.CountFloor, snap.Window.Floor)
 	assert.False(t, snap.ObservedAt.IsZero())
 
-	assert.Equal(t, before, evFileDigest(t, ws.DBPath), "an inspection never writes")
+	assert.Equal(t, before, distFileDigest(t, ws.DBPath), "an inspection never writes")
 }
 
 func TestInspectCountsDistilledGroupsWithoutProposals(t *testing.T) {
@@ -208,12 +190,12 @@ func TestInspectCountsDistilledGroupsWithoutProposals(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, st.Close())
 
-	before := evFileDigest(t, ws.DBPath)
+	before := distFileDigest(t, ws.DBPath)
 	snap = Inspect(ws)
 
 	require.NoError(t, snap.CountsErr)
 	assert.Equal(t, 2, snap.DistilledGroups)
-	assert.Equal(t, before, evFileDigest(t, ws.DBPath), "the count uses the read-only store")
+	assert.Equal(t, before, distFileDigest(t, ws.DBPath), "the count uses the read-only store")
 
 	// An evidence refresh keeps the record of distilled groups.
 	p, err := PlanRefresh(ws, index.SourcesLocal)
@@ -272,8 +254,8 @@ func TestPlanRefreshDisclosesWithoutWork(t *testing.T) {
 	ws := evWorkspace(t, "git@github.com:o/r.git")
 	marker := evMarkerTools(t, true, "gh")
 
-	dbBefore := evFileDigest(t, ws.DBPath)
-	configBefore := evFileDigest(t, evConfigPath(ws.Root))
+	dbBefore := distFileDigest(t, ws.DBPath)
+	configBefore := distFileDigest(t, evConfigPath(ws.Root))
 
 	p, err := PlanRefresh(ws, index.SourcesReviewsAndLocal)
 	require.NoError(t, err)
@@ -302,8 +284,8 @@ func TestPlanRefreshDisclosesWithoutWork(t *testing.T) {
 	assert.Equal(t, []string{index.SourceFixes, index.SourceReviews}, replaced)
 
 	assert.NoFileExists(t, marker, "planning runs no gh")
-	assert.Equal(t, dbBefore, evFileDigest(t, ws.DBPath), "planning writes no database")
-	assert.Equal(t, configBefore, evFileDigest(t, evConfigPath(ws.Root)), "planning writes no config")
+	assert.Equal(t, dbBefore, distFileDigest(t, ws.DBPath), "planning writes no database")
+	assert.Equal(t, configBefore, distFileDigest(t, evConfigPath(ws.Root)), "planning writes no config")
 }
 
 func TestPlanRefreshLocalModeKeepsReviews(t *testing.T) {
@@ -384,8 +366,8 @@ func TestPlanRefreshWithoutACommitKeepsTheFixFindings(t *testing.T) {
 		assert.Positive(t, later, "the review corpus can still change")
 	})
 
-	// Integration check fix: without a GitHub origin the fetch cannot run
-	// either, so the plan promised a later change that no run makes.
+	// Without a GitHub origin the review fetch cannot run either. The
+	// plan must then promise no later change, because no run makes one.
 	t.Run("reviews and local without an origin", func(t *testing.T) {
 		bare := evWorkspace(t, "")
 		evGitIn(t, bare.Root, "checkout", "--orphan", "fresh")
@@ -489,7 +471,7 @@ func TestPlanRefreshBlocksOnAnIndexThatIsNotReady(t *testing.T) {
 			ws := evWorkspace(t, "git@github.com:o/r.git")
 			c.setup(t, ws)
 
-			before := evFileDigest(t, ws.DBPath)
+			before := distFileDigest(t, ws.DBPath)
 			marker := evMarkerTools(t, false, "gh", "git")
 
 			p, err := PlanRefresh(ws, index.SourcesReviewsAndLocal)
@@ -522,7 +504,7 @@ func TestPlanRefreshBlocksOnAnIndexThatIsNotReady(t *testing.T) {
 			}
 
 			assert.NoFileExists(t, marker, "a blocked plan and its run start no git and no gh")
-			assert.Equal(t, before, evFileDigest(t, ws.DBPath), "the database is never migrated or created")
+			assert.Equal(t, before, distFileDigest(t, ws.DBPath), "the database is never migrated or created")
 		})
 	}
 }

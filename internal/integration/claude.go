@@ -11,22 +11,30 @@ const ClaudeID = "claude"
 // claudeClient describes Claude Code. The setup adapter plans the
 // hooks, the allow rules, and the MCP registration. The edit and reset
 // codecs translate the lessons hook events, and the command codec
-// translates the gate hook event. The invocation capability reuses the
-// existing one-shot preset so the compatibility resolver and the
-// registry cannot disagree about the command.
+// translates the gate hook event. The explore codec translates the
+// structured Read event. The guard and completion codecs translate the
+// lesson-check events before and after an edit. The invocation
+// capability reuses the existing one-shot preset so the compatibility
+// resolver and the registry cannot disagree about the command.
 func claudeClient() Client {
 	return Client{
 		ID:        ClaudeID,
 		Name:      "Claude Code",
 		SkillDirs: []string{skills.ClaudeDir},
 		Setup:     claudeSetup{},
-		SetupOps:  SetupSupport{Hooks: true, GateHook: true, ResetHook: true, RegisterMCP: true, ApproveTools: true},
-		Edits:     claudeEdits{},
-		Commands:  claudeCommands{},
-		Resets:    claudeResets{},
+		SetupOps: SetupSupport{
+			Hooks: true, GateHook: true, ResetHook: true, RegisterMCP: true, ApproveTools: true,
+			LessonVerify: true, LessonGuard: true, LessonExploration: true,
+		},
+		Edits:       claudeEdits{},
+		Commands:    claudeCommands{},
+		Resets:      claudeResets{},
+		Explores:    claudeExplores{},
+		Guards:      claudeGuards{},
+		Completions: claudeCompletions{},
 		Invocation: func(string) (agent.CommandSpec, error) {
-			// Dir stays empty: the legacy preset inherits the caller's
-			// working directory, and this slice preserves that.
+			// Dir stays empty, because the legacy preset inherits the
+			// caller's working directory. The registry keeps that behavior.
 			return agent.ClaudeCommand(), nil
 		},
 	}

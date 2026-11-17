@@ -1,0 +1,9 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000001",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000001.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000001",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do exactly these steps in order, and do not add steps.\n1. Use the Read tool to read the file sentinel/edit.txt.\n2. Use the Edit tool once to replace the line alpha with the line beta in sentinel/edit.txt.\nMake each tool call once. Do not retry a call, also when it fails, and do not try another tool or another way.\nThen reply with one line: the check id that a seamark post-edit message named after the tool call, or the single word none when no such message came."
+}

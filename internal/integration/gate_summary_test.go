@@ -27,7 +27,7 @@ func TestGateSummaryGroupsHooksAndRanksTheEffect(t *testing.T) {
 	assert.Equal(t, GateEffectBlocks, g.Effect())
 
 	// An unreadable document ranks below a hook that blocks or follows
-	// the policy, and above a report-only hook: the document can hold an
+	// the policy, and above a report-only hook. The document can hold an
 	// enforcing gate, so "nothing blocks" is not known.
 	var unknown GateSummary
 	unknown.AddUnreadable("d: unreadable")
@@ -68,14 +68,14 @@ func TestSummarizeGateHooksGroupsByPath(t *testing.T) {
 
 	assert.Equal(t, GateSummary{
 		Enforce: []string{".claude/settings.local.json"}, Warn: []string{".claude/settings.json"},
-		ReportOnly: []string{".codex/hooks.json"}, Possible: []string{".codex/config.toml [hooks]"},
+		ReportOnly: []string{".codex/hooks.json"}, Possible: []string{".codex/config.toml [hooks]"}, UnfilteredPossible: 1,
 	}, g)
 	assert.Equal(t, GateEffectBlocks, g.Effect())
 
-	// The reported defect: an uncertain enforcing hook alone read as one
-	// that enforces.
+	// An uncertain enforcing hook alone is possible, not enforcing: the
+	// reader cannot tell whether it runs.
 	g = SummarizeGateHooks([]GateHook{{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Uncertain: true}})
-	assert.Equal(t, GateSummary{Possible: []string{".claude/settings.json"}}, g)
+	assert.Equal(t, GateSummary{Possible: []string{".claude/settings.json"}, UnfilteredPossible: 1}, g)
 	assert.Equal(t, GateEffectUnknown, g.Effect())
 
 	// An uncertain hook that discards its exit status never blocks, so it
@@ -83,6 +83,26 @@ func TestSummarizeGateHooksGroupsByPath(t *testing.T) {
 	g = SummarizeGateHooks([]GateHook{{Path: ".claude/settings.json", Mode: GateModeReportOnly, Uncertain: true}})
 	assert.Equal(t, GateSummary{ReportOnly: []string{".claude/settings.json"}}, g)
 	assert.Equal(t, GateEffectReportOnly, g.Effect())
+}
+
+func TestSummarizeGateHooksCountsFilteredPossibleHooks(t *testing.T) {
+	// The init gate line picks its route from the counts. One document
+	// can hold a filtered and an unfiltered definition, so each hook
+	// counts. A certain or a report-only hook is not possible, so its
+	// filter counts for nothing.
+	g := SummarizeGateHooks([]GateHook{
+		{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Managed: true, Uncertain: true, Filtered: true},
+		{Path: ".claude/settings.json", Mode: hooks.ModeWarn, Uncertain: true},
+		{Path: ".claude/settings.local.json", Mode: hooks.ModeEnforce, Uncertain: true, Filtered: true},
+		{Path: ".claude/settings.local.json", Mode: GateModeReportOnly, Uncertain: true, Filtered: true},
+	})
+
+	assert.Equal(t, GateSummary{
+		ReportOnly:       []string{".claude/settings.local.json"},
+		Possible:         []string{".claude/settings.json", ".claude/settings.local.json"},
+		FilteredPossible: 2, UnfilteredPossible: 1,
+	}, g)
+	assert.Equal(t, GateEffectUnknown, g.Effect())
 }
 
 func TestSummarizeInspectionsReadsOnlyClientsWithAGate(t *testing.T) {
@@ -118,4 +138,63 @@ func TestSummarizeInspectionsReadsOnlyClientsWithAGate(t *testing.T) {
 
 	assert.Equal(t, GateSummary{ReportOnly: []string{"claude"}}, g)
 	assert.Equal(t, GateEffectReportOnly, g.Effect())
+}
+
+func TestSummarizeInspectionsListsAnInertGateApart(t *testing.T) {
+	// An inert gate blocks nothing, so the effect does not count it. The
+	// list keeps it, so status can name the hook and its repair.
+	inert := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StatePartial, Inert: true}
+	current := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StateCurrent}
+
+	g := SummarizeInspections([]Inspection{
+		{ClientID: "claude", Capabilities: []CapabilityInspection{inert}},
+		{ClientID: "codex", GateMode: hooks.ModeEnforce, Capabilities: []CapabilityInspection{current}},
+	})
+
+	assert.Equal(t, GateSummary{Enforce: []string{"codex"}, Inert: []string{"claude"}}, g)
+	assert.Equal(t, GateEffectBlocks, g.Effect())
+
+	g = SummarizeInspections([]Inspection{{ClientID: "claude", Capabilities: []CapabilityInspection{inert}}})
+	assert.Equal(t, GateEffectNone, g.Effect())
+}
+
+func TestSummarizeGateHooksLeavesAHookThatIsOffOut(t *testing.T) {
+	// A hook whose client turns the hooks off runs for no command, so it
+	// counts in no group and in neither possible count.
+	g := SummarizeGateHooks([]GateHook{
+		{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Managed: true, HooksOff: true},
+		{Path: ".claude/settings.local.json", Mode: hooks.ModeEnforce, Uncertain: true, HooksOff: true},
+	})
+
+	assert.Equal(t, GateSummary{HooksOff: []string{".claude/settings.json", ".claude/settings.local.json"}}, g)
+	assert.Equal(t, GateEffectNone, g.Effect())
+
+	// A running warn hook beside an enforce hook that is off decides the
+	// effect alone.
+	g = SummarizeGateHooks([]GateHook{
+		{Path: ".claude/settings.json", Mode: hooks.ModeEnforce, Managed: true, HooksOff: true},
+		{Path: ".codex/hooks.json", Mode: hooks.ModeWarn, Managed: true},
+	})
+
+	assert.Equal(t, GateSummary{Warn: []string{".codex/hooks.json"}, HooksOff: []string{".claude/settings.json"}}, g)
+	assert.Equal(t, GateEffectFollowsPolicy, g.Effect())
+}
+
+func TestSummarizeInspectionsListsAClientWithItsHooksOffAsInert(t *testing.T) {
+	current := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StateCurrent}
+
+	g := SummarizeInspections([]Inspection{
+		{ClientID: "claude", GateMode: hooks.ModeEnforce, PossibleGateMode: hooks.ModeWarn, HooksOff: true,
+			Capabilities: []CapabilityInspection{current}},
+	})
+
+	assert.Equal(t, GateSummary{Inert: []string{"claude"}}, g)
+	assert.Equal(t, GateEffectNone, g.Effect())
+
+	// Without a gate hook, no hook is present to call inert. Status then
+	// keeps the line that offers a setup run.
+	absent := CapabilityInspection{Capability: CapabilityCommands, Supported: true, State: StateAbsent}
+
+	g = SummarizeInspections([]Inspection{{ClientID: "claude", HooksOff: true, Capabilities: []CapabilityInspection{absent}}})
+	assert.Equal(t, GateSummary{}, g)
 }

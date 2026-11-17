@@ -2,6 +2,7 @@ package bench
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,19 +24,33 @@ func TestLocalRuntimeIDIncludesFixtureToolchains(t *testing.T) {
 	assert.Contains(t, schema, "make=")
 }
 
+// writeStartedScript writes an executable script and starts it once, with no
+// time limit. The first start of a new executable is slow on macOS, and it
+// waits longer while other new executables start, as in a full test run.
+// That wait can pass the 10 s limit of CommandVersion. Later starts of the
+// same file are fast, so the timed call then measures only the script.
+func writeStartedScript(t *testing.T, path, script string) {
+	t.Helper()
+
+	require.NoError(t, os.WriteFile(path, []byte(script), 0o755))
+	_ = exec.Command(path).Run() // The exit status does not matter for this first start.
+}
+
 func TestCommandVersionReadsTheFirstLineOrUnknown(t *testing.T) {
 	dir := t.TempDir()
 
 	chatty := filepath.Join(dir, "chatty")
-	require.NoError(t, os.WriteFile(chatty, []byte("#!/bin/sh\nprintf 'tool 1.2.3\\nbuilt yesterday\\n'\n"), 0o755))
+	writeStartedScript(t, chatty, "#!/bin/sh\nprintf 'tool 1.2.3\\nbuilt yesterday\\n'\n")
 	assert.Equal(t, "tool 1.2.3", CommandVersion(chatty, "--version"))
 
+	// A timeout also gives "unknown". The first start above makes sure that
+	// these two cases get "unknown" from their output, not from the limit.
 	silent := filepath.Join(dir, "silent")
-	require.NoError(t, os.WriteFile(silent, []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	writeStartedScript(t, silent, "#!/bin/sh\nexit 0\n")
 	assert.Equal(t, "unknown", CommandVersion(silent, "--version"))
 
 	failing := filepath.Join(dir, "failing")
-	require.NoError(t, os.WriteFile(failing, []byte("#!/bin/sh\necho oops\nexit 2\n"), 0o755))
+	writeStartedScript(t, failing, "#!/bin/sh\necho oops\nexit 2\n")
 	assert.Equal(t, "unknown", CommandVersion(failing, "--version"))
 
 	assert.Equal(t, "unknown", CommandVersion(filepath.Join(dir, "absent")))

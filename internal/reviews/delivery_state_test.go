@@ -5,9 +5,12 @@ package reviews
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -206,7 +209,7 @@ func TestHookDeliveryStateVersionTwoStopsAnOlderBinary(t *testing.T) {
 	root := t.TempDir()
 
 	lease, err := BeginContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "session"},
-		[]model.Lesson{{Region: "api", Symptom: "lesson"}})
+		unversionedItems([]model.Lesson{{Region: "api", Symptom: "lesson"}}))
 	require.NoError(t, err)
 	require.NoError(t, lease.Commit())
 	require.NoError(t, lease.Close())
@@ -277,6 +280,563 @@ func TestHookDeliveryStateDiscardsVersionOneEntries(t *testing.T) {
 	assert.Contains(t, string(raw), `"version":2`)
 }
 
+// deliverItems runs one lease over items and commits it. It returns what
+// the lease injected.
+func deliverItems(t *testing.T, root string, dc DeliveryContext, items []DeliveryItem) []model.Lesson {
+	t.Helper()
+
+	lease, err := BeginContextDelivery(root, dc, items)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, lease.Close()) }()
+
+	require.NoError(t, lease.Commit())
+
+	return lease.Inject()
+}
+
+func TestContextDeliveryKeysAPinByItsVersion(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	lesson := model.Lesson{Region: "api", Symptom: "frozen-assets — one text for two versions"}
+
+	first := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("a", 64)}
+	second := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("b", 64)}
+
+	assert.Len(t, deliverItems(t, root, dc, []DeliveryItem{first}), 1)
+	assert.Empty(t, deliverItems(t, root, dc, []DeliveryItem{first}), "one version reaches a context once")
+	assert.Len(t, deliverItems(t, root, dc, []DeliveryItem{second}), 1, "a new version of one text is new to the context")
+	assert.Empty(t, deliverItems(t, root, dc, []DeliveryItem{first}), "the context keeps the earlier version")
+
+	// A failed reply commits nothing, so the new version stays eligible.
+	third := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("c", 64)}
+
+	lease, err := BeginContextDelivery(root, dc, []DeliveryItem{third})
+	require.NoError(t, err)
+	assert.Len(t, lease.Inject(), 1)
+	require.NoError(t, lease.Close())
+	assert.Len(t, deliverItems(t, root, dc, []DeliveryItem{third}), 1)
+
+	require.NoError(t, ResetContextDelivery(root, dc))
+	assert.Len(t, deliverItems(t, root, dc, []DeliveryItem{first}), 1, "a reset clears every version")
+
+	other := DeliveryContext{ClientID: "claude", ReceiverID: "child"}
+	assert.Len(t, deliverItems(t, root, other, []DeliveryItem{first}), 1, "a version in one context hides nothing in another")
+}
+
+// TestContextDeliveryKeepsOneItemPerEvent proves the dedupe within one
+// lease. A repeated pin version and a repeated mined lesson each go out once.
+func TestContextDeliveryKeepsOneItemPerEvent(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin"}, PinVersion: strings.Repeat("a", 64)}
+	mined := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "RUF001"}}
+
+	lease, err := BeginContextDelivery(root, dc, []DeliveryItem{pin, pin, mined, mined})
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, lease.Close()) }()
+
+	assert.Equal(t, []model.Lesson{pin.Lesson, mined.Lesson}, lease.Inject())
+	assert.Equal(t, []model.Lesson{pin.Lesson, mined.Lesson}, lease.Suppressed())
+}
+
+// TestContextDeliveryNamesTheInjectedPinVersions proves the list that names
+// the pins of an event. One lesson text cannot do that, because two
+// versions of a pin can render it. A mined lesson has no entry in the list.
+func TestContextDeliveryNamesTheInjectedPinVersions(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	lesson := model.Lesson{Region: "api", Symptom: "one text"}
+	delivered := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("a", 64)}
+	fresh := DeliveryItem{Lesson: lesson, PinVersion: strings.Repeat("b", 64)}
+	mined := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "RUF001"}}
+
+	require.Len(t, deliverItems(t, root, dc, []DeliveryItem{delivered}), 1)
+
+	lease, err := BeginContextDelivery(root, dc, []DeliveryItem{delivered, fresh, fresh, mined})
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, lease.Close()) }()
+
+	assert.Equal(t, []string{fresh.PinVersion}, lease.InjectedPinVersions())
+	assert.Equal(t, []model.Lesson{lesson, mined.Lesson}, lease.Inject())
+	assert.Equal(t, []model.Lesson{lesson, lesson}, lease.Suppressed())
+}
+
+// TestContextDeliveryFailsSafeOverEarlierContentKeys holds the upgrade
+// rule. A file from a binary with content keys for pins stays readable. A
+// pin in it is delivered once more and never hidden. A mined lesson keeps
+// its entry. The rewritten file keeps the shape that an older binary reads.
+func TestContextDeliveryFailsSafeOverEarlierContentKeys(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".seamark")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+	mined := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "RUF001"}}
+
+	// The state of an earlier binary: both lessons are delivered under
+	// their content digests, at generation 4.
+	earlier := fmt.Sprintf(
+		`{"version":2,"contexts":{%q:{"generation":4,"updated_at":%q,"delivered":{%q:true,%q:true}}}}`,
+		contextDigest(root, dc), time.Now().UTC().Format(time.RFC3339),
+		lessonDeliveryDigest(pin.Lesson), lessonDeliveryDigest(mined.Lesson))
+	path := filepath.Join(dir, deliveryStateFile)
+	require.NoError(t, os.WriteFile(path, []byte(earlier+"\n"), 0o600))
+
+	lease, err := BeginContextDelivery(root, dc, []DeliveryItem{pin, mined})
+	require.NoError(t, err)
+	assert.Equal(t, []model.Lesson{pin.Lesson}, lease.Inject(), "at worst a pin is delivered again")
+	assert.Equal(t, []model.Lesson{mined.Lesson}, lease.Suppressed(), "a mined lesson keeps its entry")
+	assert.Equal(t, uint64(4), lease.Generation(), "the context keeps its generation")
+	require.NoError(t, lease.Commit())
+	require.NoError(t, lease.Close())
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"version":2`)
+
+	// The file has no new field, so the strict reader of an older binary
+	// accepts it. Its digest finds no entry for the new key, and the older
+	// binary delivers again instead of hiding the pin.
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+
+	var older struct {
+		Version  int `json:"version"`
+		Contexts map[string]struct {
+			Generation uint64          `json:"generation"`
+			UpdatedAt  time.Time       `json:"updated_at"`
+			Delivered  map[string]bool `json:"delivered"`
+		} `json:"contexts"`
+	}
+
+	require.NoError(t, decoder.Decode(&older))
+
+	delivered := older.Contexts[contextDigest(root, dc)].Delivered
+	assert.True(t, delivered[pin.digest()])
+	assert.NotEqual(t, lessonDeliveryDigest(pin.Lesson), pin.digest())
+
+	assert.Empty(t, deliverItems(t, root, dc, []DeliveryItem{pin, mined}), "suppression works under the new key")
+}
+
+func TestContextDeliveryOpenReadsTheDeliveredSet(t *testing.T) {
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+	other := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "other text"}, PinVersion: strings.Repeat("b", 64)}
+	mined := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "RUF001"}}
+
+	t.Run("an open writes no state and selects nothing", func(t *testing.T) {
+		root := t.TempDir()
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+		assert.False(t, lease.PinDelivered(pin.PinVersion))
+		assert.Equal(t, uint64(1), lease.Generation())
+		assert.Empty(t, lease.Inject())
+		assert.Empty(t, lease.Suppressed())
+		require.NoError(t, lease.Commit(), "a commit with no selection has nothing to mark")
+		require.NoError(t, lease.Close())
+
+		assert.NoFileExists(t, filepath.Join(root, ".seamark", deliveryStateFile))
+	})
+
+	t.Run("the set names the exact version of this context", func(t *testing.T) {
+		root := t.TempDir()
+		deliverItems(t, root, dc, []DeliveryItem{pin, mined})
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+		assert.True(t, lease.PinDelivered(pin.PinVersion))
+		assert.False(t, lease.PinDelivered(other.PinVersion), "a new version stays eligible")
+		assert.False(t, lease.PinDelivered(mined.digest()), "a mined key is not a pin version")
+		require.NoError(t, lease.Close())
+
+		lease, err = OpenContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "other"})
+		require.NoError(t, err)
+		assert.False(t, lease.PinDelivered(pin.PinVersion), "another receiver has its own set")
+		require.NoError(t, lease.Close())
+
+		require.NoError(t, ResetContextDelivery(root, dc))
+
+		lease, err = OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+		assert.False(t, lease.PinDelivered(pin.PinVersion), "a reset empties the set")
+		require.NoError(t, lease.Close())
+	})
+
+	t.Run("a content key of an earlier binary matches nothing", func(t *testing.T) {
+		root := t.TempDir()
+		dir := filepath.Join(root, ".seamark")
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+
+		// The state holds the content key of the pin text, and also the
+		// bare version, which no scheme ever wrote.
+		earlier := fmt.Sprintf(
+			`{"version":2,"contexts":{%q:{"generation":4,"updated_at":%q,"delivered":{%q:true,%q:true}}}}`,
+			contextDigest(root, dc), time.Now().UTC().Format(time.RFC3339),
+			lessonDeliveryDigest(pin.Lesson), pin.PinVersion)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, deliveryStateFile), []byte(earlier+"\n"), 0o600))
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+		assert.False(t, lease.PinDelivered(pin.PinVersion), "at worst a pin repeats once")
+		assert.Equal(t, uint64(4), lease.Generation(), "the context keeps its generation")
+		require.NoError(t, lease.Close())
+	})
+
+	t.Run("select after an open equals one begin", func(t *testing.T) {
+		root := t.TempDir()
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+
+		items := []DeliveryItem{pin, other, other, mined}
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		lease.Select(items)
+		assert.Equal(t, []model.Lesson{other.Lesson, mined.Lesson}, lease.Inject())
+		assert.Equal(t, []model.Lesson{pin.Lesson, other.Lesson}, lease.Suppressed())
+		assert.Equal(t, []string{other.PinVersion}, lease.InjectedPinVersions())
+		require.NoError(t, lease.Close(), "closing without commit marks nothing")
+
+		begun, err := BeginContextDelivery(root, dc, items)
+		require.NoError(t, err)
+		assert.Equal(t, []model.Lesson{other.Lesson, mined.Lesson}, begun.Inject())
+		assert.Equal(t, []model.Lesson{pin.Lesson, other.Lesson}, begun.Suppressed())
+		assert.Equal(t, []string{other.PinVersion}, begun.InjectedPinVersions())
+		require.NoError(t, begun.Close())
+	})
+
+	t.Run("an open keeps one lock attempt", func(t *testing.T) {
+		root := t.TempDir()
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		start := time.Now()
+		_, err = OpenContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "other"})
+		require.Error(t, err, "lock contention must return so the hook can fail open")
+		assert.Less(t, time.Since(start), 200*time.Millisecond, "a lease never takes the wait of a reset")
+	})
+
+	t.Run("a partial identity opens nothing", func(t *testing.T) {
+		root := t.TempDir()
+
+		_, err := OpenContextDelivery(root, DeliveryContext{ClientID: "claude"})
+		require.Error(t, err)
+		assert.NoDirExists(t, filepath.Join(root, ".seamark"))
+	})
+}
+
+// leaseHold is the time that a lease of another context holds the lock in
+// the wait tests. It is longer than 200 ms and shorter than the reset wait.
+// A series of subagent leases can hold the lock this long.
+const leaseHold = 500 * time.Millisecond
+
+// TestContextDeliveryResetWaitsForALease shows that a reset waits for a
+// lease of another context. One lock covers every context of the file. A
+// reset that fails keeps the delivered pins hidden after a compaction until
+// the TTL ends.
+func TestContextDeliveryResetWaitsForALease(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session-one"}
+	other := DeliveryContext{ClientID: "claude", ReceiverID: "session-two"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+
+	deliverItems(t, root, dc, []DeliveryItem{pin})
+
+	// The other context holds its lease as a parallel root session does:
+	// begin, an emit, commit, and close.
+	held := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		lease, err := BeginContextDelivery(root, other, []DeliveryItem{pin})
+		close(held)
+
+		if err != nil {
+			done <- err
+
+			return
+		}
+
+		time.Sleep(leaseHold)
+
+		commitErr := lease.Commit()
+		done <- errors.Join(commitErr, lease.Close())
+	}()
+
+	<-held
+
+	generation, resetErr := ResetContextGeneration(root, dc)
+	require.NoError(t, <-done, "the other context commits its lease")
+	require.NoError(t, resetErr, "a reset waits for a lease of another context")
+	assert.Equal(t, uint64(2), generation)
+
+	lease, err := OpenContextDelivery(root, dc)
+	require.NoError(t, err)
+	assert.False(t, lease.PinDelivered(pin.PinVersion), "the reset restores the pin")
+	assert.Equal(t, uint64(2), lease.Generation())
+	require.NoError(t, lease.Close())
+
+	// The reset reads the file after the commit of the other context, so
+	// it keeps that commit.
+	lease, err = OpenContextDelivery(root, other)
+	require.NoError(t, err)
+	assert.True(t, lease.PinDelivered(pin.PinVersion))
+	require.NoError(t, lease.Close())
+}
+
+// TestContextDeliveryResetFailsAfterTheWait shows that the wait has a
+// bound, so a held lock never stops the reset hook. The state file keeps
+// its bytes, because the reset fails before it reads the file.
+func TestContextDeliveryResetFailsAfterTheWait(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session-one"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+
+	deliverItems(t, root, dc, []DeliveryItem{pin})
+
+	path := filepath.Join(root, ".seamark", deliveryStateFile)
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	lease, err := OpenContextDelivery(root, dc)
+	require.NoError(t, err)
+
+	start := time.Now()
+	generation, err := ResetContextGeneration(root, dc)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "a lease that outlasts the wait fails the reset")
+	assert.Zero(t, generation)
+	assert.GreaterOrEqual(t, elapsed, deliveryResetLockWait, "the reset waits before it fails")
+	assert.Less(t, elapsed, 5*time.Second, "the wait has a bound")
+	require.NoError(t, lease.Close())
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}
+
+// TestResetWaitsMatchInBothStates holds the wait of each real reset, not
+// only the two constants. Both resets of one compaction follow one rule, so
+// each state runs one case. The bound is a literal, because a bound that a
+// test reads from the constant cannot show the value of the constant.
+func TestResetWaitsMatchInBothStates(t *testing.T) {
+	const wait = 2 * time.Second
+
+	assert.Equal(t, wait, deliveryResetLockWait)
+	assert.Equal(t, exploreResetLockWait, deliveryResetLockWait)
+
+	t.Run("the edit reset", func(t *testing.T) {
+		root := t.TempDir()
+		dc := DeliveryContext{ClientID: "claude", ReceiverID: "session-one"}
+		pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		requireResetTakes(t, wait, func() error {
+			_, err := ResetContextGeneration(root, dc)
+
+			return err
+		})
+	})
+
+	t.Run("the exploration reset", func(t *testing.T) {
+		root := t.TempDir()
+		items := exploreTestItems()
+
+		commitExplore(t, root, exploreTestContext, items)
+
+		lease, err := BeginExploreDelivery(root, exploreTestContext, items)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		requireResetTakes(t, wait, func() error {
+			_, err := ResetExploreDelivery(root, exploreTestContext)
+
+			return err
+		})
+	})
+}
+
+// requireResetTakes runs a reset against a lock that stays held, and holds
+// the time of its failure between wait and one and a half times wait. A reset
+// returns only after its wait, so a longer wait fails every attempt. A slow
+// run only adds time, so one attempt under the limit is enough proof.
+func requireResetTakes(t *testing.T, wait time.Duration, reset func() error) {
+	t.Helper()
+
+	const attempts = 10
+
+	limit := wait + wait/2
+	fastest := time.Hour
+
+	for attempt := 0; attempt < attempts && fastest >= limit; attempt++ {
+		start := time.Now()
+		err := reset()
+		elapsed := time.Since(start)
+
+		require.ErrorIs(t, err, syscall.EWOULDBLOCK, "only a held lock measures the wait")
+		require.GreaterOrEqual(t, elapsed, wait, "the reset waits before it fails")
+
+		fastest = min(fastest, elapsed)
+	}
+
+	assert.Less(t, fastest, limit, "the reset takes no more than its own wait")
+}
+
+// ageDeliveryEntries moves every entry of the state file back by age. A
+// lease reads the wall clock, so the test moves the stored time. The
+// commit that wrote that time stays real.
+func ageDeliveryEntries(t *testing.T, root string, age time.Duration) {
+	t.Helper()
+
+	path := filepath.Join(root, ".seamark", deliveryStateFile)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var state deliveryState
+	require.NoError(t, json.Unmarshal(raw, &state))
+	require.NotEmpty(t, state.Contexts, "the state holds no entry to age")
+
+	for key, entry := range state.Contexts {
+		entry.UpdatedAt = entry.UpdatedAt.Add(-age)
+		state.Contexts[key] = entry
+	}
+
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+}
+
+// TestContextDeliveryLeaseAppliesTheTTL holds what restores eligibility one
+// day after the last commit. Compaction can happen with no reset hook, so the
+// age of an entry is the last way for a pin to reach the context again. Every
+// age here is a literal, because an age that a test computes from the constant
+// cannot show the value of the constant. Each entry comes from a real commit,
+// so the age of an entry is also the time since that commit.
+func TestContextDeliveryLeaseAppliesTheTTL(t *testing.T) {
+	const (
+		oneDay = 24 * time.Hour
+		// margin keeps the wall clock of a slow run away from the limit.
+		margin = time.Minute
+	)
+
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session"}
+	pin := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "pin text"}, PinVersion: strings.Repeat("a", 64)}
+	later := DeliveryItem{Lesson: model.Lesson{Region: "api", Symptom: "later text"}, PinVersion: strings.Repeat("b", 64)}
+
+	// commitInGenerationTwo delivers pin after one reset. The generation
+	// then tells a kept entry from a new context, which starts at 1.
+	commitInGenerationTwo := func(t *testing.T, root string) {
+		t.Helper()
+
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+
+		generation, err := ResetContextGeneration(root, dc)
+		require.NoError(t, err)
+		require.Equal(t, uint64(2), generation)
+
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+	}
+
+	// delivered reports whether the next lease of dc reads the version.
+	delivered := func(t *testing.T, root string, item DeliveryItem) bool {
+		t.Helper()
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		return lease.PinDelivered(item.PinVersion)
+	}
+
+	t.Run("an entry just older than one day goes", func(t *testing.T) {
+		root := t.TempDir()
+		commitInGenerationTwo(t, root)
+		ageDeliveryEntries(t, root, oneDay+margin)
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		assert.False(t, lease.PinDelivered(pin.PinVersion))
+		assert.Equal(t, uint64(1), lease.Generation(), "the context starts again, as a new context does")
+
+		lease.Select([]DeliveryItem{pin})
+		assert.Equal(t, []model.Lesson{pin.Lesson}, lease.Inject())
+	})
+
+	t.Run("an entry just younger than one day stays", func(t *testing.T) {
+		root := t.TempDir()
+		commitInGenerationTwo(t, root)
+		ageDeliveryEntries(t, root, oneDay-margin)
+
+		lease, err := OpenContextDelivery(root, dc)
+		require.NoError(t, err)
+
+		defer func() { require.NoError(t, lease.Close()) }()
+
+		assert.True(t, lease.PinDelivered(pin.PinVersion))
+		assert.Equal(t, uint64(2), lease.Generation())
+	})
+
+	t.Run("a later commit restarts the age", func(t *testing.T) {
+		root := t.TempDir()
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+		ageDeliveryEntries(t, root, 23*time.Hour)
+
+		require.Len(t, deliverItems(t, root, dc, []DeliveryItem{later}), 1)
+		ageDeliveryEntries(t, root, 2*time.Hour)
+
+		// One entry holds both versions, so the second commit keeps the
+		// first version 25 hours after its own commit.
+		assert.True(t, delivered(t, root, pin), "the age runs from the last commit, not the first")
+		assert.True(t, delivered(t, root, later))
+
+		ageDeliveryEntries(t, root, 22*time.Hour+margin)
+
+		assert.False(t, delivered(t, root, pin), "one day after the last commit the entry goes")
+		assert.False(t, delivered(t, root, later))
+	})
+
+	t.Run("a lease that marks nothing keeps the age", func(t *testing.T) {
+		root := t.TempDir()
+		deliverItems(t, root, dc, []DeliveryItem{pin})
+		ageDeliveryEntries(t, root, 23*time.Hour)
+
+		// The commit of a suppressed pin marks nothing. If it restarted the
+		// age, a busy context would never receive the pin again.
+		require.Empty(t, deliverItems(t, root, dc, []DeliveryItem{pin}))
+
+		// A failed reply closes the lease with no commit.
+		lease, err := BeginContextDelivery(root, dc, []DeliveryItem{later})
+		require.NoError(t, err)
+		require.Len(t, lease.Inject(), 1)
+		require.NoError(t, lease.Close())
+
+		ageDeliveryEntries(t, root, 2*time.Hour)
+
+		assert.False(t, delivered(t, root, pin), "25 hours after the last commit the entry goes")
+	})
+}
+
 func TestContextDeliverySeparatesClientsAndReceivers(t *testing.T) {
 	root := t.TempDir()
 	lessons := []model.Lesson{{Region: "api", Symptom: "lesson"}}
@@ -284,7 +844,7 @@ func TestContextDeliverySeparatesClientsAndReceivers(t *testing.T) {
 	deliver := func(receiver DeliveryContext) int {
 		t.Helper()
 
-		lease, err := BeginContextDelivery(root, receiver, lessons)
+		lease, err := BeginContextDelivery(root, receiver, unversionedItems(lessons))
 		require.NoError(t, err)
 		require.NoError(t, lease.Commit())
 		require.NoError(t, lease.Close())
@@ -328,7 +888,7 @@ func TestContextDeliveryRefusesAPartialIdentity(t *testing.T) {
 	partial := []DeliveryContext{{}, {ClientID: "claude"}, {ReceiverID: "session"}}
 
 	for _, dc := range partial {
-		_, err := BeginContextDelivery(root, dc, lessons)
+		_, err := BeginContextDelivery(root, dc, unversionedItems(lessons))
 		require.Error(t, err, "%+v", dc)
 		require.NoError(t, ResetContextDelivery(root, dc), "a partial identity resets nothing")
 	}
@@ -337,7 +897,7 @@ func TestContextDeliveryRefusesAPartialIdentity(t *testing.T) {
 
 	// The rule matters most when state exists: a reset with a partial
 	// identity must not rewrite the file or add an entry to it.
-	lease, err := BeginContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "session"}, lessons)
+	lease, err := BeginContextDelivery(root, DeliveryContext{ClientID: "claude", ReceiverID: "session"}, unversionedItems(lessons))
 	require.NoError(t, err)
 	require.NoError(t, lease.Commit())
 	require.NoError(t, lease.Close())
@@ -353,4 +913,57 @@ func TestContextDeliveryRefusesAPartialIdentity(t *testing.T) {
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.Equal(t, string(before), string(after))
+}
+
+func TestResetContextGenerationReportsTheNewGeneration(t *testing.T) {
+	root := t.TempDir()
+	dc := DeliveryContext{ClientID: "claude", ReceiverID: "session-one"}
+	lessons := []model.Lesson{{Region: "api", Symptom: "sync the generated client"}}
+
+	// Without state, nothing resets and nothing is created.
+	generation, err := ResetContextGeneration(root, dc)
+	require.NoError(t, err)
+	assert.Zero(t, generation)
+	assert.NoDirExists(t, filepath.Join(root, ".seamark"))
+
+	lease, err := BeginContextDelivery(root, dc, unversionedItems(lessons))
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1), lease.Generation())
+	require.NoError(t, lease.Commit())
+	require.NoError(t, lease.Close())
+
+	// Each reset reports the generation that the next lease reads.
+	for _, want := range []uint64{2, 3} {
+		generation, err = ResetContextGeneration(root, dc)
+		require.NoError(t, err)
+		assert.Equal(t, want, generation)
+
+		lease, err = BeginContextDelivery(root, dc, unversionedItems(lessons))
+		require.NoError(t, err)
+		assert.Equal(t, want, lease.Generation())
+		assert.Equal(t, lessons, lease.Inject(), "the reset restores the delivered lesson")
+		require.NoError(t, lease.Close())
+	}
+
+	// A partial identity resets nothing and reports no generation.
+	for _, partial := range []DeliveryContext{{ClientID: "claude"}, {ReceiverID: "session-one"}} {
+		generation, err = ResetContextGeneration(root, partial)
+		require.NoError(t, err)
+		assert.Zero(t, generation)
+	}
+
+	// The wrapper keeps its API and advances the same counter.
+	require.NoError(t, ResetContextDelivery(root, dc))
+
+	generation, err = ResetContextGeneration(root, dc)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(5), generation)
+
+	// A state that cannot be read reports its error and no generation.
+	path := filepath.Join(root, ".seamark", deliveryStateFile)
+	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
+
+	generation, err = ResetContextGeneration(root, dc)
+	require.Error(t, err)
+	assert.Zero(t, generation)
 }

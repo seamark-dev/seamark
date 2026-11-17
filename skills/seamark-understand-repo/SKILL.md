@@ -4,7 +4,7 @@ description: Maps an unfamiliar repository, module, or subsystem when asked to u
 license: Apache-2.0
 metadata:
   seamark: managed
-allowed-tools: mcp__seamark__orient mcp__seamark__why mcp__seamark__change_set mcp__seamark__check mcp__seamark__expand Bash(seamark orient*) Bash(seamark why *) Bash(seamark check*) Bash(seamark status*) Bash(seamark lessons --file *) Bash(seamark lessons --region *)
+allowed-tools: mcp__seamark__orient mcp__seamark__why mcp__seamark__change_set mcp__seamark__check mcp__seamark__expand Bash(seamark orient*) Bash(seamark why *) Bash(seamark check*) Bash(seamark status*) Bash(seamark lessons --file *) Bash(seamark lessons --region *) Bash(seamark lessons --prepare *) Bash(seamark lessons --verify) Bash(seamark lessons --verify --json*) Bash(seamark lessons --verify --file *)
 ---
 
 # Understand a repository with Seamark
@@ -20,7 +20,7 @@ Do not use it, and make no Seamark call, when:
 - the task is to implement, add, expose, change, refactor, or fix something, in a familiar area or not; `seamark-plan-change` owns that request and calls `orient` itself when the area is new, so two skills never race for one prompt;
 - the question is a pinpoint lookup of a known file or symbol ("what does X return", "where is Y defined"); a direct read or a search answers it;
 - the task is a typo, a comment, or a formatting edit;
-- the task is a one-file change in an area you already understand; start from the file, and let `seamark-plan-change` decide whether `change_set` is worth a call.
+- the task is a one-file change in an area you already understand; start from the file, and let `seamark-plan-change` prepare it with `change_set`, because a pin or a lesson check can cover one file.
 
 Never call `orient` because Seamark exists. Call it once, when the repository or the subsystem is unfamiliar, and not again in the same session.
 
@@ -28,7 +28,7 @@ Never call `orient` because Seamark exists. Call it once, when the repository or
 
 1. **Call the Seamark MCP server's `orient` tool once.** It costs one screen and shows scale, modules by symbol count, the most-called API, the change hubs (files whose edits rarely travel alone), recent decisions, and the lessons reviewers keep flagging. Note the `WARN` line when present: files that failed to parse are invisible in every answer that follows.
 2. **Pick what the question needs.** From the overview choose the modules, hubs, load-bearing symbols, and recent decisions that bear on the question. Ignore the rest; the value of the overview is choosing where not to look.
-3. **Call the Seamark MCP server's `why` tool on each of those.** For a symbol it shows the definition, the callers and callees with how each edge was derived, the files that usually change with it, and the commits that explain it. For a file it shows what the file defines, its co-change partners with the functions that moved, and the decision trail. Read the co-change and the decisions, not only the call graph; that is where the surprises live.
+3. **Call the Seamark MCP server's `why` tool on each of those.** For a symbol it shows the definition, the callers and callees with how each edge was derived, and the history of the file that defines it: the files that usually change with that file and the commits that explain it. Every symbol of one file shows the same history, so read it as file history. For a file it shows what the file defines, its co-change partners with the functions that moved, and the decision trail. Read the co-change and the decisions, not only the call graph; that is where the surprises live.
 4. **Call `expand` only for a ref you need to read.** Turn a symbol or a `file:start-end` ref from a report into source lines instead of opening whole files. Use `lessons:<dir>` when a lesson is too terse and you want the raw review findings for an area.
 5. **Read source selectively.** Open a file directly when you already know it matters. The index decides where; the source decides what.
 6. **Report in three labeled parts.** What is known from parsed structure (definitions, resolved calls, effects); what is empirical from history (co-change with its lift, decisions, lessons); and what the index cannot see (the parse warning, unindexed files, `[unique-name]` edges, and the coverage from `seamark status`). Keep the labels apart so the reader knows how much to trust each claim.

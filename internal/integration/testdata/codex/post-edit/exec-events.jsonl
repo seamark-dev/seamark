@@ -1,0 +1,31 @@
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"file_change","changes":[{"path":"/workspace/native/sentinel/locked/new.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"file_change","changes":[{"path":"/workspace/native/sentinel/locked/new.txt","kind":"add"}],"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"none"}}
+{"type":"turn.completed","usage":{"input_tokens":30657,"cached_input_tokens":26112,"cache_write_input_tokens":0,"output_tokens":311,"reasoning_output_tokens":238}}
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000002"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":""}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/native/sentinel/slow-post.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/native/sentinel/slow-post.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"04272dab8b19"}}
+{"type":"turn.completed","usage":{"input_tokens":30668,"cached_input_tokens":21632,"cache_write_input_tokens":0,"output_tokens":434,"reasoning_output_tokens":372}}
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000003"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":""}}
+{"type":"item.started","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"10000000-0000-4000-8000-000000000003","receiver_thread_ids":[],"prompt":"Use apply_patch once to add the new file sentinel/slow-post-child.txt with the single line: child. Do not retry the call or try another way. Reply with one line: the check id that a seamark post-edit message named after the call, or the single word none when no such message came.","agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"10000000-0000-4000-8000-000000000003","receiver_thread_ids":["10000000-0000-4000-8000-000000000004"],"prompt":"Use apply_patch once to add the new file sentinel/slow-post-child.txt with the single line: child. Do not retry the call or try another way. Reply with one line: the check id that a seamark post-edit message named after the call, or the single word none when no such message came.","agents_states":{"10000000-0000-4000-8000-000000000004":{"status":"pending_init","message":null}},"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"collab_tool_call","tool":"wait","sender_thread_id":"10000000-0000-4000-8000-000000000003","receiver_thread_ids":["10000000-0000-4000-8000-000000000004"],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"collab_tool_call","tool":"wait","sender_thread_id":"10000000-0000-4000-8000-000000000003","receiver_thread_ids":["10000000-0000-4000-8000-000000000004"],"prompt":null,"agents_states":{"10000000-0000-4000-8000-000000000004":{"status":"completed","message":"04272dab8b19"}},"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"collab_tool_call","tool":"close_agent","sender_thread_id":"10000000-0000-4000-8000-000000000003","receiver_thread_ids":["10000000-0000-4000-8000-000000000004"],"prompt":null,"agents_states":{},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"collab_tool_call","tool":"close_agent","sender_thread_id":"10000000-0000-4000-8000-000000000003","receiver_thread_ids":["10000000-0000-4000-8000-000000000004"],"prompt":null,"agents_states":{"10000000-0000-4000-8000-000000000004":{"status":"completed","message":"04272dab8b19"}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"04272dab8b19"}}
+{"type":"turn.completed","usage":{"input_tokens":89178,"cached_input_tokens":80896,"cache_write_input_tokens":0,"output_tokens":324,"reasoning_output_tokens":51}}
+{"type":"thread.started","thread_id":"10000000-0000-4000-8000-000000000005"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":""}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/native/sentinel/post-timeout.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/native/sentinel/post-timeout.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"none"}}
+{"type":"turn.completed","usage":{"input_tokens":30526,"cached_input_tokens":26112,"cache_write_input_tokens":0,"output_tokens":221,"reasoning_output_tokens":164}}

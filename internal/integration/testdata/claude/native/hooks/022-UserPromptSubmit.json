@@ -1,0 +1,10 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000002",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000002.jsonl",
+  "cwd": "/workspace/native",
+  "scratchpad_dir": "/tmp/claude-tasks/-workspace-native/10000000-0000-4000-8000-000000000002/scratchpad",
+  "prompt_id": "20000000-0000-4000-8000-000000000004",
+  "permission_mode": "auto",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": " Read the file sample.png and tell me its size"
+}

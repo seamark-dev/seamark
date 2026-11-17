@@ -1,30 +1,26 @@
 package integration
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"unicode"
 )
 
-// The Codex names this codec reads and writes. Codex reports every file
-// edit as the apply_patch tool, also when the installed matcher says
-// Edit or Write.
+// These are the Codex names that this codec reads and writes. Codex
+// reports every file edit as the apply_patch tool, also when the
+// installed matcher says Edit or Write.
 const (
 	codexApplyPatch  = "apply_patch"
 	codexPreToolUse  = "PreToolUse"
 	codexPostCompact = "PostCompact"
-	// codexAdviceMechanism names the reply path of codexEdits: the
-	// additionalContext field of a PreToolUse hook reply.
-	codexAdviceMechanism = "pre-tool-use-context"
 )
 
-// The markers of the apply_patch text. The rules in applyPatchPaths
+// The markers of the apply_patch text. The rules in applyPatchOps
 // follow the parser of codex-cli 0.154.0 (codex-rs/apply-patch, tag
-// rust-v0.154.0), not the shorter grammar that Codex shows to the model:
-// the parser accepts more than that grammar says, and the hook must read
-// what the parser reads.
+// rust-v0.154.0). They do not follow the shorter grammar that Codex
+// shows to the model. The parser accepts more than that grammar says,
+// and the hook must read what the parser reads.
 const (
 	patchHeaderPrefix = "***"
 	patchBegin        = "*** Begin Patch"
@@ -43,33 +39,24 @@ type codexEdits struct{}
 // codexResets translates the Codex PostCompact event.
 type codexResets struct{}
 
-// codexAdvice is the PreToolUse reply shape. Codex adds
-// additionalContext to the model context and does not block the tool.
-type codexAdvice struct {
-	HookSpecificOutput struct {
-		HookEventName     string `json:"hookEventName"`
-		AdditionalContext string `json:"additionalContext"`
-	} `json:"hookSpecificOutput"`
-}
-
 // DecodeEdit reads the complete path set of one apply_patch event. It
 // parses the patch text and never runs it. An event of another tool
 // gives ErrNotApplicable.
 //
-// The decoder reads no receiving context yet, so suppression stays off
-// and the advice repeats. This is a policy, not a limit of the event. A
-// native run of codex-cli 0.154.0 showed that an edit inside a subagent
-// carries agent_id and agent_type with the session id of its parent. A
-// parent edit carries no agent_id. The event therefore names its
-// receiver. Only a manual compaction of the parent was observed. An
-// automatic compaction, a compaction inside a subagent, and nested
-// subagents are unverified. A receiver needs a verified reset policy,
-// so this decoder and DecodeReset change together when a native check
-// establishes one. The session id still reaches the firing log as a
-// digest.
+// The decoder names the receiver from session_id and agent_id, by the
+// rules of ReceivingContextOf. That context is never resettable, because
+// no reset of a Codex context is verified. So suppression stays off, and
+// the advice repeats. The lane still reaches the firing log. This
+// decoder and DecodeReset change together when a native check
+// establishes a reset policy.
+//
+// turn_id is the turn. The decoder reads identity from the top-level
+// fields only, never from the patch text.
 func (codexEdits) DecodeEdit(payload []byte) (EditEvent, error) {
 	var native struct {
 		SessionID string `json:"session_id"`
+		AgentID   string `json:"agent_id"`
+		TurnID    string `json:"turn_id"`
 		CWD       string `json:"cwd"`
 		ToolUseID string `json:"tool_use_id"`
 		ToolName  string `json:"tool_name"`
@@ -101,37 +88,32 @@ func (codexEdits) DecodeEdit(payload []byte) (EditEvent, error) {
 			MatchID:    native.ToolUseID,
 			NativeTool: native.ToolName,
 			CWD:        native.CWD,
+			Context:    ReceivingContextOf(CodexID, native.SessionID, native.AgentID),
+			Turn:       native.TurnID,
 		},
 		Paths: paths,
 	}, nil
 }
 
-// EncodeAdvice wraps the advisory text in the PreToolUse reply.
+// EncodeAdvice wraps the advisory text in the PreToolUse reply. Codex
+// adds additionalContext to the model context and does not block the
+// tool.
 func (codexEdits) EncodeAdvice(text string) (HookReply, error) {
-	var reply codexAdvice
-
-	reply.HookSpecificOutput.HookEventName = codexPreToolUse
-	reply.HookSpecificOutput.AdditionalContext = text
-
-	var out bytes.Buffer
-	if err := json.NewEncoder(&out).Encode(reply); err != nil {
-		return HookReply{}, err
-	}
-
-	return HookReply{Stdout: out.Bytes()}, nil
+	return encodeContextReply(codexPreToolUse, text)
 }
 
 // AdviceMechanism returns the reply path that the firing log records.
-func (codexEdits) AdviceMechanism() string { return codexAdviceMechanism }
+func (codexEdits) AdviceMechanism() string { return preToolUseContextMechanism }
 
-// DecodeReset reads a PostCompact event. The result names no context:
-// DecodeEdit reads no receiver yet, so no suppression state exists for
-// a Codex context, and a reset has nothing to clear. Setup installs no
-// PostCompact hook for Codex, because a hook without an effect still
-// costs a trust review. The command `lessons --hook-reset --client
-// codex` still runs this decoder, so a hook that a user wires stays
-// valid. When a native check establishes the reset policy of each
-// receiver, the edit decoder and this decoder change together.
+// DecodeReset reads a PostCompact event. The result names no context.
+// DecodeEdit names a receiver, but that receiver is never resettable. So
+// no suppression state exists for a Codex context, and a reset has
+// nothing to clear. Setup installs no PostCompact hook for Codex,
+// because a hook without an effect still costs a trust review. The
+// command `lessons --hook-reset --client codex` still runs this decoder,
+// so a hook that a user wires stays valid. When a native check
+// establishes the reset policy of each receiver, the edit decoder and
+// this decoder change together.
 func (codexResets) DecodeReset(payload []byte) (ResetEvent, error) {
 	var native struct {
 		Event string `json:"hook_event_name"`
@@ -149,80 +131,22 @@ func (codexResets) DecodeReset(payload []byte) (ResetEvent, error) {
 }
 
 // applyPatchPaths returns every path that an apply_patch text affects,
-// in patch order: the file of each add, update, and delete hunk, and the
-// destination of each move after its source. Repeated paths stay; the
-// shared normalization removes them.
+// in patch order. These are the file of each add, update, and delete
+// hunk, and the destination of each move after its source. Repeated
+// paths stay; the shared normalization removes them.
 //
-// The result is complete or it is an error. A missing envelope or a
-// patch without a hunk gives ErrMalformedEvent. A line that the known
-// rules do not cover gives ErrUnsupportedGrammar.
-//
-// The function follows the Codex parser for every rule that decides
-// which line is a header and what its path is. A header is matched
-// after the parser's own trim, so "*** Update File: a.go " names a.go.
-// A wrong path here means advice for a file that Codex does not touch,
-// and no advice for the file that it does. The function does not check
-// the change lines as strictly as Codex does: a patch that only Codex
-// rejects is never applied, so its advice costs nothing.
+// The result is complete or it is an error, by the rules of
+// applyPatchOps. The advisory edit hook and the guard then read the
+// paths of one patch alike. The guard and the post-edit check also
+// refuse a header path with a tab or a carriage return (guardPatchOps).
+// The advisory hook keeps such a path, so its replies do not change.
 func applyPatchPaths(patch string) ([]string, error) {
-	lines, err := patchBody(patch)
+	ops, err := applyPatchOps(patch)
 	if err != nil {
 		return nil, err
 	}
 
-	var (
-		paths   []string
-		hunk    string // the marker of the open hunk, or "" before the first
-		movable bool   // true directly after an update header
-	)
-
-	for _, raw := range lines {
-		// Codex trims both ends of a line outside an update hunk. Inside
-		// one it trims the end only: a leading space marks a context line,
-		// so an indented header there is file content.
-		line := strings.TrimSpace(raw)
-		if hunk == patchUpdateFile {
-			line = strings.TrimRightFunc(raw, unicode.IsSpace)
-		}
-
-		kind, name, isHeader := patchHeader(line)
-
-		switch {
-		case isHeader && kind == patchMoveTo:
-			// Codex reads a move only directly under its update header.
-			if hunk != patchUpdateFile || !movable {
-				return nil, fmt.Errorf("%w: %q outside an update header", ErrUnsupportedGrammar, patchMoveTo)
-			}
-
-			paths, movable = append(paths, name), false
-		case isHeader && kind == patchEndOfFile:
-			if hunk != patchUpdateFile {
-				return nil, fmt.Errorf("%w: %q outside an update hunk", ErrUnsupportedGrammar, patchEndOfFile)
-			}
-
-			movable = false
-		case isHeader:
-			paths, hunk, movable = append(paths, name), kind, kind == patchUpdateFile
-		case strings.HasPrefix(line, patchEnvironment):
-			// The line names an environment that is not the primary one.
-			// No native capture shows that the event cwd belongs to that
-			// environment, so the paths cannot be resolved with confidence.
-			return nil, fmt.Errorf("%w: the patch names an environment", ErrUnsupportedGrammar)
-		case strings.HasPrefix(line, patchHeaderPrefix):
-			// An unknown header can name a file.
-			return nil, fmt.Errorf("%w: unknown header line", ErrUnsupportedGrammar)
-		case !patchBodyLine(hunk, raw):
-			return nil, fmt.Errorf("%w: unexpected line in the patch body", ErrUnsupportedGrammar)
-		default:
-			movable = false
-		}
-	}
-
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("%w: the patch holds no hunk", ErrMalformedEvent)
-	}
-
-	return paths, nil
+	return patchOpPaths(ops), nil
 }
 
 // patchBody returns the lines between the begin line and the end line.
@@ -260,7 +184,7 @@ func patchEnvelope(lines []string) bool {
 
 // patchHeader reads a header from a line that the caller already
 // trimmed by the Codex rule of the open hunk. kind is the marker. name
-// is the text after the marker, as Codex takes it: a leading space
+// is the text after the marker, as Codex reads it: a leading space
 // stays a part of the name. A file header without a name is no header,
 // so the caller reports the line as an unknown header.
 func patchHeader(line string) (kind, name string, ok bool) {

@@ -1,0 +1,26 @@
+{
+  "session_id": "10000000-0000-4000-8000-000000000021",
+  "transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000021.jsonl",
+  "cwd": "/workspace/native",
+  "prompt_id": "20000000-0000-4000-8000-000000000023",
+  "permission_mode": "default",
+  "agent_id": "a0000000000000006",
+  "agent_type": "editor",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_transcript_path": "/home/native/.claude/projects/-workspace-native/10000000-0000-4000-8000-000000000021/subagents/agent-a0000000000000006.jsonl",
+  "last_assistant_message": "blocked",
+  "background_tasks": [
+    {
+      "id": "a0000000000000006",
+      "type": "subagent",
+      "status": "running",
+      "description": "Edit sentinel file line",
+      "agent_type": "editor"
+    }
+  ],
+  "session_crons": []
+}

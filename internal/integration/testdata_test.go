@@ -12,9 +12,10 @@ import (
 )
 
 // The fixtures under testdata/ are the native payload and configuration
-// examples later slices decode and generate. This test keeps every
-// fixture well-formed and labeled, so a decoder test never fails on a
-// stray comma and a reader always finds the provenance note.
+// examples that the codecs decode and the setup adapters generate. This
+// test keeps every fixture well-formed and labeled, so a decoder test
+// never fails on a stray comma and a reader always finds the provenance
+// note.
 func TestFixturesAreWellFormedAndLabeled(t *testing.T) {
 	for _, client := range []string{"claude", "codex"} {
 		dir := filepath.Join("testdata", client)

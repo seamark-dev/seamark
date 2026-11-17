@@ -3,7 +3,9 @@
 // rule, and gate-mode detection live here once — init writes hooks,
 // status reads them, and two copies of the matching logic would drift.
 // The merge that installs the hooks lives here too (merge.go), so init
-// and the client setup adapters share one implementation.
+// and the client setup adapters share one implementation. The binary
+// path that a hook command names lives in binary.go, beside the
+// ownership rule that reads it back.
 package hooks
 
 import (
@@ -18,17 +20,25 @@ import (
 )
 
 // Gate hook modes. Warn installs a hook that follows .seamark/policy.yaml
-// and never blocks by itself; enforce bakes --enforce into the hook, so
-// blocking verdicts exit 2 and the gate's own failures fail closed.
+// and never blocks by itself. Enforce bakes --enforce into the hook, so
+// blocking verdicts exit 2. The gate's own failures also exit 2, but only
+// while the gate process runs. A hook that the client stops at its
+// timeout, or a binary that cannot start, returns no exit 2.
 const (
 	ModeWarn    = "warn"
 	ModeEnforce = "enforce"
 )
 
+// GateTimeout is the gate hook timeout in seconds that setup writes for
+// every client. The init text names this number, so it reads it from
+// here and cannot drift from the hook specs.
+const GateTimeout = 15
+
 // GateMarker returns the gate hook's argument tail for a mode. Warn omits
-// --enforce so .seamark/policy.yaml stays the single source of truth for
-// blocking; enforce bakes the flag in, which also makes the gate's own
-// failures block (fail closed).
+// --enforce, so .seamark/policy.yaml stays the single source of truth for
+// blocking. Enforce bakes the flag in, so the gate's own failures also
+// exit 2 and block. That holds only while the gate process runs: a hook
+// that the client stops at its timeout returns no exit 2.
 func GateMarker(mode string) string {
 	if mode == ModeEnforce {
 		return "gate --enforce --hook"
@@ -73,22 +83,37 @@ func ForEachCommand(pre []any, fn func(matcher string, h map[string]any, cmd str
 //
 // The binary check keeps the marker from claiming someone else's hook:
 // `company-security gate --hook` (or a lookalike such as `seamark2`)
-// is not ours. The one-word check keeps setup from destroying a wrapper:
+// is not ours. The word names the seamark binary by its basename, or it
+// is the exact path of the running binary (see ownsHookBinary). The
+// one-word check keeps setup from destroying a wrapper:
 // `/opt/wrapper /usr/local/bin/seamark gate --hook` ends like our command,
 // and a rewrite to the bare command removes the wrapper without a word.
 func OwnedBySeamark(cmd string, markers []string) bool {
-	for _, marker := range markers {
-		rest, ok := strings.CutSuffix(cmd, " "+marker)
-		if !ok {
+	_, _, ok := OwnedCommand(cmd, markers)
+
+	return ok
+}
+
+// OwnedCommand splits a command that OwnedBySeamark accepts into the
+// binary path of its one shell word, unquoted, and the marker that ends
+// it. The capability report identifies the hook binary from the path
+// without running it. ok is false for any other command.
+func OwnedCommand(cmd string, markers []string) (binary, marker string, ok bool) {
+	for _, m := range markers {
+		rest, found := strings.CutSuffix(cmd, " "+m)
+		if !found {
 			continue
 		}
 
-		binary, ok := shellWord(rest)
+		word, isWord := shellWord(rest)
+		if !isWord || !ownsHookBinary(word) {
+			return "", "", false
+		}
 
-		return ok && IsSeamarkBinary(binary)
+		return word, m, true
 	}
 
-	return false
+	return "", "", false
 }
 
 // shellWord returns the value of s when s is exactly one shell word in
@@ -121,7 +146,9 @@ func shellWord(s string) (string, bool) {
 // IsSeamarkBinary reports whether a command path names the seamark
 // binary: exact basename "seamark", tolerating the Windows suffix. The
 // hook owner, the Claude Code registration, and the Codex registration
-// all use this one rule, so they agree on what is seamark's.
+// all use this rule, so they agree on a binary named seamark. The hook
+// owner and the shell reader also accept the path of the running binary,
+// because setup writes that path into each hook command.
 func IsSeamarkBinary(command string) bool {
 	return strings.TrimSuffix(filepath.Base(command), ".exe") == "seamark"
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/seamark-dev/seamark/internal/pinfile"
 	"github.com/seamark-dev/seamark/internal/reviews"
 	"github.com/seamark-dev/seamark/internal/settings"
+	"github.com/seamark-dev/seamark/internal/tui/services"
 	"github.com/seamark-dev/seamark/internal/tui/ui"
 )
 
@@ -40,8 +41,8 @@ const (
 	settingsMuteNoReset = "The mute list has no reset: one save changes one entry. Press enter to open the " +
 		"mute editor."
 	// settingsForeignRootRoute is the route of a lessons group that the
-	// index of another repository blocks (P4-16). A fix by hand would
-	// edit the file of the other repository.
+	// index of another repository blocks in a copied checkout. A fix by
+	// hand would edit the file of the other repository.
 	settingsForeignRootRoute = "Build the index of this workspace in Overview, then review again; o in the " +
 		"Settings list opens it."
 	// settingsReplaceText states which file metadata a lessons save keeps
@@ -77,9 +78,37 @@ func settingsFileExists(snap *settings.Snapshot, g settings.Group) bool {
 	return snap.Lessons != nil && snap.Lessons.Exists
 }
 
-// foreignRoot reports a selected lessons group whose block has the route
-// of the index build (P4-16). o then opens that build. The key reads the
-// route of settingsBlock, so it follows the route that the note shows.
+// settingsForeignRoute returns the route of a lessons group that another
+// recorded root blocks. A build ends the state of a copied checkout. A
+// build refuses the database of another repository, so the service marks
+// that error, and the route is the console of the recorded root.
+func settingsForeignRoute(err error) string {
+	var foreign *services.ForeignRootError
+	switch {
+	case !errors.As(err, &foreign) || !foreign.OtherDB:
+		return settingsForeignRootRoute
+	case foreign.RootRoute != "":
+		return ovSentenceEnd(ui.OneLine(foreign.RootRoute))
+	default:
+		return ovSentence(openRootRoute(foreign.Root, foreign.CustomDB, "")) + ", because a save works there."
+	}
+}
+
+// settingsShownRoot returns the root whose files the screen shows when it
+// is not this workspace, else "". The lessons block carries that root
+// for every foreign root, also when config.yaml stays editable.
+func settingsShownRoot(snap *settings.Snapshot) string {
+	var foreign *services.ForeignRootError
+	if snap.Lessons != nil && errors.As(snap.Lessons.Blocked, &foreign) {
+		return foreign.Root
+	}
+
+	return ""
+}
+
+// foreignRoot reports a selected group whose block has the route of the
+// index build. o then opens that build. The key reads the route of
+// settingsBlock, so it follows the route that the note shows.
 func (s *settingsScreen) foreignRoot() bool {
 	snap := s.snap()
 	if snap == nil {
