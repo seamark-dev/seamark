@@ -54,7 +54,7 @@ model-boundary delivery.
   the `apply_patch` content oracle, now 99 cases recorded from
   codex-cli 0.169.0; the first 29 match the earlier codex-cli 0.164.0
   recording. A hunk form outside the verified grammar, such as a
-  change line that ends with a carriage return, a hunk that does not
+  change line that ends with two or more carriage returns in the patch, a hunk that does not
   match the current file, a file with a lone carriage return, and a
   file that two sections name still give `unknown/unprojectable-edit`.
   `make agents-native-check CLIENT=codex` adds a model-free seeded
